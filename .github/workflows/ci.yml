@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
 
+# A newer push makes older runs on the same branch moot.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     strategy:
