@@ -1,5 +1,5 @@
 /** The app's chrome around the pages: the Director picker in the top bar, the status bar,
- *  first-run onboarding, and the panel a page shows when it can't load. */
+ *  and the panel a page shows when it can't load. The connect screen is in connect.tsx. */
 
 import * as Popover from "@radix-ui/react-popover";
 import { Check, ChevronDown, Lock, Plug, PlugZap, RefreshCw, Settings2 } from "lucide-react";
@@ -8,7 +8,6 @@ import { toast } from "sonner";
 import { api, errText, isMock, type AppStatus, type DirectorInfo } from "../api";
 import { cx } from "../lib/ui";
 import { Spinner } from "./controls";
-import { AddDirectorForm, CertificateForm } from "./setup";
 
 export function Logo() {
   return (
@@ -22,8 +21,8 @@ export function Logo() {
   );
 }
 
-export function DirectorPicker({ status, info, onManage }: {
-  status: AppStatus; info: Map<string, DirectorInfo>; onManage: () => void;
+export function DirectorPicker({ status, info, onManage, onSwitch }: {
+  status: AppStatus; info: Map<string, DirectorInfo>; onManage: () => void; onSwitch: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -73,6 +72,7 @@ export function DirectorPicker({ status, info, onManage }: {
                 : <button className="act small" onClick={() => run(d.id, () => api.connect(d.id))}><Plug size={13} strokeWidth={1.8} />Connect</button>}
             </div>
           ))}
+          <button className="pop-link" onClick={() => { setOpen(false); onSwitch(); }}><Plug size={13} strokeWidth={1.8} />Switch Director…</button>
           <button className="pop-link" onClick={() => { setOpen(false); onManage(); }}><Settings2 size={13} strokeWidth={1.8} />Manage Directors…</button>
         </Popover.Content>
       </Popover.Portal>
@@ -99,40 +99,6 @@ export function StatusBar({ status, info }: { status: AppStatus; info: DirectorI
       <span className="status-item spread">{identity.loaded ? identity.label : <span className="warn">No certificate</span>}</span>
       <span className="status-item dim">v{status.version}</span>
     </footer>
-  );
-}
-
-/** First run: a certificate and a Director, then out of the way. */
-export function Onboarding({ status, onChanged, onSkip }: { status: AppStatus; onChanged: () => void; onSkip: () => void }) {
-  const certDone = status.identity.loaded;
-  const dirDone = status.config.directors.length > 0;
-  return (
-    <div className="onboard">
-      <div className="onboard-card">
-        <Logo />
-        <h1>Set up openComposer</h1>
-        <p className="lede">Two things and you're in: the certificate Composer Pro uses to talk to controllers, and the controller to talk to.</p>
-
-        <div className={cx("step", certDone && "done")}>
-          <div className="step-head"><span className="step-n">{certDone ? <Check size={13} strokeWidth={2} /> : 1}</span>Client certificate</div>
-          <p className="hint">Composer Pro's <code>composer.pem</code> (often with a separate <code>.key</code>), or a <code>.p12</code> export. It is kept encrypted on this computer, with the key in the OS keychain.</p>
-          <CertificateForm identity={status.identity} onChanged={onChanged} />
-        </div>
-
-        <div className={cx("step", dirDone && "done")}>
-          <div className="step-head"><span className="step-n">{dirDone ? <Check size={13} strokeWidth={2} /> : 2}</span>Director</div>
-          <p className="hint">The controller's address. New Directors start in “approve each write”: nothing changes without your OK on a diff.</p>
-          {dirDone
-            ? <p className="ok">{status.config.directors.map((d) => d.name).join(", ")}</p>
-            : <AddDirectorForm onAdded={onChanged} />}
-        </div>
-
-        <div className="row onboard-foot">
-          <button className="act quiet" onClick={onSkip}>Skip for now</button>
-          <button className="act primary spread" disabled={!certDone || !dirDone} onClick={onSkip}>Open the project</button>
-        </div>
-      </div>
-    </div>
   );
 }
 

@@ -4,7 +4,8 @@ import { Toaster, toast } from "sonner";
 import { api, errText, type AppStatus, type Approval, type DirectorInfo, type Op, type Outcome } from "./api";
 import { ApprovalsBell, ApprovalsDrawer } from "./components/ApprovalsDrawer";
 import { Dialogs } from "./components/Dialogs";
-import { DirectorPicker, Failure, Loading, Logo, Onboarding, StatusBar } from "./components/shell";
+import { ConnectScreen } from "./components/connect";
+import { DirectorPicker, Failure, Loading, Logo, StatusBar } from "./components/shell";
 import type { Shell, View } from "./lib/shell";
 import { useBackendEvent } from "./lib/ui";
 
@@ -40,7 +41,8 @@ export default function App() {
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [drawer, setDrawer] = useState(false);
   const [rev, setRev] = useState(0);
-  const [skipped, setSkipped] = useState(false);
+  // Every launch starts at the connect screen, like Composer's "Connect to Director".
+  const [entered, setEntered] = useState(false);
   // Proposals made from this window: their card opens by itself, so no toast is needed.
   const ours = useRef(new Set<string>());
 
@@ -129,24 +131,24 @@ export default function App() {
     return <div className="boot">{error ? <Failure error={error} retry={refreshStatus} /> : <Loading what="Starting" />}</div>;
   }
 
-  const needsSetup = !shell.status.identity.loaded || !shell.status.config.directors.length;
-
   return (
     <Dialogs>
       <div className="app">
         <div className="tabs">
           <Logo />
-          {VIEWS.map((v) => (
+          {/* No project is open on the connect screen, so there are no pages to switch to. */}
+          {entered && VIEWS.map((v) => (
             <button key={v.id} className={view === v.id ? "on" : ""} onClick={() => setView(v.id)}>{v.label}</button>
           ))}
           <span className="grow" />
-          <DirectorPicker status={shell.status} info={info} onManage={() => setView("settings")} />
+          {entered && <DirectorPicker status={shell.status} info={info} onManage={() => setView("settings")} onSwitch={() => setEntered(false)} />}
           <ApprovalsBell pending={pending} onClick={() => setDrawer(true)} />
         </div>
 
         <div className="work">
-          {needsSetup && !skipped ? (
-            <Onboarding status={shell.status} onChanged={refreshStatus} onSkip={() => setSkipped(true)} />
+          {!entered ? (
+            <ConnectScreen status={shell.status} info={info} onChanged={refreshStatus}
+              onEnter={() => { setEntered(true); setView("design"); setRev((r) => r + 1); }} />
           ) : (
             <PageBoundary key={view}>
             <Suspense fallback={<Loading />}>

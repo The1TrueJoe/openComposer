@@ -1,5 +1,5 @@
 /* Everything that sits over the workspace: dialogs, the approvals drawer, popovers, the
-   right-click menu, tooltips, toasts' neighbours, and first-run onboarding. One surface for
+   right-click menu, tooltips and toasts' neighbours. One surface for
    all of them, so a popup always looks like a popup. */
 
 .dlg-overlay, .drawer-scrim { position: fixed; inset: 0; background: #000a; backdrop-filter: blur(2px); z-index: 96;
@@ -71,18 +71,3 @@
 @keyframes slide-in { from { transform: translateX(40px); opacity: 0; } }
 @keyframes fade { from { opacity: 0; } }
 
-/* ---- first run ------------------------------------------------------------------------------ */
-.onboard { height: 100%; overflow-y: auto; display: grid; place-items: start center; padding: 40px 20px;
-  background: radial-gradient(circle at 50% 18%, #262832 0%, var(--bg) 60%); }
-.onboard-card { width: min(720px, 100%); }
-.onboard-card .brand { margin: 0 0 18px; font-size: 15px; }
-.onboard-card h1 { font-size: 20px; font-weight: 600; margin: 0 0 4px; }
-.onboard-card .lede { color: var(--dim); margin: 0 0 20px; }
-.step { background: var(--side); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
-.step.done { border-color: #5ad18e55; }
-.step-head { display: flex; align-items: center; gap: 9px; font-weight: 600; margin-bottom: 4px; }
-.step-n { width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center; font-size: 11px; background: var(--btn);
-  border: 1px solid var(--line); }
-.step.done .step-n { background: var(--on); border-color: var(--on); color: #06140c; }
-.step .hint { padding: 0 0 10px; }
-.onboard-foot { margin-top: 18px; }

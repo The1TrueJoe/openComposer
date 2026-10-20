@@ -13,6 +13,7 @@ import "./styles/tables.css";
 import "./styles/network.css";
 import "./styles/agent.css";
 import "./styles/settings.css";
+import "./styles/connect.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
