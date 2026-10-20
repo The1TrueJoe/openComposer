@@ -83,6 +83,9 @@ pub async fn add_director(app: S<'_>, name: String, host: String, mode: Option<A
         host: host.trim().into(),
         fingerprint: None,
         mode: mode.unwrap_or(AccessMode::Approve),
+        web_api: true,
+        web_api_addr: None,
+        web_api_fingerprint: None,
     };
     let out = d.clone();
     app.update_config(|c| {
@@ -96,7 +99,16 @@ pub async fn add_director(app: S<'_>, name: String, host: String, mode: Option<A
 }
 
 #[tauri::command]
-pub async fn update_director(app: S<'_>, id: String, name: Option<String>, host: Option<String>, mode: Option<AccessMode>) -> R<()> {
+#[allow(clippy::too_many_arguments)]
+pub async fn update_director(
+    app: S<'_>,
+    id: String,
+    name: Option<String>,
+    host: Option<String>,
+    mode: Option<AccessMode>,
+    web_api: Option<bool>,
+    web_api_addr: Option<String>,
+) -> R<()> {
     let host_changed = host.is_some();
     app.update_config(|c| {
         if let Some(d) = c.directors.iter_mut().find(|d| d.id == id) {
@@ -109,6 +121,13 @@ pub async fn update_director(app: S<'_>, id: String, name: Option<String>, host:
             }
             if let Some(m) = mode {
                 d.mode = m;
+            }
+            if let Some(w) = web_api {
+                d.web_api = w;
+            }
+            if let Some(a) = web_api_addr {
+                d.web_api_addr = Some(a).filter(|s| !s.trim().is_empty());
+                d.web_api_fingerprint = None;
             }
         }
     })
@@ -200,9 +219,11 @@ pub async fn action(app: S<'_>, name: String, args: Option<Value>) -> R<Value> {
         "director_read" => actions::director_read(app, req(a)?).await,
         "propose_changes" => actions::propose(app, req(a)?, UI_SOURCE).await,
         "load_backup" => actions::load_backup(app, req(a)?, UI_SOURCE).await,
+        "driver_status" => actions::driver_status(app, req(a)?).await,
+        "install_driver" => actions::install_driver(app, req(a)?, UI_SOURCE).await,
         other => return Err(format!("unknown action {other}")),
     };
-    if matches!(name.as_str(), "propose_changes" | "load_backup" | "backup_project") {
+    if matches!(name.as_str(), "propose_changes" | "load_backup" | "backup_project" | "install_driver") {
         app.log(UI_SOURCE, &name, String::new(), r.is_ok(), t.elapsed().as_millis() as u64);
     }
     r.map_err(err)

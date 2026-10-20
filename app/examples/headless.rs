@@ -27,6 +27,10 @@ async fn main() -> anyhow::Result<()> {
                 host: h.clone(),
                 fingerprint: None,
                 mode: if i == 0 { AccessMode::Approve } else { AccessMode::ReadOnly },
+                // Only the virtual one; its web API is loopback-only, reached via an SSH tunnel.
+                web_api: i == 0,
+                web_api_addr: if i == 0 { std::env::var("VIRTUAL_WEB_API").ok() } else { None },
+                web_api_fingerprint: None,
             });
         }
         c.active_director = Some("d0".into());

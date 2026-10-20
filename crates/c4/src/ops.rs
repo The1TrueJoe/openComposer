@@ -35,6 +35,16 @@ pub enum Op {
     /// Identify a device on the network (what Composer's "Identify" does for SDDP).
     AddNetworkBinding { device: u32, binding: u32, address_type: u32, address: String, search_type: String },
     RemoveNetworkBinding { device: u32, binding: u32 },
+    /// Put a driver file on the controller (via its web API, not c4soap). The project is
+    /// unchanged until a device uses it.
+    InstallDriver {
+        filename: String,
+        /// Where the file came from, for the approval card.
+        source: String,
+        #[serde(skip, default)]
+        #[schemars(skip)]
+        bytes: Vec<u8>,
+    },
     /// Replace the whole project (Composer's "Load Project"). `xml` is a `<currentstate>`.
     LoadProject {
         label: String,
@@ -97,6 +107,9 @@ impl Op {
                 format!("Identify {} as {search_type} at {address}", n(*device))
             }
             Op::RemoveNetworkBinding { device, .. } => format!("Remove network identity of {}", n(*device)),
+            Op::InstallDriver { filename, source, bytes } => {
+                format!("Install driver file {filename} ({} KB) from {source}", bytes.len().div_ceil(1024))
+            }
             Op::LoadProject { label, .. } => format!("Replace the whole project with {label}"),
         }
     }
@@ -248,6 +261,7 @@ impl Op {
                     return Err(OpError::NoNetworkBinding { device: p.name_of(*device), binding: *binding });
                 }
             }
+            Op::InstallDriver { .. } => {}
             Op::LoadProject { xml, .. } => {
                 *p = Project::parse(xml).map_err(|e| OpError::BadProject(e.to_string()))?;
             }
@@ -299,6 +313,7 @@ impl Op {
             Op::RemoveNetworkBinding { device, binding } => vec![
                 Call::new("RemoveNetworkBinding").num("iddevice", *device).num("networkbindingid", *binding),
             ],
+            Op::InstallDriver { .. } => vec![],
             Op::LoadProject { xml, .. } => {
                 let body = xml.trim_start();
                 let body = match body.strip_prefix("<?xml") {

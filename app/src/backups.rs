@@ -74,9 +74,20 @@ pub fn read_project(path: &Path) -> anyhow::Result<(String, Project)> {
     Ok((b.project_xml, p))
 }
 
-/// Write a snapshot to the library. Driver files are not included yet (they come from
-/// the controller's REST API, which needs a token we don't request yet).
+/// Restore points: the project only (they are taken before every approved change, so
+/// they stay fast; driver files don't change when a project does).
 pub fn save_snapshot(app: &App, saved: &SavedDirector, version: &str, snap: &Snapshot, label: &str) -> anyhow::Result<PathBuf> {
+    save(app, saved, version, snap, label, BTreeMap::new())
+}
+
+pub fn save(
+    app: &App,
+    saved: &SavedDirector,
+    version: &str,
+    snap: &Snapshot,
+    label: &str,
+    drivers: BTreeMap<String, Vec<u8>>,
+) -> anyhow::Result<PathBuf> {
     let now = chrono::Local::now();
     let safe = |s: &str| s.chars().map(|c| if c.is_alphanumeric() || c == ' ' || c == '-' { c } else { '_' }).collect::<String>();
     let file = format!(
@@ -95,7 +106,7 @@ pub fn save_snapshot(app: &App, saved: &SavedDirector, version: &str, snap: &Sna
             director_version: &format!("{version} ({})", saved.name),
             created: &created,
             project_xml: &snap.xml,
-            drivers: BTreeMap::new(),
+            drivers,
             extras: BTreeMap::new(),
         },
     )?;

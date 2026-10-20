@@ -40,6 +40,7 @@ pub struct Session {
     catalog: tokio::sync::RwLock<Option<Arc<Catalog>>>,
     /// One batch of writes at a time per Director.
     pub write_lock: tokio::sync::Mutex<()>,
+    broker: tokio::sync::Mutex<Option<(Instant, Arc<c4::broker::Broker>)>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -195,6 +196,7 @@ impl App {
             snapshot: Default::default(),
             catalog: Default::default(),
             write_lock: Default::default(),
+            broker: Default::default(),
         });
         sessions.insert(saved.id.clone(), s.clone());
         drop(sessions);
@@ -217,6 +219,40 @@ impl App {
             s.director.conn.close().await;
         }
         self.emit("director", serde_json::json!({ "id": id, "connected": false }));
+    }
+
+    /// The controller's web API for this session; tokens are renewed after 12 hours.
+    pub async fn broker(&self, s: &Session) -> AppResult<Arc<c4::broker::Broker>> {
+        let saved = self.resolve_director(Some(&s.id))?;
+        if !saved.web_api {
+            return Err(AppError::Other(format!(
+                "the web API is switched off for {} (Directors → web API); driver files need it",
+                saved.name
+            )));
+        }
+        let mut slot = s.broker.lock().await;
+        if let Some((at, b)) = slot.as_ref() {
+            if at.elapsed().as_secs() < 12 * 3600 {
+                return Ok(b.clone());
+            }
+        }
+        let identity = self.identity.read().unwrap().clone().ok_or(AppError::NoIdentity)?.identity()?;
+        let addr = saved.web_api_addr.clone().unwrap_or_else(|| saved.host.clone());
+        let b = Arc::new(
+            c4::broker::Broker::connect(&addr, &identity, saved.web_api_fingerprint.as_deref())
+                .await
+                .map_err(|e| AppError::Other(e.to_string()))?,
+        );
+        if saved.web_api_fingerprint.is_none() {
+            let (id, fp) = (saved.id.clone(), b.fingerprint.clone());
+            self.update_config(|c| {
+                if let Some(d) = c.directors.iter_mut().find(|d| d.id == id) {
+                    d.web_api_fingerprint = Some(fp);
+                }
+            })?;
+        }
+        *slot = Some((Instant::now(), b.clone()));
+        Ok(b)
     }
 
     pub fn ensure_writable(&self, saved: &SavedDirector) -> AppResult<()> {

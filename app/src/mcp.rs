@@ -173,6 +173,21 @@ impl OpenComposerMcp {
         self.run("propose_changes", s, actions::propose(&self.app, a, self.source)).await
     }
 
+    #[tool(description = "Whether a driver file (e.g. roku.c4z) is on the controller, with its version and details.",
+        annotations(read_only_hint = true))]
+    async fn driver_status(&self, Parameters(a): Parameters<DriverArgs>) -> Result<CallToolResult, McpError> {
+        let s = a.filename.clone();
+        self.run("driver_status", s, actions::driver_status(&self.app, a)).await
+    }
+
+    #[tool(description = "Put a driver file on the controller so devices can use it. The file comes from \
+        `path:<absolute path>`, `backup:<library file>` or `director:<another Director>`. Needs approval.",
+        annotations(read_only_hint = false, destructive_hint = false))]
+    async fn install_driver(&self, Parameters(a): Parameters<InstallDriverArgs>) -> Result<CallToolResult, McpError> {
+        let s = format!("{} from {}", a.filename, a.from);
+        self.run("install_driver", s, actions::install_driver(&self.app, a, self.source)).await
+    }
+
     #[tool(description = "Replace the Director's whole project with a backup from the library (Composer's Load Project). \
         Needs approval; a restore point of the current project is saved first.",
         annotations(read_only_hint = false, destructive_hint = true))]

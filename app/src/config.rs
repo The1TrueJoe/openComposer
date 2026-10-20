@@ -23,6 +23,20 @@ pub struct SavedDirector {
     /// SHA-256 of the controller's TLS certificate, pinned on first connect.
     pub fingerprint: Option<String>,
     pub mode: AccessMode,
+    /// Use the controller's web API (driver files). Asking it for a token changes
+    /// nothing, but it can be switched off per Director.
+    #[serde(default = "yes")]
+    pub web_api: bool,
+    /// Web API address when it isn't `host:443` (a Virtual Director serves it on
+    /// 127.0.0.1:8443 of its own PC).
+    #[serde(default)]
+    pub web_api_addr: Option<String>,
+    #[serde(default)]
+    pub web_api_fingerprint: Option<String>,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

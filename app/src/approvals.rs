@@ -137,6 +137,7 @@ pub async fn propose(
     let before = session.snapshot(true).await?;
     let catalog = session.catalog(false).await?;
     check_connections(&ops, &catalog, &before.project)?;
+    check_drivers(app, &session, &ops).await?;
     let names = catalog.names();
     let mut predicted = before.project.clone();
     let mut descriptions = Vec::new();
@@ -203,7 +204,7 @@ pub async fn propose(
         .map_err(|e| tracing::warn!("restore point not saved: {e}"))
         .ok();
 
-    let (applied, error) = apply_all(&session, &ops).await;
+    let (applied, error) = apply_all(app, &session, &ops).await;
     if !applied.is_empty() || error.is_none() {
         session.invalidate().await;
     }
@@ -228,6 +229,38 @@ pub async fn propose(
     });
     app.emit("project-changed", serde_json::json!({ "director": saved.id }));
     Ok(a.unwrap_or(approval))
+}
+
+/// `AddDevice` with a driver the controller doesn't have fails with a bare "Unable to
+/// add device", so look first (when the web API is reachable) and say what to do.
+async fn check_drivers(app: &Arc<App>, session: &Session, ops: &[Op]) -> AppResult<()> {
+    let installing: Vec<&str> = ops
+        .iter()
+        .filter_map(|o| match o {
+            Op::InstallDriver { filename, .. } => Some(filename.as_str()),
+            _ => None,
+        })
+        .collect();
+    let wanted: Vec<&str> = ops
+        .iter()
+        .filter_map(|o| match o {
+            Op::AddDevice { driver, .. } if !installing.contains(&driver.as_str()) => Some(driver.as_str()),
+            _ => None,
+        })
+        .collect();
+    if wanted.is_empty() {
+        return Ok(());
+    }
+    let Ok(broker) = app.broker(session).await else { return Ok(()) };
+    for d in wanted {
+        if let Ok(None) = broker.driver_info(d).await {
+            return Err(AppError::Other(format!(
+                "{d} isn't on this controller yet; install it first with install_driver \
+                 (from a file on this computer, a backup that contains it, or another Director)"
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Director accepts `AddBinding` for connections that don't exist (and silently does
@@ -276,7 +309,7 @@ fn check_connections(ops: &[Op], cat: &c4::Catalog, p: &c4::Project) -> AppResul
     Ok(())
 }
 
-async fn apply_all(session: &Session, ops: &[Op]) -> (Vec<Applied>, Option<String>) {
+async fn apply_all(app: &Arc<App>, session: &Session, ops: &[Op]) -> (Vec<Applied>, Option<String>) {
     let template = if ops.iter().any(|o| matches!(o, Op::AddRoom { .. })) {
         session.catalog(false).await.ok().and_then(|c| c.room_template.clone())
     } else {
@@ -284,7 +317,18 @@ async fn apply_all(session: &Session, ops: &[Op]) -> (Vec<Applied>, Option<Strin
     };
     let mut applied = Vec::new();
     for (i, op) in ops.iter().enumerate() {
-        match session.director.apply(op, template.as_deref()).await {
+        let result = match op {
+            Op::InstallDriver { filename, bytes, .. } => match app.broker(session).await {
+                Ok(b) => b
+                    .install_driver(filename, bytes.clone())
+                    .await
+                    .map(|_| Applied { created: vec![], notes: vec![format!("installed {filename}")] })
+                    .map_err(|e| e.to_string()),
+                Err(e) => Err(e.to_string()),
+            },
+            _ => session.director.apply(op, template.as_deref()).await.map_err(|e| e.to_string()),
+        };
+        match result {
             Ok(a) => applied.push(a),
             Err(e) => {
                 let msg = if ops.len() > 1 {

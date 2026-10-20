@@ -135,6 +135,27 @@ pub struct ProposeArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct DriverArgs {
+    #[serde(default)]
+    pub director: Option<String>,
+    /// Driver file name, e.g. roku.c4z
+    pub filename: String,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct InstallDriverArgs {
+    #[serde(default)]
+    pub director: Option<String>,
+    /// Driver file name to install, e.g. sony_strdn840.c4z
+    pub filename: String,
+    /// Where to take the file from: `path:<absolute path on this computer>`,
+    /// `backup:<file in the library>`, or `director:<another Director>`.
+    pub from: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct LoadBackupArgs {
     #[serde(default)]
     pub director: Option<String>,
@@ -239,13 +260,78 @@ pub fn list_backups(app: &App) -> Value {
     json!({ "backups": backups::list(app) })
 }
 
-/// Save the live project to the library. Only reads from the Director.
+/// Save the live project to the library, with the driver files it uses when the web
+/// API is available. Only reads from the Director.
 pub async fn backup_now(app: &Arc<App>, a: DirectorArg) -> AppResult<Value> {
     let s = app.session(a.director.as_deref()).await?;
     let saved = app.resolve_director(Some(&s.id))?;
     let snap = s.snapshot(true).await?;
-    let path = backups::save_snapshot(app, &saved, &s.director.info.version, &snap, "backup")?;
-    Ok(serde_json::to_value(backups::info(&path)?).unwrap_or_default())
+    let mut drivers = std::collections::BTreeMap::new();
+    let mut missing = Vec::new();
+    let mut note = None;
+    match app.broker(&s).await {
+        Ok(b) => {
+            for name in snap.project.drivers().into_iter().filter(|d| !c4::c4p::is_builtin_driver(d)) {
+                match b.download_driver(&name).await {
+                    Ok(Some(bytes)) => {
+                        drivers.insert(name, bytes);
+                    }
+                    _ => missing.push(name),
+                }
+            }
+        }
+        Err(e) => note = Some(format!("project only, no driver files: {e}")),
+    }
+    let path = backups::save(app, &saved, &s.director.info.version, &snap, "backup", drivers)?;
+    let mut v = serde_json::to_value(backups::info(&path)?).unwrap_or_default();
+    v["drivers_missing"] = json!(missing);
+    v["note"] = json!(note);
+    Ok(v)
+}
+
+pub async fn driver_status(app: &Arc<App>, a: DriverArgs) -> AppResult<Value> {
+    let s = app.session(a.director.as_deref()).await?;
+    let b = app.broker(&s).await?;
+    let info = b.driver_info(&a.filename).await.map_err(|e| AppError::Other(e.to_string()))?;
+    Ok(json!({ "filename": a.filename, "installed": info.is_some(), "info": info }))
+}
+
+async fn driver_bytes(app: &Arc<App>, filename: &str, from: &str) -> AppResult<(Vec<u8>, String)> {
+    if let Some(path) = from.strip_prefix("path:") {
+        let p = std::path::PathBuf::from(path);
+        if !p.is_absolute() {
+            return Err(AppError::Other("path: needs an absolute path".into()));
+        }
+        let bytes = std::fs::read(&p).map_err(|e| AppError::Other(format!("can't read {path}: {e}")))?;
+        return Ok((bytes, format!("file {path}")));
+    }
+    if let Some(file) = from.strip_prefix("backup:") {
+        let path = backups::resolve(app, file)?;
+        let mut b = c4::c4p::Backup::open(std::fs::File::open(&path).map_err(|e| AppError::Other(e.to_string()))?)
+            .map_err(|e| AppError::Other(e.to_string()))?;
+        let bytes = b
+            .read(&format!("drivers/{filename}"))
+            .map_err(|_| AppError::Other(format!("backup {file} doesn't contain {filename}")))?;
+        return Ok((bytes, format!("backup {file}")));
+    }
+    if let Some(other) = from.strip_prefix("director:") {
+        let s = app.session(Some(other)).await?;
+        let b = app.broker(&s).await?;
+        let bytes = b
+            .download_driver(filename)
+            .await
+            .map_err(|e| AppError::Other(e.to_string()))?
+            .ok_or_else(|| AppError::Other(format!("{other} doesn't have {filename}")))?;
+        return Ok((bytes, format!("Director {}", s.director.info.name)));
+    }
+    Err(AppError::Other("from must be path:<file>, backup:<file> or director:<name>".into()))
+}
+
+pub async fn install_driver(app: &Arc<App>, a: InstallDriverArgs, source: &str) -> AppResult<Value> {
+    let (bytes, from) = driver_bytes(app, &a.filename, &a.from).await?;
+    let op = Op::InstallDriver { filename: a.filename, source: from, bytes };
+    let r = approvals::propose(app, a.director.as_deref(), vec![op], a.reason, source).await?;
+    Ok(outcome(&r))
 }
 
 async fn load_source(app: &Arc<App>, src: &str) -> AppResult<(String, Project, c4::Names)> {
@@ -303,6 +389,9 @@ pub fn outcome(a: &Approval) -> Value {
 pub async fn propose(app: &Arc<App>, a: ProposeArgs, source: &str) -> AppResult<Value> {
     if a.ops.iter().any(|o| matches!(o, Op::LoadProject { .. })) {
         return Err(AppError::Other("use load_backup to replace a whole project".into()));
+    }
+    if a.ops.iter().any(|o| matches!(o, Op::InstallDriver { .. })) {
+        return Err(AppError::Other("use install_driver to put a driver file on a controller".into()));
     }
     let r = approvals::propose(app, a.director.as_deref(), a.ops, a.reason, source).await?;
     Ok(outcome(&r))

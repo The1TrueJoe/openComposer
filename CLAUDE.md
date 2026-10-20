@@ -41,8 +41,11 @@ OPENCOMPOSER_DATA=/tmp/oc C4_CERT=… C4_KEY=… cargo run -p opencomposer --exa
   refuses those up front; views list each connection under the proxy that owns it.
 - Unsigned dev builds make macOS ask for keychain access after every rebuild. The headless
   harness keeps the identity in memory (`App::use_identity`) to avoid that.
-- Driver files are not installed or backed up yet. The controller's REST broker issues a
-  token via `POST /api/v1/localjwt` over mutual TLS; drivers then go to
-  `PUT /api/v1/drivers/files/<name>`. Not yet exercised.
+- Driver files go through the controller's web API (`crates/c4/src/broker.rs`): a token
+  from `POST /api/v1/localjwt` over mutual TLS, then `/api/v1/drivers/files/<name>`.
+  Verified on the Virtual Director (its API is loopback-only; the harness reaches it with
+  `ssh -L 18443:127.0.0.1:8443 admin@optiplex.local` and `VIRTUAL_WEB_API=127.0.0.1:18443`).
+  Not yet used against the real EA-1. Backups still lack mm.db / identity.db / images
+  (served over SMB by the controller).
 - Property edits, Z-Wave and programming edits haven't been captured from Composer yet.
 - Codex agent path is unverified (no Codex on the dev machine).

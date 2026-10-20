@@ -237,23 +237,7 @@ impl Connection {
     /// Connect and complete the TLS handshake. `pin` is the expected server certificate
     /// fingerprint; `None` trusts on first use (the caller should store the result).
     pub async fn connect(host: &str, port: u16, identity: &Identity, pin: Option<&str>) -> Result<Self> {
-        let provider = Arc::new(CryptoProvider {
-            key_provider: &crate::keys::FALLBACK_KEYS,
-            ..rustls::crypto::ring::default_provider()
-        });
-        let seen = Arc::new(StdMutex::new(None));
-        let verifier = PinVerifier {
-            pin: pin.map(|p| p.to_ascii_lowercase()),
-            seen: seen.clone(),
-            provider: provider.clone(),
-        };
-        let config = rustls::ClientConfig::builder_with_provider(provider)
-            .with_safe_default_protocol_versions()
-            .map_err(|e| SoapError::Identity(e.to_string()))?
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(verifier))
-            .with_client_auth_cert(identity.certs.clone(), identity.key.clone_key())
-            .map_err(|e| SoapError::Identity(e.to_string()))?;
+        let (config, seen) = tls_config(identity, pin)?;
 
         let tcp = connect_any(host, port).await.map_err(|source| SoapError::Connect { host: host.into(), source })?;
         tcp.set_nodelay(true).ok();
@@ -358,6 +342,30 @@ impl Connection {
         w.flush().await?;
         Ok(())
     }
+}
+
+/// TLS settings for talking to a controller as Composer does: our client certificate
+/// (legacy RSA keys allowed), the controller's certificate pinned by fingerprint.
+/// The returned cell receives the fingerprint the controller presented.
+pub fn tls_config(identity: &Identity, pin: Option<&str>) -> Result<(rustls::ClientConfig, Arc<StdMutex<Option<String>>>)> {
+    let provider = Arc::new(CryptoProvider {
+        key_provider: &crate::keys::FALLBACK_KEYS,
+        ..rustls::crypto::ring::default_provider()
+    });
+    let seen = Arc::new(StdMutex::new(None));
+    let verifier = PinVerifier {
+        pin: pin.map(|p| p.to_ascii_lowercase()),
+        seen: seen.clone(),
+        provider: provider.clone(),
+    };
+    let config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|e| SoapError::Identity(e.to_string()))?
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(verifier))
+        .with_client_auth_cert(identity.certs.clone(), identity.key.clone_key())
+        .map_err(|e| SoapError::Identity(e.to_string()))?;
+    Ok((config, seen))
 }
 
 /// Try every address a name resolves to at once and keep the first that answers.
