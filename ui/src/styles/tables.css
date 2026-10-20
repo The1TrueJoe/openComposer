@@ -1,0 +1,16 @@
+/* The one table look used by every list of rows: connections, network, variables, activity,
+   Zigbee nodes. Dense, a rule between rows, a sticky head where the table scrolls. */
+.grid-table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+.grid-table th { text-align: left; color: var(--dim); font-weight: 600; font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em;
+  padding: 7px 10px; border-bottom: 1px solid var(--line); background: var(--bar); white-space: nowrap; }
+.grid-table td { padding: 6px 10px; border-bottom: 1px solid #ffffff0a; vertical-align: middle; }
+.grid-table th:first-child, .grid-table td:first-child { padding-left: 14px; }
+.grid-table tbody tr:hover { background: #ffffff05; }
+.grid-table.sticky thead th { position: sticky; top: 0; z-index: 1; }
+.grid-table tr.pick { cursor: pointer; }
+.grid-table tr.on, .grid-table tr.on:hover { background: #6ea8ff14; box-shadow: inset 2px 0 0 var(--accent); }
+.grid-table tr.dimmed td { opacity: .55; }
+.grid-table tr.failed td { background: #ff6b6b08; }
+.grid-table tr.sub > td { background: var(--bar); padding: 8px 14px 10px 28px; }
+.page-body .grid-table th:first-child, .page-body .grid-table td:first-child { padding-left: 10px; }
+.activity td { padding-top: 4px; padding-bottom: 4px; }

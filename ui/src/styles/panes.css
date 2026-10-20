@@ -1,0 +1,33 @@
+/* Resizable panes and the panels inside them. `react-resizable-panels` owns dragging, collapse
+   and the remembered widths (see components/Panes.tsx); this is only how they look. */
+.panes { display: flex; height: 100%; min-height: 0; overflow: hidden; }
+.pane-cell { min-width: 0; min-height: 0; overflow: hidden; }
+.pane-cell > .panel { height: 100%; }
+
+/* One pixel to see, nine to grab. */
+.grip { position: relative; flex: none; width: 1px; background: var(--line); cursor: col-resize; }
+.grip::after { content: ""; position: absolute; top: 0; left: -4px; width: 9px; height: 100%; }
+.grip:hover, .grip[data-separator="active"], .grip[data-active] { background: var(--accent); }
+
+/* A collapsed pane: its name down a strip, which is also the way back. */
+.rail { display: flex; flex-direction: column; align-items: center; gap: 9px; width: 100%; height: 100%; padding: 11px 0; border: 0;
+  background: var(--bar); color: var(--dim); font: inherit; cursor: pointer; }
+.rail:hover { color: var(--text); background: #ffffff08; }
+.rail span { font-size: 10px; text-transform: uppercase; letter-spacing: .1em; writing-mode: vertical-rl; }
+
+.panel { display: flex; flex-direction: column; min-height: 0; overflow: hidden; background: var(--bg); }
+.panel.full { height: 100%; }
+.panel.side-left { background: var(--side); }
+.panel.side-right { background: var(--side); }
+.panel-head { flex: none; height: 36px; padding: 0 10px 0 12px; border-bottom: 1px solid var(--line); background: var(--bar);
+  display: flex; align-items: center; gap: 8px; }
+.panel.side-right .panel-head { padding: 0 12px 0 8px; }
+.panel-title { font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--dim); font-weight: 600; white-space: nowrap;
+  overflow: hidden; text-overflow: ellipsis; }
+.panel-body { flex: 1; overflow-y: auto; min-height: 0; }
+.panel-body.pad { padding: 14px 18px 40px; }
+
+.crumbs { padding: 8px 14px; border-bottom: 1px solid var(--line); color: var(--dim); font-size: 11.5px; display: flex; align-items: center;
+  gap: 2px; flex: none; flex-wrap: wrap; }
+.crumbs b { color: var(--text); font-weight: 600; }
+.sep { color: #5a6070; padding: 0 5px; }

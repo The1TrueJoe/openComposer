@@ -1,0 +1,49 @@
+/* Approval cards (components/ApprovalCard.tsx): in the drawer and inline in the agent chat.
+   The status colours the left edge, so a stack of cards reads at a glance. */
+.ac { border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: 10px; background: var(--side); margin-bottom: 12px;
+  overflow: hidden; }
+.ac:focus { outline: none; }
+.ac:focus-visible, .ac.pending:focus-within { box-shadow: 0 0 0 1px #ffb02e55; }
+.ac.pending { border-left-color: var(--warn); }
+.ac.applying { border-left-color: var(--accent); }
+.ac.applied { border-left-color: var(--on); }
+.ac.failed { border-left-color: var(--bad); }
+.ac.denied, .ac.expired { border-left-color: #4a505e; }
+
+.ac-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 12px; border: 0; background: none; color: var(--text);
+  font: inherit; text-align: left; cursor: pointer; }
+.ac-head:disabled { cursor: default; }
+.ac-head:not(:disabled):hover { background: #ffffff06; }
+.ac-status { display: inline-flex; align-items: center; font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em; font-weight: 700;
+  padding: 1px 8px; border-radius: 99px; white-space: nowrap; flex: none; }
+.ac-status.pending { background: #ffb02e22; color: var(--warn); }
+.ac-status.applying { background: #6ea8ff22; color: var(--accent); }
+.ac-status.applied { background: #5ad18e22; color: var(--on); }
+.ac-status.failed { background: #ff6b6b22; color: var(--bad); }
+.ac-status.denied, .ac-status.expired { background: #ffffff0d; color: var(--dim); }
+.ac-title { flex: 1; min-width: 0; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ac.open .ac-title { white-space: normal; }
+.ac-when { color: var(--dim); font-size: 11.5px; white-space: nowrap; }
+.ac-fold { display: flex; align-items: center; gap: 8px; padding: 0 12px 9px 33px; font-size: 12px; }
+.ac-body { padding: 4px 12px 12px; }
+
+.ac-foot { border-top: 1px solid var(--line); background: var(--bar); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.ac-foot.pending { position: sticky; bottom: 0; }
+.ac-note { width: 100%; resize: vertical; min-height: 32px; font-size: 12.5px; }
+.ac-actions { display: flex; align-items: center; gap: 8px; }
+.ac-line { display: flex; align-items: center; gap: 7px; margin: 0; font-size: 12.5px; }
+.ac-line.ok { color: var(--on); }
+.ac-line.warn { color: var(--warn); }
+.ac-error { display: flex; gap: 8px; margin: 0; padding: 8px 10px; border-radius: 7px; background: #ff6b6b12; border: 1px solid #ff6b6b40;
+  color: #ffb3b3; font-size: 12.5px; }
+.ac-error svg { flex: none; margin-top: 2px; }
+.ac-missing { padding: 6px 10px; border-radius: 7px; background: #ffb02e0d; border: 1px solid #ffb02e33; }
+.ac-missing .label { color: var(--warn); }
+.ac-missing ul { margin: 0; padding-left: 18px; color: var(--warn); }
+.ac-side { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.ac-side > .dv { padding: 8px; }
+.ac-side-head { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: #ffffff05; color: var(--text); font: inherit;
+  font-size: 12.5px; padding: 6px 10px; cursor: pointer; text-align: left; }
+.ac-side-head:hover { background: #ffffff0b; }
+.ac-restore { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); flex-wrap: wrap; }
+.ac-restore code { color: var(--text); max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
