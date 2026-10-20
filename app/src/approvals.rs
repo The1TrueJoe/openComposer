@@ -138,6 +138,7 @@ pub async fn propose(
     let catalog = session.catalog(false).await?;
     check_connections(&ops, &catalog, &before.project)?;
     check_properties(&ops, &catalog, &before.project)?;
+    check_actions(&ops, &catalog, &before.project)?;
     check_drivers(app, &session, &ops).await?;
     let names = catalog.names();
     let mut predicted = before.project.clone();
@@ -289,6 +290,22 @@ fn check_properties(ops: &[Op], cat: &c4::Catalog, p: &c4::Project) -> AppResult
                     def.maximum.clone().unwrap_or_default()
                 )));
             }
+        }
+    }
+    Ok(())
+}
+
+fn check_actions(ops: &[Op], cat: &c4::Catalog, p: &c4::Project) -> AppResult<()> {
+    for op in ops {
+        let Op::RunAction { device, command } = op else { continue };
+        let actions = cat.devices.get(device).map(|d| &d.actions);
+        if !actions.is_some_and(|a| a.iter().any(|(_, c)| c == command)) {
+            let have: Vec<String> = actions.into_iter().flatten().map(|(n, c)| format!("{n} ({c})")).collect();
+            return Err(AppError::Other(format!(
+                "“{}” has no action “{command}”{}",
+                p.name_of(*device),
+                if have.is_empty() { String::new() } else { format!("; its actions are: {}", have.join(", ")) }
+            )));
         }
     }
     Ok(())

@@ -80,7 +80,10 @@ export function ApprovalCard({ approval: a, collapsible = false, autoFocus = fal
             <DiffView diff={a.diff} header={{
               source: a.source, director: a.director_name, project: a.project, reason: a.reason, time: a.created,
               descriptions: a.descriptions, installs,
-            }} empty={installs.length ? "No change to the project itself — devices use the file once it's there." : undefined} />
+            }} empty={
+              installs.length ? "No change to the project itself — devices use the file once it's there."
+                : a.ops.some((o) => o.op === "run_action") ? "No change to the project — the action runs on the device itself."
+                : undefined} />
           </div>
           <Footer a={a} note={note} setNote={setNote} busy={busy} decide={decide} />
         </>

@@ -193,6 +193,7 @@ function describe(op: Op): string {
     case "remove_network_binding": return `Remove network identity of ${n(op.device)}`;
     case "set_property": return `Set ${n(op.device)} property “${op.name}” to “${masked(op.name, op.value)}”`;
     case "install_driver": return `Install driver file ${op.filename} from ${op.source}`;
+    case "run_action": return `Run action “${op.command}” on ${n(op.device)}`;
     case "load_project": return `Replace the whole project with ${op.label}`;
   }
 }
@@ -269,6 +270,7 @@ function predict(ops: Op[]): Change[] {
         break;
       }
       case "install_driver":
+      case "run_action":
         break;
       case "load_project":
         changes.push({ kind: "property_changed", item: itemRef(20), property: "Power On Delay (ms)", from: "2500", to: "3000" });
@@ -347,6 +349,8 @@ function apply(op: Op): number[] {
       return [];
     case "install_driver":
       installed.add(op.filename);
+      return [];
+    case "run_action":
       return [];
     case "load_project":
       return [];

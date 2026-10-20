@@ -133,9 +133,14 @@ function Properties({ d, shell }: { d: ItemDetail; shell: Shell }) {
         <>
           <div className="section">Driver actions</div>
           <div className="chips pad-x">
-            {d.actions.map((a) => <span key={a.command} className="chip" title={a.command}>{a.name}</span>)}
+            {d.actions.map((a) => (
+              <button key={a.command} className="act small" title={a.command} disabled={!shell.writable}
+                onClick={() => shell.propose([{ op: "run_action", device: d.id, command: a.command }], `Run “${a.name}”`)}>
+                {a.name}
+              </button>
+            ))}
           </div>
-          <p className="hint">Listed for reference: openComposer reads and rewires projects but doesn't run driver actions.</p>
+          <p className="hint">Actions run on the device itself, so each one is approved like a change.</p>
         </>
       )}
     </>

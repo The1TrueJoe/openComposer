@@ -37,6 +37,9 @@ pub enum Op {
     RemoveNetworkBinding { device: u32, binding: u32 },
     /// Set a driver property (what typing into Composer's property grid does).
     SetProperty { device: u32, name: String, value: String },
+    /// Press one of a driver's Actions (Composer's Actions tab). Changes nothing in the
+    /// project, but can do anything on the device, so it is approved like a write.
+    RunAction { device: u32, command: String },
     /// Put a driver file on the controller (via its web API, not c4soap). The project is
     /// unchanged until a device uses it.
     InstallDriver {
@@ -113,6 +116,7 @@ impl Op {
                 let shown = if crate::model::is_sensitive_property(name) { crate::model::REDACTED } else { value.as_str() };
                 format!("Set {} property “{name}” to “{shown}”", n(*device))
             }
+            Op::RunAction { device, command } => format!("Run action “{command}” on {}", n(*device)),
             Op::InstallDriver { filename, source, bytes } => {
                 format!("Install driver file {filename} ({} KB) from {source}", bytes.len().div_ceil(1024))
             }
@@ -270,6 +274,9 @@ impl Op {
             Op::SetProperty { device, name, value } => {
                 p.items.get_mut(device).ok_or(OpError::NoSuchItem(*device))?.properties.insert(name.clone(), value.clone());
             }
+            Op::RunAction { device, .. } => {
+                p.item(*device).ok_or(OpError::NoSuchItem(*device))?;
+            }
             Op::InstallDriver { .. } => {}
             Op::LoadProject { xml, .. } => {
                 *p = Project::parse(xml).map_err(|e| OpError::BadProject(e.to_string()))?;
@@ -328,6 +335,13 @@ impl Op {
                     r#"<devicecommand owneridtype="" owneriditem="-1"><command>UPDATE_PROPERTY</command><params><param><name>Name</name><value type="STRING"><static>{}</static></value></param><param><name>Value</name><value type="STRING"><static>{}</static></value></param></params></devicecommand>"#,
                     e(name),
                     e(value)
+                );
+                vec![Call::new("SendToDevice").num("iddevice", *device).xml("data", cmd)]
+            }
+            Op::RunAction { device, command } => {
+                let cmd = format!(
+                    r#"<devicecommand owneridtype="" owneriditem="-1"><command>LUA_ACTION</command><params><param><name>ACTION</name><value type="STRING"><static>{}</static></value></param></params></devicecommand>"#,
+                    crate::xml::escape(command)
                 );
                 vec![Call::new("SendToDevice").num("iddevice", *device).xml("data", cmd)]
             }

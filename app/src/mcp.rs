@@ -165,7 +165,7 @@ impl OpenComposerMcp {
     }
 
     #[tool(description = "Change the project. Give an ordered list of ops (add_device, add_room, remove_item, rename_item, \
-        move_item, add_connection, remove_connection, add_network_binding, remove_network_binding, set_property). The user sees a \
+        move_item, add_connection, remove_connection, add_network_binding, remove_network_binding, set_property, run_action). The user sees a \
         project diff and approves or declines; this call waits for that and returns what happened, including new item ids.",
         annotations(read_only_hint = false, destructive_hint = true))]
     async fn propose_changes(&self, Parameters(a): Parameters<ProposeArgs>) -> Result<CallToolResult, McpError> {
