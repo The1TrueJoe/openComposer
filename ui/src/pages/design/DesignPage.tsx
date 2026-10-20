@@ -1,4 +1,4 @@
-import { Copy, FolderInput, MousePointerClick, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { Copy, FolderInput, Gamepad2, MousePointerClick, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { api, type TreeNode } from "../../api";
 import { ContextMenu, useContextMenu, type MenuItem } from "../../components/ContextMenu";
@@ -8,9 +8,10 @@ import { Failure, Loading } from "../../components/shell";
 import { chain, indexTree, ofKind, parentKindFor } from "../../lib/project";
 import type { Shell } from "../../lib/shell";
 import { copy, plural, useLoad } from "../../lib/ui";
-import { AddDevices } from "./AddDevices";
 import { AskBar } from "./AskBar";
+import { DeviceControl } from "./DeviceControl";
 import { Inspector, type ItemActions } from "./Inspector";
+import { ItemsPane } from "./ItemsPane";
 import { ProjectTree } from "./ProjectTree";
 
 /** Composer's System Design: the project tree, the selected item, and adding devices — plus
@@ -22,6 +23,8 @@ export function DesignPage({ shell }: { shell: Shell }) {
   const { selected: sel, select: setSel } = shell;
   // Bumped to put the cursor in the driver search ("Add device" on a room).
   const [findDriver, setFindDriver] = useState(0);
+  // The device whose control panel is open.
+  const [control, setControl] = useState<number | null>(null);
   const menu = useContextMenu<TreeNode>();
   const { ask, confirm, choose } = useDialog();
   const idx = useMemo(() => indexTree(tree.data?.tree ?? null), [tree.data]);
@@ -79,11 +82,13 @@ export function DesignPage({ shell }: { shell: Shell }) {
       setSel(r);
       setFindDriver((n) => n + 1);
     },
+    control: (id) => setControl(id),
   }), [ask, confirm, choose, idx, shell, setSel]);
 
   const menuItems = (n: TreeNode): MenuItem[] => {
     const w = shell.writable;
     const items: MenuItem[] = [];
+    if (n.kind === "device" || n.kind === "proxy") items.push({ label: "Control…", icon: <Gamepad2 size={14} strokeWidth={1.8} />, onSelect: () => setControl(n.id) }, { divider: true });
     if (n.kind === "floor") items.push({ label: "Add room…", icon: <Plus size={14} strokeWidth={1.8} />, disabled: !w, onSelect: () => actions.addRoom(n.id) });
     if (n.kind === "room") items.push({ label: "Add device…", icon: <Plus size={14} strokeWidth={1.8} />, disabled: !w, onSelect: () => actions.addDevice(n.id) });
     if (n.kind !== "project") {
@@ -98,8 +103,11 @@ export function DesignPage({ shell }: { shell: Shell }) {
   };
 
   const treeBody = tree.data?.tree
-    ? <ProjectTree root={tree.data.tree} sel={sel} onSelect={setSel} onMenu={menu.show} />
+    ? <ProjectTree root={tree.data.tree} sel={sel} onSelect={setSel} onMenu={menu.show} onControl={setControl} />
     : tree.error ? <Failure error={tree.error} retry={tree.reload} /> : <Loading what="Reading the project" />;
+
+  // The path to the selection, as one bar level with the panes' heads.
+  const trail = sel != null ? chain(idx, sel) : [];
 
   return (
     <>
@@ -112,18 +120,26 @@ export function DesignPage({ shell }: { shell: Shell }) {
         <Grip />
         <MainPane id="inspector">
           <div className="design-main">
+            <nav className="crumbs" aria-label="Selection">
+              {trail.length
+                ? trail.map((n, i) => i === trail.length - 1
+                    ? <b key={n.id}>{n.name}</b>
+                    : <span key={n.id} className="crumb"><button className="link" onClick={() => setSel(n.id)}>{n.name}</button><span className="sep">›</span></span>)
+                : <span className="dim">{tree.data?.project ?? "Project"}</span>}
+            </nav>
             {selected
               ? <Inspector id={selected.id} shell={shell} onSelect={setSel} actions={actions} />
-              : <div className="placeholder"><MousePointerClick size={22} strokeWidth={1.5} /><p>Select a room, device or agent to see its properties, connections and programming.</p></div>}
+              : <div className="placeholder"><MousePointerClick size={22} strokeWidth={1.5} /><p>Select a room, device or agent to see its properties, connections and programming. Double-click a device to control it.</p></div>}
             <AskBar shell={shell} focus={focus} project={tree.data?.project ?? "This project"} />
           </div>
         </MainPane>
         <Grip />
-        <SidePane id="catalog" side="right" title="Add devices" defaultSize={320}>
-          <AddDevices shell={shell} room={room} rooms={rooms} focus={findDriver} onAdded={setSel} />
+        <SidePane id="catalog" side="right" title="Items" defaultSize={340}>
+          <ItemsPane shell={shell} idx={idx} sel={sel} room={room} rooms={rooms} focus={findDriver} onAdded={setSel} />
         </SidePane>
       </Panes>
       {menu.open && <ContextMenu x={menu.open.x} y={menu.open.y} items={menuItems(menu.open.target)} onClose={menu.close} />}
+      <DeviceControl id={control} shell={shell} onClose={() => setControl(null)} />
     </>
   );
 }
@@ -131,4 +147,3 @@ export function DesignPage({ shell }: { shell: Shell }) {
 function countBelow(n: TreeNode | undefined): number {
   return n ? n.children.reduce((sum, c) => sum + 1 + countBelow(c), 0) : 0;
 }
-

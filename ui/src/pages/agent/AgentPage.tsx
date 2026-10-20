@@ -1,16 +1,16 @@
-import { ArrowUp, MessageSquarePlus, Sparkles, Square, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowUp, FileUp, MessageSquarePlus, Sparkles, Square, Trash2 } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api, errText, type ConversationInfo, type Provider } from "../../api";
+import { AgentSettings, AttachButton, AttachmentChips, ToolsMissing, useAttachments, useProviders } from "../../components/AgentControls";
 import { Tip, useDialog } from "../../components/Dialogs";
 import { Grip, MainPane, Panes, SidePane } from "../../components/Panes";
 import { Select, Spinner } from "../../components/controls";
 import { Transcript } from "../../components/Transcript";
-import { chatTitle } from "../../lib/agent";
+import { PROVIDER_NAMES as NAMES, chatTitle, modelLabel, useAgentPrefs, type AgentPrefs } from "../../lib/agent";
+import { useDropFiles } from "../../lib/drop";
 import type { Shell } from "../../lib/shell";
-import { ago, cx, useBackendEvent, useLoad } from "../../lib/ui";
-
-const NAMES: Record<Provider, string> = { claude: "Claude Code", codex: "Codex" };
+import { ago, cx, useBackendEvent } from "../../lib/ui";
 
 const SUGGESTIONS = [
   "What's in the living room, and how is it wired?",
@@ -24,8 +24,10 @@ const SUGGESTIONS = [
 export function AgentPage({ shell }: { shell: Shell }) {
   const [convs, setConvs] = useState<ConversationInfo[]>([]);
   const [sel, setSel] = useState<string | null>(null);
-  const providers = useLoad(() => api.agentProviders(), [shell.status.config.agent]);
-  const [provider, setProvider] = useState<Provider>(shell.status.config.agent.provider);
+  const providerList = useProviders();
+  const [prefs, setPrefs] = useAgentPrefs("agent", shell.status.config.agent.provider);
+  const provider = prefs.provider;
+  const setProvider = (p: Provider) => setPrefs({ provider: p });
   const { confirm } = useDialog();
 
   useEffect(() => {
@@ -42,11 +44,11 @@ export function AgentPage({ shell }: { shell: Shell }) {
   }));
 
   const current = convs.find((c) => c.id === sel) ?? null;
-  const status = providers.data?.find((p) => p.provider === (current?.provider ?? provider));
+  const status = providerList?.find((p) => p.provider === (current?.provider ?? provider));
 
   const create = async () => {
     try {
-      const c = await api.agentNew(provider);
+      const c = await api.agentNew(provider, prefs.model, prefs.effort || null);
       setConvs((l) => [c, ...l]);
       setSel(c.id);
       return c;
@@ -56,11 +58,11 @@ export function AgentPage({ shell }: { shell: Shell }) {
     }
   };
 
-  const send = async (text: string) => {
+  const send = async (text: string, files: string[] = []) => {
     const c = current ?? (await create());
     if (!c) return false;
     try {
-      await api.agentSend(c.id, text);
+      await api.agentSend(c.id, text, files);
       return true;
     } catch (e) {
       toast.error(errText(e));
@@ -75,7 +77,7 @@ export function AgentPage({ shell }: { shell: Shell }) {
     if (sel === c.id) setSel(null);
   };
 
-  const providerOptions = (providers.data ?? []).map((p) => ({
+  const providerOptions = (providerList ?? []).map((p) => ({
     value: p.provider, label: p.installed ? `${NAMES[p.provider]}${p.version ? ` · ${p.version.split(" ")[0]}` : ""}` : `${NAMES[p.provider]} — not installed`,
     disabled: !p.installed,
   }));
@@ -93,8 +95,8 @@ export function AgentPage({ shell }: { shell: Shell }) {
           {!convs.length && <p className="empty pad">No conversations yet.</p>}
           {convs.map((c) => (
             <div key={c.id} className={cx("chat-item", c.id === sel && "sel")} onClick={() => setSel(c.id)}>
-              <div className="chat-title">{c.busy && <Spinner />}{chatTitle(c.title)}</div>
-              <div className="chat-meta"><span>{NAMES[c.provider]}</span><span>{ago(c.created)}</span>
+              <div className="chat-title">{c.busy && <Spinner />}{c.tools === 0 && <AlertTriangle size={12} strokeWidth={1.8} className="warn" />}{chatTitle(c.title)}</div>
+              <div className="chat-meta"><span>{NAMES[c.provider].split(" ")[0]}</span><span className="ellip">{modelLabel(c.model, c.effort)}</span><span>{ago(c.created)}</span>
                 {c.cost_usd > 0 && <span>${c.cost_usd.toFixed(3)}</span>}</div>
               <Tip text="Delete">
                 <button className="icon-btn chat-del" aria-label="Delete conversation" onClick={(e) => { e.stopPropagation(); void remove(c); }}>
@@ -107,17 +109,20 @@ export function AgentPage({ shell }: { shell: Shell }) {
       </SidePane>
       <Grip />
       <MainPane id="chat">
-        <Chat key={current?.id ?? "new"} conv={current} shell={shell} onSend={send}
+        <Chat key={current?.id ?? "new"} conv={current} shell={shell} onSend={send} prefs={prefs} onPrefs={setPrefs} onNew={() => void create()}
               notInstalled={status && !status.installed ? `${NAMES[status.provider]} isn't installed on this computer — install it or set its path in Settings › Agent.` : null} />
       </MainPane>
     </Panes>
   );
 }
 
-function Chat({ conv, shell, onSend, notInstalled }: {
-  conv: ConversationInfo | null; shell: Shell; onSend: (text: string) => Promise<boolean>; notInstalled: string | null;
+function Chat({ conv, shell, onSend, notInstalled, prefs, onPrefs, onNew }: {
+  conv: ConversationInfo | null; shell: Shell; onSend: (text: string, files?: string[]) => Promise<boolean>; notInstalled: string | null;
+  prefs: AgentPrefs; onPrefs: (p: Partial<AgentPrefs>) => void; onNew: () => void;
 }) {
   const [text, setText] = useState("");
+  const att = useAttachments();
+  const drop = useDropFiles(att.add, () => true);
   const scroller = useRef<HTMLDivElement>(null);
   const box = useRef<HTMLTextAreaElement>(null);
   const stick = useRef(true);
@@ -142,21 +147,24 @@ function Chat({ conv, shell, onSend, notInstalled }: {
   const submit = async () => {
     const t = text.trim();
     if (!t || busy) return;
+    const files = att.files;
     setText("");
+    att.clear();
     stick.current = true;
-    if (!(await onSend(t))) setText(t);
+    if (!(await onSend(t, files))) { setText(t); att.set(files); }
   };
 
   return (
-    <div className="chat">
+    <div ref={drop.ref} className={cx("chat", drop.over && "drop-over")} {...drop.handlers}>
       <div className="chat-head">
         <Sparkles size={14} strokeWidth={1.8} className="accent" />
         <b>{conv ? chatTitle(conv.title) : "New conversation"}</b>
-        {conv && <span className="tag">{NAMES[conv.provider]}</span>}
         <span className="spread" />
         {conv && conv.cost_usd > 0 && <Tip text="Reported by the CLI for this conversation"><span className="dim small">${conv.cost_usd.toFixed(4)}</span></Tip>}
         <span className="dim small">{shell.director ? `on ${shell.director.name}` : "no Director"}</span>
+        <AgentSettings conv={conv} prefs={prefs} onPrefs={onPrefs} />
       </div>
+      <ToolsMissing conv={conv} onNew={onNew} />
       <div className="chat-scroll" ref={scroller}
            onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60; }}>
         <div className="chat-col">
@@ -175,6 +183,9 @@ function Chat({ conv, shell, onSend, notInstalled }: {
       <div className="composer">
         {notInstalled && <p className="warn small composer-note">{notInstalled}</p>}
         <div className="composer-box">
+          <AttachmentChips files={att.files} onRemove={att.remove} />
+          <div className="composer-row">
+          <AttachButton onPick={() => void att.pick()} />
           <textarea ref={box} rows={1} placeholder={busy ? "Working… (Stop to interrupt)" : "Message the agent — Enter to send, Shift+Enter for a new line"}
                     value={text} onChange={(e) => setText(e.target.value)}
                     onKeyDown={(e) => {
@@ -189,8 +200,10 @@ function Chat({ conv, shell, onSend, notInstalled }: {
           ) : (
             <button className="send" aria-label="Send" disabled={!text.trim()} onClick={() => void submit()}><ArrowUp size={15} strokeWidth={2.2} /></button>
           )}
+          </div>
         </div>
       </div>
+      {drop.over && <div className="chat-drop"><FileUp size={22} strokeWidth={1.5} />Drop files to attach them to your next message</div>}
     </div>
   );
 }

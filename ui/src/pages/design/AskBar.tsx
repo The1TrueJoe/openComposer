@@ -1,12 +1,16 @@
-import { ArrowUp, ChevronDown, ChevronUp, Eye, MessageSquare, Sparkles, Square } from "lucide-react";
+import { ArrowUp, ChevronDown, ChevronUp, Eye, FileUp, MessageSquare, MessageSquarePlus, Sparkles, Square } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
-import { api, errText, type ConversationInfo } from "../../api";
+import { api, errText, type ConversationInfo, type Provider } from "../../api";
+import {
+  AgentSettings, AttachButton, AttachmentChips, ConversationSwitcher, ToolsMissing, useAttachments,
+} from "../../components/AgentControls";
 import { ApprovalCard } from "../../components/ApprovalCard";
 import { Tip } from "../../components/Dialogs";
 import { Spinner } from "../../components/controls";
 import { Transcript } from "../../components/Transcript";
-import { AGENT_SOURCE, approvalFor, proposes, withContext } from "../../lib/agent";
+import { AGENT_SOURCE, PROVIDER_NAMES, approvalFor, chatTitle, proposes, useAgentPrefs, withContext } from "../../lib/agent";
+import { useDropFiles } from "../../lib/drop";
 import type { FocusItem, InspectorTab, Shell } from "../../lib/shell";
 import { cx, useBackendEvent } from "../../lib/ui";
 
@@ -18,14 +22,18 @@ const TAB_LABEL: Record<InspectorTab, string> = {
 // goes to the same one, so "and the other one?" has something to refer to.
 let designChat: string | null = null;
 
-/** Ask the agent about what's on screen, or tell it what to change. Each message carries one
- *  line saying what you're looking at; the reply, its tool calls and any approval it is
+/** Ask the agent about what's on screen, or tell it what to change — the Agent tab's equal:
+ *  the same CLIs, models and effort, attachments, and any conversation. Each message carries
+ *  one line saying what you're looking at; the reply, its tool calls and any approval it is
  *  waiting on show in a panel above the bar. */
 export function AskBar({ shell, focus, project }: { shell: Shell; focus: FocusItem | null; project: string }) {
   const [conv, setConv] = useState<ConversationInfo | null>(null);
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [prefs, setPrefs] = useAgentPrefs("design", shell.status.config.agent.provider);
+  const att = useAttachments();
+  const drop = useDropFiles(att.add, () => true);
   const box = useRef<HTMLTextAreaElement>(null);
   const scroller = useRef<HTMLDivElement>(null);
   const stick = useRef(true);
@@ -45,6 +53,7 @@ export function AskBar({ shell, focus, project }: { shell: Shell; focus: FocusIt
   const context = focus ? `Design › ${focus.path} (#${focus.id}) · ${TAB_LABEL[tab]}` : "Design";
   const chip = focus ? `${focus.name} · ${TAB_LABEL[tab]}` : project;
   const busy = !!conv?.busy || sending;
+  const noTools = conv?.tools === 0;
 
   // Only the latest exchange: the whole conversation is one click away in the Agent tab.
   const turn = useMemo(() => {
@@ -66,14 +75,22 @@ export function AskBar({ shell, focus, project }: { shell: Shell; focus: FocusIt
     return [...inTurn, ...loose].filter((a) => a?.status === "pending").length;
   }, [turn, loose, shell.approvals]);
 
-  // A card to decide shouldn't wait behind a collapsed panel.
-  useEffect(() => { if (waiting) setOpen(true); }, [waiting]);
+  // A card to decide, or a chat that can't see the project, shouldn't wait behind a closed panel.
+  useEffect(() => { if (waiting || noTools) setOpen(true); }, [waiting, noTools]);
 
+  // Grow with what is typed (and with a pane resize rewrapping it), up to a few lines.
   useLayoutEffect(() => {
     const el = box.current;
     if (!el) return;
-    el.style.height = "auto";
-    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+    const fit = () => {
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+    };
+    fit();
+    let w = el.clientWidth;
+    const ro = new ResizeObserver(() => { if (el.clientWidth !== w) { w = el.clientWidth; fit(); } });
+    ro.observe(el);
+    return () => ro.disconnect();
   }, [text]);
 
   const last = turn[turn.length - 1];
@@ -83,10 +100,44 @@ export function AskBar({ shell, focus, project }: { shell: Shell; focus: FocusIt
     if (el && stick.current) el.scrollTop = el.scrollHeight;
   }, [signature, open, shell.approvals]);
 
+  const start = async () => {
+    const c = await api.agentNew(prefs.provider, prefs.model, prefs.effort || null);
+    designChat = c.id;
+    setConv(c);
+    return c;
+  };
+
+  const newChat = async () => {
+    try {
+      await start();
+      setOpen(true);
+      box.current?.focus();
+    } catch (e) {
+      toast.error(errText(e));
+    }
+  };
+
+  const pick = (c: ConversationInfo) => {
+    designChat = c.id;
+    setConv(c);
+    setOpen(true);
+  };
+
+  // Another CLI can't carry on this conversation: the next message starts one with it.
+  const switchProvider = (p: Provider) => {
+    if (conv && conv.provider !== p) {
+      designChat = null;
+      setConv(null);
+      toast.message(`Your next message starts a new ${PROVIDER_NAMES[p]} chat.`);
+    }
+  };
+
   const send = async () => {
     const t = text.trim();
     if (!t || busy) return;
+    const files = att.files;
     setText("");
+    att.clear();
     setOpen(true);
     stick.current = true;
     setSending(true);
@@ -94,18 +145,17 @@ export function AskBar({ shell, focus, project }: { shell: Shell; focus: FocusIt
     try {
       try {
         if (!designChat) throw new Error("no conversation yet");
-        await api.agentSend(designChat, message);
+        await api.agentSend(designChat, message, files);
       } catch (first) {
         // The Design conversation may have been deleted from the Agent tab: start another.
         if (designChat && conv?.busy) throw first;
-        const c = await api.agentNew();
-        designChat = c.id;
-        setConv(c);
-        await api.agentSend(c.id, message);
+        const c = await start();
+        await api.agentSend(c.id, message, files);
       }
     } catch (e) {
       toast.error(errText(e));
       setText(t);
+      att.set(files);
     } finally {
       setSending(false);
     }
@@ -114,53 +164,68 @@ export function AskBar({ shell, focus, project }: { shell: Shell; focus: FocusIt
   const stop = () => { if (conv) api.agentStop(conv.id).catch((e) => toast.error(errText(e))); };
 
   return (
-    <div className="ask" onKeyDown={(e) => { if (e.key === "Escape" && open) { e.stopPropagation(); setOpen(false); } }}>
-      {open && conv && (
+    <div ref={drop.ref} className={cx("ask", drop.over && "drop-over")} {...drop.handlers}
+         onKeyDown={(e) => { if (e.key === "Escape" && open) { e.stopPropagation(); setOpen(false); } }}>
+      {open && (
         <div className="ask-panel" role="region" aria-label="Design assistant">
           <div className="ask-head">
             <Sparkles size={14} strokeWidth={1.8} className="accent" />
             <b>Design assistant</b>
-            {busy && <span className="dim small"><Spinner />working</span>}
+            {conv && conv.entries.length > 0 && <span className="dim ellip ask-title">{chatTitle(conv.title)}</span>}
+            {busy && <span className="dim small nowrap"><Spinner />working</span>}
             <span className="grow" />
-            {busy && <Tip text="Stop"><button className="icon-btn" aria-label="Stop" onClick={stop}><Square size={12} strokeWidth={2.2} /></button></Tip>}
-            <Tip text="Open in the Agent tab"><button className="icon-btn" aria-label="Open in Agent tab" onClick={() => shell.openChat(conv.id)}>
-              <MessageSquare size={14} strokeWidth={1.8} /></button></Tip>
+            {conv && conv.cost_usd > 0 && <Tip text="Reported by the CLI for this conversation"><span className="dim small">${conv.cost_usd.toFixed(3)}</span></Tip>}
+            <ConversationSwitcher current={conv?.id ?? null} onPick={pick} onNew={() => void newChat()} />
+            <Tip text="New chat"><button className="icon-btn" aria-label="New chat" onClick={() => void newChat()}><MessageSquarePlus size={14} strokeWidth={1.8} /></button></Tip>
+            {conv && (
+              <Tip text="Open in the Agent tab"><button className="icon-btn" aria-label="Open in Agent tab" onClick={() => shell.openChat(conv.id)}>
+                <MessageSquare size={14} strokeWidth={1.8} /></button></Tip>
+            )}
             <Tip text="Collapse (Esc)"><button className="icon-btn" aria-label="Collapse" onClick={() => setOpen(false)}><ChevronDown size={14} strokeWidth={1.8} /></button></Tip>
           </div>
+          <ToolsMissing conv={conv} onNew={() => void newChat()} />
           <div className="ask-scroll" ref={scroller}
                onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40; }}>
-            {turn.length ? <Transcript entries={turn} busy={!!conv.busy} approvals={shell.approvals} />
-              : <p className="dim small">Starting the conversation…</p>}
+            {turn.length ? <Transcript entries={turn} busy={!!conv?.busy} approvals={shell.approvals} />
+              : sending ? <p className="dim small"><Spinner />Starting the conversation…</p>
+              : <p className="dim small ask-empty">Ask about <b>{chip}</b>, or tell me what to change — renames, connections, new devices. Every change comes back as a card for you to approve. Drop a PDF or photo of the rack to attach it.</p>}
             {loose.map((a) => <div key={a.id} className="msg-card"><ApprovalCard approval={a} /></div>)}
           </div>
         </div>
       )}
       <div className="ask-bar">
-        <Tip text={`Sent with your message: ${context}`}>
-          <span className="ask-chip"><Eye size={11} strokeWidth={1.8} /><span>{chip}</span></span>
-        </Tip>
-        <textarea ref={box} rows={1} value={text} aria-label="Ask the agent"
-                  placeholder={busy ? "Working… (Stop to interrupt)" : "Ask about this project, or tell me what to change…"}
-                  onChange={(e) => setText(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
-                      e.preventDefault();
-                      void send();
-                    }
-                  }} />
-        {conv && !open && (
-          <Tip text="Show the reply">
-            <button className={cx("icon-btn ask-show", waiting > 0 && "on")} aria-label="Show the reply" onClick={() => setOpen(true)}>
-              {busy ? <Spinner /> : <ChevronUp size={14} strokeWidth={1.8} />}
-            </button>
+        <AttachmentChips files={att.files} onRemove={att.remove} />
+        <div className="ask-row">
+          <AttachButton onPick={() => void att.pick()} />
+          <Tip text={`Sent with your message: ${context}`}>
+            <span className="ask-chip"><Eye size={11} strokeWidth={1.8} /><span>{chip}</span></span>
           </Tip>
-        )}
-        {busy && conv?.busy ? (
-          <Tip text="Stop"><button className="send stop" aria-label="Stop" onClick={stop}><Square size={12} strokeWidth={2.2} /></button></Tip>
-        ) : (
-          <button className="send" aria-label="Send" disabled={!text.trim() || busy} onClick={() => void send()}><ArrowUp size={15} strokeWidth={2.2} /></button>
-        )}
+          <textarea ref={box} rows={1} value={text} aria-label="Ask the agent"
+                    placeholder={busy ? "Working… (Stop to interrupt)" : "Ask about this project, or tell me what to change…"}
+                    onChange={(e) => setText(e.target.value)}
+                    onFocus={() => { if (conv?.entries.length && !open) setOpen(true); }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+                        e.preventDefault();
+                        void send();
+                      }
+                    }} />
+          <AgentSettings conv={conv} prefs={prefs} onPrefs={setPrefs} onProvider={switchProvider} compact />
+          {!open && (
+            <Tip text={conv ? "Show the reply" : "Open the assistant"}>
+              <button className={cx("icon-btn ask-show", (waiting > 0 || noTools) && "on")} aria-label="Show the reply" onClick={() => setOpen(true)}>
+                {busy ? <Spinner /> : <ChevronUp size={14} strokeWidth={1.8} />}
+              </button>
+            </Tip>
+          )}
+          {busy && conv?.busy ? (
+            <Tip text="Stop"><button className="send stop" aria-label="Stop" onClick={stop}><Square size={12} strokeWidth={2.2} /></button></Tip>
+          ) : (
+            <button className="send" aria-label="Send" disabled={!text.trim() || busy} onClick={() => void send()}><ArrowUp size={15} strokeWidth={2.2} /></button>
+          )}
+        </div>
       </div>
+      {drop.over && <div className="ask-drop"><FileUp size={16} strokeWidth={1.8} />Drop to attach</div>}
     </div>
   );
 }

@@ -2,6 +2,7 @@ import { FileUp } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { api, errText, type AddDriverArgs } from "../../api";
+import type { Indexed } from "../../lib/project";
 import { Tip } from "../../components/Dialogs";
 import { Tabs } from "../../components/controls";
 import { useDropFiles } from "../../lib/drop";
@@ -12,6 +13,8 @@ import { useAddToRoom, type Room } from "./AddToRoom";
 import { Discovered } from "./Discovered";
 import { DriverSearch, type Query } from "./DriverSearch";
 import { fromController, fromLibrary, isDriverFile, type Local } from "./drivers";
+import { Locations } from "./Locations";
+import { MyDrivers } from "./MyDrivers";
 
 /** What "Add to room…" is handed: a driver file, and what to call the device by default. */
 export interface AddTarget {
@@ -29,14 +32,25 @@ export type Add = (d: AddTarget, opts?: {
   at?: string;
 }) => Promise<void>;
 
-type Tab = "discovered" | "drivers";
+type Tab = "locations" | "discovered" | "drivers" | "search";
 
-/** Design's right pane: devices on the network that aren't in the project yet, and every driver
- *  file openComposer can reach — installed on the controller, in the library on this computer,
- *  or in Control4's online database. Adding installs the file first when it's needed (the
- *  backend fetches it from wherever it is). */
-export function AddDevices({ shell, room, rooms, focus, onAdded }: {
+const TABS: { id: Tab; label: string }[] = [
+  { id: "locations", label: "Locations" },
+  { id: "discovered", label: "Discovered" },
+  { id: "drivers", label: "My Drivers" },
+  { id: "search", label: "Search" },
+];
+
+/** Design's right pane, Composer's Items: location templates to add rooms with, devices on the
+ *  network that aren't in the project yet, the drivers at hand (installed on the controller or
+ *  in the library on this computer) by category, and a search that adds Control4's online
+ *  database. Adding a driver installs the file first when it's needed (the backend fetches it
+ *  from wherever it is). */
+export function ItemsPane({ shell, idx, sel, room, rooms, focus, onAdded }: {
   shell: Shell;
+  idx: Map<number, Indexed>;
+  /** The tree's selection: where new rooms go by default. */
+  sel: number | null;
   /** The room the selection is in: the default for "Add to room…". */
   room: { id: number; name: string } | null;
   rooms: Room[];
@@ -44,7 +58,10 @@ export function AddDevices({ shell, room, rooms, focus, onAdded }: {
   focus: number;
   onAdded: (id: number) => void;
 }) {
-  const [tab, setTab] = useState<Tab>("discovered");
+  const [tab, setTab] = useState<Tab>(() => {
+    try { return (localStorage.getItem("oc.items.tab") as Tab | null) ?? "discovered"; } catch { return "discovered"; }
+  });
+  useEffect(() => { try { localStorage.setItem("oc.items.tab", tab); } catch { /* not remembered */ } }, [tab]);
   const [query, setQuery] = useState<Query>({ text: "", type: null });
   const [picked, setPicked] = useState<string | null>(null);
   const [libRev, setLibRev] = useState(0);
@@ -52,7 +69,7 @@ export function AddDevices({ shell, room, rooms, focus, onAdded }: {
   const library = useLoad(() => api.libraryDrivers(), [libRev]);
   const { ask, element } = useAddToRoom(rooms);
 
-  useEffect(() => { if (focus) setTab("drivers"); }, [focus]);
+  useEffect(() => { if (focus) setTab("search"); }, [focus]);
 
   const local: Local = useMemo(() => ({
     // Agents aren't put in rooms; they're added on their own (not here yet).
@@ -94,7 +111,6 @@ export function AddDevices({ shell, room, rooms, focus, onAdded }: {
     if (!done.length) return;
     setLibRev((n) => n + 1);
     setTab("drivers");
-    setQuery({ text: "", type: null });
     setPicked(done[0]);
     toast.success(done.length === 1 ? `${done[0]} is in the library` : `${plural(done.length, "driver file")} are in the library`);
   }, []);
@@ -106,21 +122,27 @@ export function AddDevices({ shell, room, rooms, focus, onAdded }: {
 
   const drop = useDropFiles(importPaths, isDriverFile);
 
+  const searchFor = (type: string) => { setQuery({ text: "", type }); setPicked(null); setTab("search"); };
+
   return (
     <div ref={drop.ref} className={cx("add-pane", drop.over && "drop-over")} {...drop.handlers}>
-      <Tabs className="detail-tabs" value={tab} onChange={setTab}
-            tabs={[{ id: "discovered", label: "Discovered" }, { id: "drivers", label: "Drivers" }]}>
+      <Tabs className="detail-tabs items-tabs" value={tab} onChange={setTab} tabs={TABS}>
         <span className="spread" />
         <Tip text="Import driver files (.c4z, .c4i) into the library — or drop them here">
           <button className="icon-btn" aria-label="Import driver file" onClick={() => void pickAndImport()}><FileUp size={14} strokeWidth={1.8} /></button>
         </Tip>
       </Tabs>
-      {tab === "discovered"
-        ? <Discovered shell={shell} local={local} add={add}
-                      onFind={(type) => { setQuery({ text: "", type }); setPicked(null); setTab("drivers"); }} />
-        : <DriverSearch shell={shell} local={local} controllerError={controller.error} query={query} onQuery={setQuery}
-                        picked={picked} onPick={setPicked} room={room} add={add} focus={focus}
-                        onImport={(filename) => pickAndImport(filename)} />}
+      {tab === "locations" && <Locations shell={shell} idx={idx} sel={sel} onAdded={onAdded} />}
+      {tab === "discovered" && <Discovered shell={shell} local={local} add={add} onFind={searchFor} />}
+      {tab === "drivers" && (
+        <MyDrivers shell={shell} local={local} controllerError={controller.error} loading={controller.loading && !controller.data}
+                   picked={picked} onPick={setPicked} room={room} add={add} />
+      )}
+      {tab === "search" && (
+        <DriverSearch shell={shell} local={local} controllerError={controller.error} query={query} onQuery={setQuery}
+                      picked={picked} onPick={setPicked} room={room} add={add} focus={focus}
+                      onImport={(filename) => pickAndImport(filename)} />
+      )}
       {drop.over && <div className="drop-hint"><FileUp size={22} strokeWidth={1.5} />Drop .c4z or .c4i files to add them to the library</div>}
       {element}
     </div>

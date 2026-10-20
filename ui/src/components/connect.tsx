@@ -6,12 +6,16 @@
  *     controller refused the one we have); drop the files or pick them, then it retries.
  *  3. Connecting — and the project opens. */
 
-import { ArrowLeft, ArrowRight, Check, Lock, Plug, Plus, Radar, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { createColumnHelper } from "@tanstack/react-table";
+import { ArrowLeft, ArrowRight, Check, Plug, Plus, Radar, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, errText, type Announcement, type AppStatus, type DirectorInfo, type SavedDirector } from "../api";
 import { cx } from "../lib/ui";
 import { Spinner } from "./controls";
+import { DataTable } from "./DataTable";
+import { Tip } from "./Dialogs";
 import { AddDirectorForm, CertificateForm } from "./setup";
+import { ReadOnlyLock } from "./shell";
 
 /** Errors that mean "this controller wants a (different) client certificate". */
 const NEEDS_CERT = /certificate|access denied|handshake|tls/i;
@@ -102,6 +106,23 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
 
   const at = step.kind === "controller" ? 0 : step.kind === "certificate" ? 1 : 2;
 
+  // The Director first, then secondaries (dimmed, nothing to open).
+  const foundRows: ControllerRow[] = (found ?? [])
+    .map((f): ControllerRow => {
+      const sd = savedFor(f);
+      const key = sd?.id ?? `found:${f.address}`;
+      return {
+        key, name: sd?.name ?? (f.host || f.model), address: f.address, model: f.model || f.device_type,
+        os: sd ? info.get(sd.id)?.version ?? null : null, readOnly: sd?.mode === "read_only", secondary: f.director === "disabled",
+        open: !!sd && status.connected.includes(sd.id), error: errors[key] || null, last: false, go: () => connectFound(f),
+      };
+    })
+    .sort((a, b) => Number(a.secondary) - Number(b.secondary));
+  const savedRows: ControllerRow[] = others.map((d) => ({
+    key: d.id, name: d.name, address: d.host, model: null, os: info.get(d.id)?.version ?? null, readOnly: d.mode === "read_only",
+    secondary: false, open: status.connected.includes(d.id), error: errors[d.id] || null, last: d.id === first, go: () => connect(d),
+  }));
+
   return (
     <div className="connect">
       <div className="connect-card">
@@ -128,70 +149,13 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
               ? <p className="hint"><Radar size={13} strokeWidth={1.8} /> Looking for controllers…</p>
               : !found.length
                 ? <p className="empty">No controllers answered. If you're on the right network, macOS may be asking to allow local network access — or add one by address below.</p>
-                : (
-                  <div className="connect-list">
-                    {found.map((f) => {
-                      if (f.director === "disabled") {
-                        return (
-                          <div key={f.host || f.address} className="connect-row secondary">
-                            <span className="dot" />
-                            <div className="connect-text">
-                              <b>{f.host || f.model}</b>
-                              <span className="dim mono">{f.address} · {f.model || f.device_type}</span>
-                              <span className="dim">Secondary controller — no Director here; the project lives on the main controller.</span>
-                            </div>
-                            <span className="tag">secondary</span>
-                          </div>
-                        );
-                      }
-                      const s = savedFor(f);
-                      const key = s?.id ?? `found:${f.address}`;
-                      const on = !!s && status.connected.includes(s.id);
-                      const v = s ? info.get(s.id)?.version : undefined;
-                      return (
-                        <div key={f.host || f.address} className="connect-row" onDoubleClick={() => !busy && connectFound(f)}>
-                          <span className={cx("dot", on && "on")} />
-                          <div className="connect-text">
-                            <b>{s?.name ?? f.host ?? f.model}</b>
-                            <span className="dim mono">{f.address} · {f.model || f.device_type}{v ? ` · OS ${v}` : ""}</span>
-                            {errors[key] && <span className="err">{errors[key]}</span>}
-                          </div>
-                          {s && <ModeTag mode={s.mode} />}
-                          <button className="act primary" disabled={!!busy} onClick={() => connectFound(f)}>
-                            {busy === key ? <Spinner /> : on ? <ArrowRight size={14} strokeWidth={1.8} /> : <Plug size={14} strokeWidth={1.8} />}
-                            {on ? "Open" : "Connect"}
-                          </button>
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
+                : <ControllerTable rows={foundRows} busy={busy} label="Controllers on your network" />}
           </section>
 
           {!!others.length && (
             <section className="connect-sec">
               <div className="connect-head">Saved</div>
-              <div className="connect-list">
-                {others.map((d) => {
-                  const on = status.connected.includes(d.id);
-                  const v = info.get(d.id)?.version;
-                  return (
-                    <div key={d.id} className={cx("connect-row", d.id === first && "last")} onDoubleClick={() => !busy && connect(d)}>
-                      <span className={cx("dot", on && "on")} />
-                      <div className="connect-text">
-                        <b>{d.name}</b>
-                        <span className="dim mono">{d.host}{v ? ` · OS ${v}` : ""}</span>
-                        {errors[d.id] && <span className="err">{errors[d.id]}</span>}
-                      </div>
-                      <ModeTag mode={d.mode} />
-                      <button className="act primary" disabled={!!busy} onClick={() => connect(d)}>
-                        {on ? <ArrowRight size={14} strokeWidth={1.8} /> : <Plug size={14} strokeWidth={1.8} />}
-                        {on ? "Open" : "Connect"}
-                      </button>
-                    </div>
-                  );
-                })}
-              </div>
+              <ControllerTable rows={savedRows} busy={busy} label="Saved Directors" />
             </section>
           )}
 
@@ -238,8 +202,62 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
   );
 }
 
-function ModeTag({ mode }: { mode: SavedDirector["mode"] }) {
-  return mode === "read_only"
-    ? <span className="tag"><Lock size={11} strokeWidth={1.8} /> read only</span>
-    : <span className="tag accent">approve</span>;
+interface ControllerRow {
+  key: string;
+  name: string;
+  address: string;
+  model: string | null;
+  os: string | null;
+  readOnly: boolean;
+  /** A controller without a Director of its own: listed so nothing looks missing. */
+  secondary: boolean;
+  /** Already connected: the action opens it. */
+  open: boolean;
+  error: string | null;
+  /** The one used last time. */
+  last: boolean;
+  go: () => void;
+}
+
+const col = createColumnHelper<ControllerRow>();
+
+function ControllerTable({ rows, busy, label }: { rows: ControllerRow[]; busy: string | null; label: string }) {
+  const [sel, setSel] = useState<string | null>(rows.find((r) => r.last)?.key ?? rows.find((r) => !r.secondary)?.key ?? null);
+  const columns = useMemo(() => [
+    col.accessor("name", {
+      header: "Name", meta: { width: "31%" },
+      cell: (c) => (
+        <span className="ct-name">
+          <span className="row nowrap">
+            <b>{c.getValue()}</b>
+            {c.row.original.readOnly && <ReadOnlyLock name={c.getValue()} />}
+            {c.row.original.last && <span className="dim small">last used</span>}
+          </span>
+          {c.row.original.secondary && <span className="dim small">Secondary controller — the project lives on the Director.</span>}
+          {c.row.original.error && <span className="err small">{c.row.original.error}</span>}
+        </span>
+      ),
+    }),
+    col.accessor("address", { header: "Address", meta: { width: "22%", className: "mono nowrap-cell" }, cell: (c) => <span className="ellip" title={c.getValue()}>{c.getValue()}</span> }),
+    col.accessor("model", { header: "Model", meta: { className: "nowrap-cell" }, cell: (c) => c.getValue() ?? <span className="dim">—</span> }),
+    col.accessor("os", { header: "OS", meta: { width: 104, className: "mono nowrap-cell" }, cell: (c) => c.getValue() ?? <span className="dim">—</span> }),
+    col.display({
+      id: "go", meta: { width: 112, align: "right" },
+      cell: (c) => {
+        const r = c.row.original;
+        if (r.secondary) return <Tip text="Only the main controller runs a Director"><span className="tag">secondary</span></Tip>;
+        return (
+          <button className="act small primary" disabled={!!busy} onClick={r.go}>
+            {busy === r.key ? <Spinner /> : r.open ? <ArrowRight size={13} strokeWidth={1.8} /> : <Plug size={13} strokeWidth={1.8} />}
+            {r.open ? "Open" : "Connect"}
+          </button>
+        );
+      },
+    }),
+  ], [busy]);
+  return (
+    <DataTable data={rows} columns={columns} rowId={(r) => r.key} label={label} scroll={false} className="connect-table"
+               selected={sel} onSelect={(r) => setSel(r.key)} onActivate={(r) => { if (!r.secondary && !busy) r.go(); }}
+               rowClass={(r) => cx(r.secondary && "dimmed", r.last && "last")} />
+  );
 }

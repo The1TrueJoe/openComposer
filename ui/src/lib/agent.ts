@@ -1,6 +1,8 @@
-/** Reading the agent's transcript: which approval a `propose_changes` call is waiting on. */
+/** Reading the agent's transcript: which approval a `propose_changes` call is waiting on;
+ *  and the per-surface model/effort the Design ask bar and the Agent tab remember. */
 
-import type { Approval, Entry, Op } from "../api/types.ts";
+import { useCallback, useState } from "react";
+import type { Approval, Effort, Entry, Op, Provider } from "../api/types.ts";
 
 export const AGENT_SOURCE = "In-app agent";
 
@@ -80,4 +82,55 @@ export function inputSummary(input: unknown): string {
   if (!a) return input == null ? "" : String(input);
   if (Array.isArray(a.ops)) return `${a.ops.length} change${a.ops.length === 1 ? "" : "s"}${typeof a.reason === "string" ? ` — ${a.reason}` : ""}`;
   return Object.entries(a).map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : String(v)}`).join(" ");
+}
+
+// ---- attachments -----------------------------------------------------------------------------
+
+// The backend appends this to a message with attachments (app/src/agent.rs `attach`).
+const ATTACHED = /\n\nAttached files \(read them with your Read tool\):\n((?:- .*(?:\n|$))+)$/;
+
+/** A user message without its attachment list, and the attached files' names. */
+export function splitAttachments(text: string): { text: string; files: string[] } {
+  const m = ATTACHED.exec(text);
+  if (!m) return { text, files: [] };
+  return { text: text.slice(0, m.index), files: m[1].split("\n").filter(Boolean).map((l) => l.replace(/^- /, "").split("/").pop() ?? l) };
+}
+
+// ---- model and effort, remembered per surface ------------------------------------------------
+
+/** Claude Code's model aliases; Codex takes whatever its CLI knows, typed. */
+export const CLAUDE_MODELS = ["fable", "opus", "sonnet", "haiku"] as const;
+export const EFFORTS: Effort[] = ["low", "medium", "high", "xhigh", "max"];
+export const PROVIDER_NAMES: Record<Provider, string> = { claude: "Claude Code", codex: "Codex" };
+
+export interface AgentPrefs {
+  provider: Provider;
+  /** "" = the CLI's (or Settings') default. */
+  model: string;
+  effort: Effort | "";
+}
+
+/** What a surface ("design" — the ask bar — or "agent" — the Agent tab) last used, for its
+ *  next new chat. Kept in localStorage: a convenience, so a blocked storage just forgets. */
+export function useAgentPrefs(surface: "design" | "agent", fallback: Provider): [AgentPrefs, (p: Partial<AgentPrefs>) => void] {
+  const key = `oc.agent.${surface}`;
+  const [prefs, setPrefs] = useState<AgentPrefs>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(key) ?? "null") as Partial<AgentPrefs> | null;
+      return { provider: saved?.provider ?? fallback, model: saved?.model ?? "", effort: saved?.effort ?? "" };
+    } catch {
+      return { provider: fallback, model: "", effort: "" };
+    }
+  });
+  const update = useCallback((p: Partial<AgentPrefs>) => setPrefs((old) => {
+    const next = { ...old, ...p };
+    try { localStorage.setItem(key, JSON.stringify(next)); } catch { /* not remembered */ }
+    return next;
+  }), [key]);
+  return [prefs, update];
+}
+
+/** "sonnet · high" — what a chat runs with, in a few characters. */
+export function modelLabel(model: string | null | undefined, effort: string | null | undefined): string {
+  return [model || "default model", effort].filter(Boolean).join(" · ");
 }

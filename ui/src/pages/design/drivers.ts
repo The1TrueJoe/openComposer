@@ -21,6 +21,9 @@ export interface DriverRow {
   where: Where[];
   /** The library copy, when there is one: says whether it's ours or Composer's. */
   library: LibraryDriver | null;
+  /** The controller's own category for it, when it gives one. */
+  category: string | null;
+  primary_proxy: string | null;
 }
 
 const key = (filename: string) => filename.toLowerCase();
@@ -39,6 +42,7 @@ export function fromController(d: ControllerDriver): DriverRow {
     filename: d.filename, name: d.name || d.filename, manufacturer: d.manufacturer ?? "", model: d.model ?? "",
     version: d.version == null || d.version === "" ? null : String(d.version), control_method: "",
     proxies: names(d.proxies), search_types: d.searchTypes ?? [], certified: !!d.certified, where: ["controller"], library: null,
+    category: d.category ?? null, primary_proxy: d.primaryProxy || null,
   };
 }
 
@@ -46,7 +50,7 @@ export function fromLibrary(d: LibraryDriver): DriverRow {
   return {
     filename: d.filename, name: d.name || d.filename, manufacturer: d.manufacturer, model: d.model,
     version: d.version == null ? null : String(d.version), control_method: d.control_method, proxies: d.proxies,
-    search_types: d.search_types, certified: false, where: ["library"], library: d,
+    search_types: d.search_types, certified: false, where: ["library"], library: d, category: null, primary_proxy: d.proxies[0] ?? null,
   };
 }
 
@@ -54,7 +58,8 @@ export function fromOnline(d: DriverDoc): DriverRow {
   return {
     filename: d.filename, name: d.name || d.filename, manufacturer: d.manufacturer, model: d.model,
     version: d.version == null ? null : String(d.version), control_method: d.control_method, proxies: d.proxies,
-    search_types: d.search_types, certified: d.certified, where: ["online"], library: null,
+    search_types: d.search_types, certified: d.certified, where: ["online"], library: null, category: null,
+    primary_proxy: d.primary_proxy || d.proxies[0] || null,
   };
 }
 
@@ -72,6 +77,8 @@ export function merge(...lists: DriverRow[][]): DriverRow[] {
       if (!had[f] || had[f] === had.filename) (had as unknown as Record<string, unknown>)[f] = r[f];
     }
     if (!had.proxies.length) had.proxies = r.proxies;
+    had.primary_proxy ??= r.primary_proxy;
+    had.category ??= r.category;
     if (!had.search_types.length) had.search_types = r.search_types;
     had.certified ||= r.certified;
     had.library ??= r.library;
@@ -114,3 +121,40 @@ export function localFor(local: Local, type: string): DriverRow | null {
 }
 
 export const isDriverFile = (path: string) => /\.(c4z|c4i)$/i.test(path);
+
+// ---- My Drivers' categories ------------------------------------------------------------------
+
+/** Composer files drivers by what they are. Order matters: a keypad dimmer is a keypad. */
+export const CATEGORIES: { id: string; title: string; test: RegExp }[] = [
+  { id: "controllers", title: "Controllers", test: /controller|director|\bea-?\d|core-?\d|\bca-?\d|io_extender/i },
+  { id: "keypads", title: "Keypads", test: /keypad/i },
+  { id: "remotes", title: "Remotes & Touch Screens", test: /uidevice|remote|touch_?screen|touchscreen|navigator|sr-?260|halo|neeo/i },
+  { id: "lighting", title: "Lighting", test: /light|dimmer|switch_gen|lutron/i },
+  { id: "video", title: "TVs & Projectors", test: /^tv$|\btv\b|television|display|projector|bravia|webos|tizen/i },
+  { id: "av", title: "Receivers & Amplifiers", test: /receiver|avswitch|amplifier|\bamp\b|_amp|matrix|audio_switch/i },
+  { id: "media", title: "Media Sources", test: /media|dvd|blu.?ray|satellite|cable|tuner|stream|apple_tv|roku|sonos|music/i },
+  { id: "comfort", title: "Comfort", test: /thermostat|hvac|pool|spa|\bfan\b|ecobee/i },
+  { id: "security", title: "Security & Access", test: /security|camera|intercom|door|lock|garage|contact|motion|sensor|relay/i },
+  { id: "shades", title: "Blinds & Shades", test: /blind|shade|motorization/i },
+  { id: "agents", title: "Agents", test: /agent/i },
+];
+export const OTHER = { id: "other", title: "Other" };
+
+/** Generic words some controllers put in `category`; they say nothing about the device. */
+const VAGUE = new Set(["", "device", "devices", "driver", "other", "unknown"]);
+
+/** The category a driver goes under: the controller's own when it is specific, else guessed
+ *  from its proxies, then its file and name. */
+export function categoryOf(r: DriverRow): { id: string; title: string } {
+  const own = r.category?.trim();
+  if (own && !VAGUE.has(own.toLowerCase())) {
+    const known = CATEGORIES.find((c) => c.id === own.toLowerCase() || c.title.toLowerCase() === own.toLowerCase());
+    return known ?? { id: `c:${own.toLowerCase()}`, title: own.replace(/(^|[\s_])\w/g, (m) => m.toUpperCase()).replace(/_/g, " ") };
+  }
+  for (const hay of [[r.primary_proxy, ...r.proxies].filter(Boolean).join(" "), `${r.filename} ${r.name}`]) {
+    if (!hay) continue;
+    const c = CATEGORIES.find((x) => x.test.test(hay));
+    if (c) return c;
+  }
+  return OTHER;
+}

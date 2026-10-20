@@ -50,7 +50,7 @@ function ProjectNetwork({ shell, onScan }: { shell: Shell; onScan: () => void })
               <td className="mono">{x.address}</td>
               <td className="mono dim">{x.uuid}</td>
               <td className="mono">{x.search_type || "—"}</td>
-              <td><span className="row"><span className={cx("dot", x.status === "online" && "on")} />{x.status || "—"}</span></td>
+              <td>{x.status ? <span className={cx("tag", x.status === "online" ? "on" : "warn")}>{x.status}</span> : "—"}</td>
             </tr>
           ))}
         </tbody>

@@ -5,7 +5,9 @@ import { api, errText, type AddDriverArgs, type AppStatus, type Approval, type D
 import { ApprovalsBell, ApprovalsDrawer } from "./components/ApprovalsDrawer";
 import { Dialogs } from "./components/Dialogs";
 import { ConnectScreen } from "./components/connect";
+import { McpAuthPrompt } from "./components/McpAuth";
 import { DirectorPicker, Failure, Loading, Logo, StatusBar } from "./components/shell";
+import { resetDriverIcons } from "./lib/driverIcons";
 import { INSPECTOR_TABS, type FocusItem, type InspectorTab, type Shell, type View } from "./lib/shell";
 import { useBackendEvent } from "./lib/ui";
 
@@ -73,6 +75,7 @@ export default function App() {
     if (config.active_director !== activeId) {
       setRev((r) => r + 1);
       setSelected(null);
+      resetDriverIcons();
     }
   });
   useBackendEvent("mcp", (mcp) => setStatus((s) => s && { ...s, mcp }));
@@ -207,7 +210,8 @@ export default function App() {
 
         <StatusBar status={shell.status} info={shell.info} />
         <ApprovalsDrawer approvals={approvals} open={drawer} onOpenChange={setDrawer} />
-        <Toaster theme="dark" richColors position="bottom-right" closeButton />
+        <McpAuthPrompt />
+        <Toaster theme="system" richColors position="bottom-right" closeButton />
       </div>
     </Dialogs>
   );

@@ -8,6 +8,17 @@ import { toast } from "sonner";
 import { api, errText, isMock, type AppStatus, type DirectorInfo } from "../api";
 import { cx } from "../lib/ui";
 import { Spinner } from "./controls";
+import { Tip } from "./Dialogs";
+
+/** The only mode indicator: a small lock on read-only Directors. Approve-each-write is the
+ *  normal case and needs no badge. */
+export function ReadOnlyLock({ name, size = 12 }: { name?: string; size?: number }) {
+  return (
+    <Tip text={`${name ?? "This Director"} is read-only: openComposer won't change its project or control its devices. Change it in Settings › Directors.`}>
+      <span className="ro-lock" aria-label="Read-only"><Lock size={size} strokeWidth={1.9} /></span>
+    </Tip>
+  );
+}
 
 export function Logo() {
   return (
@@ -44,11 +55,11 @@ export function DirectorPicker({ status, info, onManage, onSwitch }: {
   return (
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger asChild>
-        <button className="dpick" aria-label="Director">
-          <span className={cx("dot", active && isOn(active.id) && "on")} />
+        <button className={cx("dpick", active && !isOn(active.id) && "off")} aria-label="Director">
           <span className="dpick-name">{active?.name ?? "No Director"}</span>
           {active && info.get(active.id) && <span className="dim">{info.get(active.id)!.version}</span>}
-          {active && <span className={cx("tag", active.mode === "approve" ? "accent" : "")}>{active.mode === "approve" ? "approve" : "read only"}</span>}
+          {active && !isOn(active.id) && <span className="dim">· offline</span>}
+          {active?.mode === "read_only" && <ReadOnlyLock name={active.name} />}
           <ChevronDown size={13} strokeWidth={1.8} />
         </button>
       </Popover.Trigger>
@@ -60,12 +71,11 @@ export function DirectorPicker({ status, info, onManage, onSwitch }: {
             <div key={d.id} className={cx("dpick-row", d.id === active_director && "on")}>
               <button className="dpick-choose" onClick={() => run(d.id, () => api.setActiveDirector(d.id))}>
                 <span className="dpick-check">{d.id === active_director && <Check size={13} strokeWidth={1.8} />}</span>
-                <span className={cx("dot", isOn(d.id) && "on")} />
                 <span className="dpick-text">
                   <b>{d.name}</b>
-                  <span className="dim mono">{d.host}{info.get(d.id) ? ` · ${info.get(d.id)!.version}` : ""}</span>
+                  <span className="dim mono">{d.host}{info.get(d.id) ? ` · ${info.get(d.id)!.version}` : ""}{isOn(d.id) ? "" : " · not connected"}</span>
                 </span>
-                {d.mode === "read_only" && <Lock size={12} strokeWidth={1.8} className="dim" />}
+                {d.mode === "read_only" && <ReadOnlyLock name={d.name} />}
               </button>
               {busy === d.id ? <Spinner /> : isOn(d.id)
                 ? <button className="act small" onClick={() => run(d.id, () => api.disconnect(d.id))}><PlugZap size={13} strokeWidth={1.8} />Disconnect</button>
@@ -87,8 +97,9 @@ export function StatusBar({ status, info }: { status: AppStatus; info: DirectorI
     <footer className="status">
       {active && (
         <span className="status-item">
-          <span className={cx("dot", status.connected.includes(active.id) && "on")} />
           {active.name}{info && <span className="dim"> · OS {info.version}</span>}
+          {!status.connected.includes(active.id) && <span className="dim"> · not connected</span>}
+          {active.mode === "read_only" && <ReadOnlyLock name={active.name} size={11} />}
         </span>
       )}
       {isMock && <span className="status-item warn">Mock backend — fixture data, nothing leaves this browser</span>}
@@ -108,6 +119,7 @@ export function Failure({ error, retry }: { error: string; retry?: () => void })
   );
 }
 
+/** A wait, centred in whatever pane it fills. */
 export function Loading({ what = "Loading" }: { what?: string }) {
-  return <p className="loading"><Spinner />{what}…</p>;
+  return <div className="loading" role="status"><Spinner size="lg" /><span>{what}…</span></div>;
 }

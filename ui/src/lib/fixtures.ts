@@ -3,7 +3,7 @@
  *  the backend's own model so the mock can derive every view from it the same way. */
 
 import type {
-  Approval, BackupInfo, SavedDirector, CodeLineView, ConversationInfo, DriverDoc, ItemKind, ItemRef, KindLabel, LibraryDriver, NetworkBinding, Variable,
+  Approval, BackupInfo, SavedDirector, CodeLineView, CommandDef, ConversationInfo, DriverDoc, ItemKind, ItemRef, KindLabel, LibraryDriver, NetworkBinding, Variable,
 } from "../api/types";
 
 export interface MItem {
@@ -38,6 +38,9 @@ export interface MDevice {
   events: Record<number, string>;
   properties: MPropDef[];
   actions: [string, string][];
+  /** What the driver declares it can be sent; proxies without any fall back to Control4's
+   *  standard proxy commands in the control panel (as the TV proxies here do). */
+  commands?: CommandDef[];
 }
 
 export interface MBinding {
@@ -99,6 +102,25 @@ const ir = (id: number, name: string, consumer: boolean) => ({ id, name, consume
 
 const DEBUG: MPropDef = { name: "Debug Mode", prop_type: "LIST", default: "Off", items: ["Off", "Print", "Log", "Print and Log"] };
 
+const param = (name: string, prop_type: string, extra: Partial<CommandDef["params"][number]> = {}): CommandDef["params"][number] =>
+  ({ name, prop_type, default: null, readonly: false, items: [], minimum: null, maximum: null, ...extra });
+const cmd = (name: string, description: string, ...params: CommandDef["params"]): CommandDef => ({ name, description, params });
+const POWER = [cmd("ON", "Turn on NAME"), cmd("OFF", "Turn off NAME")];
+const level = (name: string) => param(name, "RANGED_INTEGER", { minimum: "0", maximum: "100" });
+
+const LIGHT: CommandDef[] = [
+  ...POWER, cmd("TOGGLE", "Toggle NAME"),
+  cmd("SET_LEVEL", "Set NAME level to LEVEL", level("LEVEL")),
+  cmd("RAMP_TO_LEVEL", "Ramp NAME to LEVEL over TIME ms", level("LEVEL"), param("TIME", "RANGED_INTEGER", { minimum: "0", maximum: "60000", default: "1000" })),
+];
+const RECEIVER = (inputs: string[]): CommandDef[] => [
+  ...POWER,
+  cmd("SET_VOLUME_LEVEL", "Set NAME volume to LEVEL", level("LEVEL")),
+  cmd("PULSE_VOL_UP", "Volume up on NAME"), cmd("PULSE_VOL_DOWN", "Volume down on NAME"),
+  cmd("MUTE_ON", "Mute NAME"), cmd("MUTE_OFF", "Unmute NAME"), cmd("MUTE_TOGGLE", "Toggle mute on NAME"),
+  cmd("SET_INPUT", "Select input INPUT on NAME", param("INPUT", "LIST", { items: inputs })),
+];
+
 const CATALOG: [number, MDevice][] = [
   [20, {
     manufacturer: "Sony", model: "BRAVIA XR A95L", driver_name: "Sony BRAVIA IP", version: "2024.11.02",
@@ -116,10 +138,15 @@ const CATALOG: [number, MDevice][] = [
       DEBUG,
     ],
     actions: [["Discover", "DISCOVER"], ["Reboot TV", "REBOOT"]],
+    commands: [
+      cmd("SET_PICTURE_MODE", "Set NAME picture mode to MODE", param("MODE", "LIST", { items: ["Standard", "Vivid", "Cinema", "Custom"] })),
+      cmd("SEND_IRCC", "Send IRCC code CODE to NAME", param("CODE", "STRING")),
+    ],
   }],
   [21, { manufacturer: "Control4", model: "TV", driver_name: "TV", version: "1", control_method: "", search_type: "", proxies: [],
     connections: [{ id: 7000, name: "Video End-Point", consumer: false, classes: ["VIDEO_SELECTION"] }],
-    events: {}, properties: [], actions: [] }],
+    events: {}, properties: [], actions: [],
+    commands: [...POWER, cmd("SET_INPUT", "Select input INPUT on NAME", param("INPUT", "LIST", { items: ["HDMI 1", "HDMI 2", "HDMI 3"] }))] }],
   [22, {
     manufacturer: "Denon", model: "AVR-X3800H", driver_name: "Denon AVR-X3800H", version: "112",
     control_method: "IP", search_type: "c4:av_gen:denon:avr-x3800h", proxies: ["receiver", "receiver"],
@@ -134,16 +161,24 @@ const CATALOG: [number, MDevice][] = [
       DEBUG,
     ],
     actions: [["Sync Zones", "SYNC_ZONES"]],
+    commands: [
+      cmd("SET_ECO_MODE", "Set NAME eco mode to MODE", param("MODE", "LIST", { items: ["On", "Auto", "Off"] })),
+      cmd("SET_DIALOG_LEVEL", "Set NAME dialog level to DB dB", param("DB", "RANGED_FLOAT", { minimum: "-12", maximum: "12", default: "0" })),
+    ],
   }],
   [23, { manufacturer: "Control4", model: "Receiver", driver_name: "Receiver", version: "1", control_method: "", search_type: "", proxies: [],
     connections: [{ id: 7001, name: "Audio End-Point", consumer: false, classes: ["AUDIO_SELECTION"] }],
-    events: {}, properties: [], actions: [] }],
+    events: {}, properties: [], actions: [], commands: RECEIVER(["HDMI IN 1", "HDMI IN 2", "HDMI IN 3"]) }],
   [24, {
     manufacturer: "Apple", model: "Apple TV 4K", driver_name: "Apple TV (IP)", version: "31",
     control_method: "IP", search_type: "apple-tv", proxies: ["media_player"],
     connections: [hdmiOut(2000, "HDMI OUT"), ir(1, "IR Input", true)],
     events: { 1: "Playing", 2: "Paused" }, properties: [DEBUG], actions: [["Pair", "PAIR"]],
   }],
+  [25, { manufacturer: "Control4", model: "Media Player", driver_name: "Media Player", version: "1", control_method: "", search_type: "", proxies: [],
+    connections: [], events: {}, properties: [], actions: [],
+    commands: [...POWER, cmd("PLAY", "Play on NAME"), cmd("PAUSE", "Pause NAME"), cmd("STOP", "Stop NAME"),
+      cmd("SKIP_FWD", "Skip forward on NAME"), cmd("SKIP_REV", "Skip back on NAME")] }],
   [30, {
     manufacturer: "Control4", model: "C4-DIM-Gen3", driver_name: "Dimmer (Gen 3)", version: "1046",
     control_method: "ZigBee", search_type: "", proxies: ["light_v2"], connections: [],
@@ -151,7 +186,10 @@ const CATALOG: [number, MDevice][] = [
     properties: [{ name: "Ramp Rate (ms)", prop_type: "RANGED_INTEGER", minimum: "0", maximum: "10000", default: "500" },
       { name: "Max On Level", prop_type: "RANGED_INTEGER", minimum: "1", maximum: "100", default: "100" }],
     actions: [],
+    commands: [cmd("SET_LED_COLOR", "Set NAME LED to COLOR", param("COLOR", "LIST", { items: ["Blue", "White", "Off"] }))],
   }],
+  [31, { manufacturer: "Control4", model: "Light", driver_name: "Light V2", version: "1", control_method: "", search_type: "", proxies: [],
+    connections: [], events: {}, properties: [], actions: [], commands: LIGHT }],
   [32, {
     manufacturer: "Control4", model: "C4-KD120", driver_name: "Keypad Dimmer", version: "1031",
     control_method: "ZigBee", search_type: "", proxies: ["keypad_proxy"], connections: [],
@@ -172,6 +210,8 @@ const CATALOG: [number, MDevice][] = [
     connections: [hdmiIn(3000, "HDMI IN 1"), hdmiIn(3001, "HDMI IN 2"), hdmiOut(2000, "HDMI OUT 1")],
     events: {}, properties: [DEBUG], actions: [],
   }],
+  [43, { manufacturer: "Control4", model: "Receiver", driver_name: "Receiver", version: "1", control_method: "", search_type: "", proxies: [],
+    connections: [], events: {}, properties: [], actions: [], commands: RECEIVER(["HDMI IN 1", "HDMI IN 2"]) }],
   [44, {
     manufacturer: "Control4", model: "EA-5", driver_name: "EA-5 Controller", version: "3.4.3",
     control_method: "", search_type: "", proxies: [],
@@ -187,6 +227,13 @@ const CATALOG: [number, MDevice][] = [
       { name: "Polling Interval (s)", prop_type: "RANGED_INTEGER", minimum: "15", maximum: "600", default: "60" }],
     actions: [["Refresh Token", "REFRESH"]],
   }],
+  [51, { manufacturer: "Control4", model: "Thermostat", driver_name: "Thermostat V2", version: "1", control_method: "", search_type: "", proxies: [],
+    connections: [], events: {}, properties: [], actions: [],
+    commands: [
+      cmd("SET_SETPOINT_HEAT", "Set NAME heat setpoint to SETPOINT", param("SETPOINT", "RANGED_INTEGER", { minimum: "45", maximum: "90" })),
+      cmd("SET_SETPOINT_COOL", "Set NAME cool setpoint to SETPOINT", param("SETPOINT", "RANGED_INTEGER", { minimum: "55", maximum: "95" })),
+      cmd("SET_MODE_HVAC", "Set NAME HVAC mode to MODE", param("MODE", "LIST", { items: ["Off", "Heat", "Cool", "Auto"] })),
+    ] }],
   [52, {
     manufacturer: "LG", model: "OLED65C3", driver_name: "LG webOS TV", version: "19",
     control_method: "IP", search_type: "c4:television:lg", proxies: ["tv"],
@@ -221,6 +268,9 @@ const v = (device: number, id: number, name: string, value: string): Variable =>
 
 const VARIABLES: Variable[] = [
   v(20, 1000, "POWER_STATE", "On"), v(20, 1001, "CURRENT_INPUT", "HDMI 1"),
+  v(22, 1000, "POWER_STATE", "On"), v(22, 1001, "VOLUME_LEVEL", "35"), v(22, 1002, "MUTE_STATE", "0"), v(22, 1003, "CURRENT_INPUT", "HDMI IN 1"),
+  v(24, 1000, "POWER_STATE", "On"), v(24, 1001, "PLAY_STATE", "Paused"),
+  v(40, 1000, "POWER_STATE", "Off"), v(42, 1000, "POWER_STATE", "Off"), v(42, 1001, "VOLUME_LEVEL", "40"), v(42, 1002, "MUTE_STATE", "0"),
   v(30, 1000, "LIGHT_LEVEL", "65"), v(30, 1001, "LIGHT_STATE", "1"),
   v(50, 1000, "TEMPERATURE_F", "71"), v(50, 1001, "HEAT_SETPOINT_F", "68"), v(50, 1002, "COOL_SETPOINT_F", "75"),
   v(50, 1003, "HVAC_MODE", "Auto"), v(52, 1000, "POWER_STATE", "On"),
@@ -500,6 +550,7 @@ export function seedConversations(): ConversationInfo[] {
   return [
     {
       id: "c-ir", provider: "claude", title: "Move the bedroom TV to IR 2", created: ago(4), busy: true, cost_usd: 0.0412,
+      model: "sonnet", effort: "high", tools: 17,
       entries: [
         { role: "status", text: "Connected to Claude (17 openComposer tools)." },
         { role: "user", text: "The bedroom TV is on IR 3 but that emitter is dead. Move it to IR 2.", at: ago(3) },
@@ -516,6 +567,7 @@ export function seedConversations(): ConversationInfo[] {
     },
     {
       id: "c-theater", provider: "claude", title: "What's in the theater?", created: ago(95), busy: false, cost_usd: 0.0187,
+      model: "opus", effort: null, tools: 17,
       entries: [
         { role: "status", text: "Connected to Claude (17 openComposer tools)." },
         { role: "user", text: "What's in the theater and how is it wired?", at: ago(94) },
@@ -533,6 +585,17 @@ export function seedConversations(): ConversationInfo[] {
           "",
           "Nothing feeds the receiver's **HDMI IN 1** yet — want me to connect a source?",
         ].join("\n") },
+      ],
+    },
+    {
+      // A chat whose CLI couldn't reach the MCP server: what the backend says, and what the UI
+      // must make obvious (start a new chat).
+      id: "c-notools", provider: "claude", title: "Which lights are on?", created: ago(200), busy: false, cost_usd: 0.0021,
+      model: null, effort: null, tools: 0,
+      entries: [
+        { role: "error", text: "openComposer's tools didn't load, so this chat can't see the project (port 7710 is in use; external MCP clients can't connect until it's free). Check Settings → MCP, then start a new chat." },
+        { role: "user", text: "Which lights are on?", at: ago(199) },
+        { role: "assistant", streaming: false, text: "I don't have any tools to look at your project from here, so I can't tell which lights are on." },
       ],
     },
   ];

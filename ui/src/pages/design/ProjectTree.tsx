@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronRight, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { TreeNode } from "../../api";
-import { KindIcon } from "../../components/icons";
+import { DriverIcon, KindIcon } from "../../components/icons";
 import { chain, filterTree, indexTree } from "../../lib/project";
 import { cx, toggleIn } from "../../lib/ui";
 
@@ -12,11 +12,13 @@ type Row = { node: TreeNode; depth: number; open: boolean; hasKids: boolean };
 const openByDefault = (n: TreeNode) => n.kind !== "device" && n.kind !== "proxy";
 
 /** Composer's system tree: site → building → floor → room → device → proxy, then agents. */
-export function ProjectTree({ root, sel, onSelect, onMenu }: {
+export function ProjectTree({ root, sel, onSelect, onMenu, onControl }: {
   root: TreeNode;
   sel: number | null;
   onSelect: (id: number) => void;
   onMenu: (e: React.MouseEvent, n: TreeNode) => void;
+  /** Double-click (or Enter) on a device or proxy: its control panel. */
+  onControl: (id: number) => void;
 }) {
   const [filter, setFilter] = useState("");
   // Rows whose open state differs from the default; a set of exceptions survives a refetch.
@@ -77,6 +79,9 @@ export function ProjectTree({ root, sel, onSelect, onMenu }: {
       e.preventDefault();
       const next = rows[Math.max(0, Math.min(rows.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)))];
       if (next) onSelect(next.node.id);
+    } else if (r && e.key === "Enter" && (r.node.kind === "device" || r.node.kind === "proxy")) {
+      e.preventDefault();
+      onControl(r.node.id);
     } else if (r && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
       e.preventDefault();
       if (r.hasKids && r.open !== (e.key === "ArrowRight")) setFlipped(toggleIn(flipped, r.node.id));
@@ -98,12 +103,19 @@ export function ProjectTree({ root, sel, onSelect, onMenu }: {
                  style={{ paddingLeft: 6 + r.depth * 14 }} role="treeitem" aria-selected={sel === r.node.id}
                  aria-expanded={r.hasKids ? r.open : undefined}
                  onClick={() => onSelect(r.node.id)} onContextMenu={(e) => { onSelect(r.node.id); onMenu(e, r.node); }}
-                 onDoubleClick={() => r.hasKids && setFlipped(toggleIn(flipped, r.node.id))}>
+                 onDoubleClick={() => {
+                   if (r.node.kind === "device" || r.node.kind === "proxy") onControl(r.node.id);
+                   else if (r.hasKids) setFlipped(toggleIn(flipped, r.node.id));
+                 }}>
               <span className={cx("tw-tw", r.hasKids && "hit")}
                     onClick={(e) => { e.stopPropagation(); if (r.hasKids) setFlipped(toggleIn(flipped, r.node.id)); }}>
                 {r.hasKids && (r.open ? <ChevronDown size={12} strokeWidth={1.8} /> : <ChevronRight size={12} strokeWidth={1.8} />)}
               </span>
-              <span className="tw-ic"><KindIcon kind={r.node.kind} driver={r.node.driver} /></span>
+              <span className="tw-ic">
+                {r.node.kind === "device" || r.node.kind === "agent"
+                  ? <DriverIcon driver={r.node.driver} kind={r.node.kind} size={15} />
+                  : <KindIcon kind={r.node.kind} driver={r.node.driver} proxy={r.node.kind === "proxy" ? r.node.driver?.replace(/\.c4[iz]$/i, "") : null} />}
+              </span>
               <span className="tw-label">{r.node.name}</span>
               {r.node.kind === "room" && <span className="tw-meta">{r.node.children.filter((c) => c.kind === "device").length || ""}</span>}
             </div>

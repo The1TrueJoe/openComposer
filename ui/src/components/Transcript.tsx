@@ -1,7 +1,8 @@
 import { AlertTriangle, Check, ChevronDown, ChevronRight, Eye, Info, Wrench, X } from "lucide-react";
 import { memo, useState } from "react";
 import type { Approval, Entry } from "../api";
-import { approvalFor, inputSummary, proposes, splitContext } from "../lib/agent";
+import { approvalFor, inputSummary, proposes, splitAttachments, splitContext } from "../lib/agent";
+import { AttachmentChips } from "./AgentControls";
 import { cx, time } from "../lib/ui";
 import { ApprovalCard } from "./ApprovalCard";
 import { JsonTree } from "./JsonTree";
@@ -18,11 +19,14 @@ export function Transcript({ entries, busy, approvals }: { entries: Entry[]; bus
       {entries.map((e, i) => {
         switch (e.role) {
           case "user": {
-            const { context, text } = splitContext(e.text);
+            const { context, text: rest } = splitContext(e.text);
+            const { text, files } = splitAttachments(rest);
             return (
               <div key={i} className="msg user">
                 {context && <span className="msg-context" title="What the window showed when this was asked"><Eye size={11} strokeWidth={1.8} />{context}</span>}
-                <div className="bubble">{text}</div><span className="msg-time">{time(e.at)}</span>
+                <div className="bubble">{text}</div>
+                <AttachmentChips files={files} />
+                <span className="msg-time">{time(e.at)}</span>
               </div>
             );
           }

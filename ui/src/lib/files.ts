@@ -13,9 +13,11 @@ export interface PickOpts {
 /** Paths the user picked, or an empty list if they cancelled. Without Tauri (the browser
  *  mock) there is no native dialog, so a plausible path stands in. */
 export async function pickFiles(o: PickOpts): Promise<string[]> {
-  if (isMock) return [`/Users/you/Downloads/${o.expect ?? `composer.${o.extensions[0]}`}`];
+  if (isMock) return [`/Users/you/Downloads/${o.expect ?? (o.extensions.length ? `composer.${o.extensions[0]}` : "Living Room rack.pdf")}`];
   const { open } = await import("@tauri-apps/plugin-dialog");
-  const r = await open({ title: o.title, multiple: !!o.multiple, directory: false, filters: [{ name: o.extensions.join(", "), extensions: o.extensions }] });
+  // No extensions: any file (attachments).
+  const filters = o.extensions.length ? [{ name: o.extensions.join(", "), extensions: o.extensions }] : undefined;
+  const r = await open({ title: o.title, multiple: !!o.multiple, directory: false, filters });
   if (r == null) return [];
   return Array.isArray(r) ? r : [r];
 }

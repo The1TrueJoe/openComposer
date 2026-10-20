@@ -1,4 +1,4 @@
-import { Eye, EyeOff, Fingerprint, Plug, PlugZap, RefreshCw, Star, Trash2 } from "lucide-react";
+import { CircleCheck, CircleX, Eye, EyeOff, Fingerprint, KeyRound, Plug, PlugZap, RefreshCw, Star, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api, errText, type AccessMode, type Provider, type SavedDirector } from "../../api";
@@ -6,7 +6,7 @@ import { Tip, useDialog } from "../../components/Dialogs";
 import { CopyButton, Select, Snippet, Spinner, Switch } from "../../components/controls";
 import { AddDirectorForm, CertificateForm, MODES } from "../../components/setup";
 import type { Shell } from "../../lib/shell";
-import { cx, useLoad } from "../../lib/ui";
+import { ago, cx, dateTime, useLoad } from "../../lib/ui";
 
 export function SettingsPage({ shell }: { shell: Shell }) {
   return (
@@ -64,7 +64,9 @@ function DirectorRow({ d, active, connected }: { d: SavedDirector; active: boole
   return (
     <div className={cx("dir", active && "active")}>
       <div className="dir-top">
-        <span className={cx("dot", connected && "on")} title={connected ? "Connected" : "Not connected"} />
+        <Tip text={connected ? "Connected" : "Not connected"}>
+          <span className={cx("conn-state", connected && "on")}>{connected ? <Plug size={14} strokeWidth={1.8} /> : <PlugZap size={14} strokeWidth={1.8} />}</span>
+        </Tip>
         <input className="dir-name" value={name} aria-label="Name" onChange={(e) => setName(e.target.value)}
                onBlur={() => name.trim() && name !== d.name && save({ name: name.trim() })} onKeyDown={(e) => e.key === "Enter" && e.currentTarget.blur()} />
         <input className="dir-host mono" value={host} aria-label="Host" onChange={(e) => setHost(e.target.value)}
@@ -146,7 +148,10 @@ function Mcp({ shell }: { shell: Shell }) {
   const token = config.mcp.token;
   const hidden = "•".repeat(12);
   const t = (s: string) => s.replaceAll(token, hidden);
-  const claude = `claude mcp add --transport http openComposer ${mcp.url} --header "Authorization: Bearer ${token}"`;
+  // Claude Code signs in through the browser on first use (approved in this window); the
+  // fixed-token header is for clients that can't.
+  const claude = `claude mcp add --transport http openComposer ${mcp.url}`;
+  const claudeToken = `claude mcp add --transport http openComposer ${mcp.url} --header "Authorization: Bearer ${token}"`;
   const codex = `[mcp_servers.openComposer]\ncommand = ${JSON.stringify(stdio_command)}\nargs = ["--mcp-stdio"]`;
   const generic = JSON.stringify({ mcpServers: { openComposer: { type: "http", url: mcp.url, headers: { Authorization: `Bearer ${token}` } } } }, null, 2);
   const portValid = /^\d+$/.test(port) && Number(port) >= 1024 && Number(port) <= 65535;
@@ -158,10 +163,11 @@ function Mcp({ shell }: { shell: Shell }) {
       <div className="kv">
         <span className="k">Status</span>
         <span className="row">
-          <span className={cx("dot", mcp.listening && "on")} />
-          {mcp.listening ? <><span className="mono">{mcp.url}</span><CopyButton text={mcp.url} label="Copy URL" /></> : <span className="err">{mcp.error ?? "Not listening"}</span>}
+          {mcp.listening ? <><CircleCheck size={14} strokeWidth={1.8} className="ok" /><span className="mono">{mcp.url}</span><CopyButton text={mcp.url} label="Copy URL" /></>
+            : <><CircleX size={14} strokeWidth={1.8} className="err" /><span className="err">{mcp.error ?? "Not listening"}</span></>}
           {busy && <Spinner />}
         </span>
+        {mcp.listening && mcp.error && <><span className="k" /><span className="warn small">{mcp.error}{mcp.port && mcp.port !== config.mcp.port ? ` — the in-app agent uses port ${mcp.port} meanwhile.` : ""}</span></>}
         <span className="k">Network</span>
         <label className="inline-switch">
           <Switch checked={config.mcp.lan} onCheckedChange={(lan) => update({ lan })} label="Listen on the local network" />
@@ -186,11 +192,46 @@ function Mcp({ shell }: { shell: Shell }) {
           }}><RefreshCw size={13} strokeWidth={1.8} />Regenerate</button>
         </span>
       </div>
+      <Grants rev={config} />
       <div className="section flush">Connect a client</div>
-      <Snippet title="Claude Code — run in a terminal" text={claude} shown={reveal ? claude : t(claude)} />
+      <Snippet title="Claude Code — run in a terminal; the first use opens the browser to sign in, and you allow it here" text={claude} />
       <Snippet title="Codex — ~/.codex/config.toml (stdio bridge; this app must be running)" text={codex} />
-      <Snippet title="Other clients — JSON" text={generic} shown={reveal ? generic : t(generic)} />
+      <details className="advanced">
+        <summary>Advanced: connect with the fixed token instead of signing in</summary>
+        <Snippet title="Claude Code with the token header" text={claudeToken} shown={reveal ? claudeToken : t(claudeToken)} />
+        <Snippet title="Other clients — JSON" text={generic} shown={reveal ? generic : t(generic)} />
+      </details>
     </section>
+  );
+}
+
+/** MCP clients signed in through the browser, each revocable. */
+function Grants({ rev }: { rev: unknown }) {
+  const grants = useLoad(() => api.mcpGrants(), [rev]);
+  const { confirm } = useDialog();
+  return (
+    <>
+      <div className="section flush">Signed-in clients</div>
+      {grants.error && <p className="err small">{grants.error}</p>}
+      {grants.data && !grants.data.length && <p className="hint flush">None yet. A client that signs in through the browser shows up here once you allow it.</p>}
+      {!!grants.data?.length && (
+        <div className="grants">
+          {grants.data.map((g) => (
+            <div key={g.id} className="grant">
+              <KeyRound size={14} strokeWidth={1.8} className="dim" />
+              <b>{g.client_name}</b>
+              <span className="dim small" title={dateTime(g.created)}>signed in {ago(g.created)}</span>
+              <span className="dim small">{g.last_used ? <span title={dateTime(g.last_used)}>last used {ago(g.last_used)}</span> : "not used yet"}</span>
+              <button className="act small danger spread" onClick={async () => {
+                if (await confirm({ title: `Revoke ${g.client_name}?`, description: "It is signed out at once; it has to sign in (and be allowed) again to use openComposer.", confirmLabel: "Revoke", danger: true })) {
+                  try { await api.mcpRevoke(g.id); grants.reload(); } catch (e) { toast.error(errText(e)); }
+                }
+              }}>Revoke</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
   );
 }
 
@@ -226,7 +267,7 @@ function Agent({ shell }: { shell: Shell }) {
           {providers.loading && !providers.data && <Spinner />}
           {providers.data?.map((p) => (
             <span key={p.provider} className="row">
-              <span className={cx("dot", p.installed && "on")} />
+              {p.installed ? <CircleCheck size={14} strokeWidth={1.8} className="ok" /> : <CircleX size={14} strokeWidth={1.8} className="dim" />}
               <b>{p.provider === "claude" ? "Claude Code" : "Codex"}</b>
               {p.installed ? <><span className="dim">{p.version}</span><span className="mono dim small">{p.path}</span></> : <span className="dim">not found</span>}
             </span>

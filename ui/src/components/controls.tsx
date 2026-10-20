@@ -22,7 +22,8 @@ export function Select<T extends string>({ value, onValueChange, options, disabl
   placeholder?: string;
 }) {
   return (
-    <SelectPrimitive.Root value={wrap(value)} disabled={disabled} onValueChange={(v) => onValueChange(unwrap(v) as T)}>
+    // "" with no "" option means nothing chosen yet: Radix shows the placeholder for "".
+    <SelectPrimitive.Root value={value === "" && !options.some((o) => o.value === "") ? "" : wrap(value)} disabled={disabled} onValueChange={(v) => onValueChange(unwrap(v) as T)}>
       <SelectPrimitive.Trigger className="act select-trigger" aria-label={label}>
         <SelectPrimitive.Value placeholder={placeholder} />
         <SelectPrimitive.Icon className="select-icon"><ChevronDown size={13} /></SelectPrimitive.Icon>
@@ -104,6 +105,6 @@ export function Snippet({ title, text, shown }: { title: string; text: string; s
   );
 }
 
-export function Spinner() {
-  return <i className="spin" aria-hidden />;
+export function Spinner({ size }: { size?: "lg" } = {}) {
+  return <i className={size === "lg" ? "spin lg" : "spin"} aria-hidden />;
 }

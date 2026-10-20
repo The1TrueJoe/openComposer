@@ -14,3 +14,34 @@
 .grid-table tr.sub > td { background: var(--bar); padding: 8px 14px 10px 28px; }
 .page-body .grid-table th:first-child, .page-body .grid-table td:first-child { padding-left: 10px; }
 .activity td { padding-top: 4px; padding-bottom: 4px; }
+
+/* DataTable (components/DataTable.tsx): Composer's grid density, finished like the rest. Fixed
+   layout so long names ellipsize instead of pushing columns; the head sticks while it scrolls. */
+.dt { position: relative; min-height: 0; outline: none; font-size: 12.5px; }
+.dt:focus-visible { outline: none; }
+.dt-scroll { flex: 1; overflow: auto; }
+.dt-grow { overflow: visible; }
+.dt table { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; }
+.dt th { position: sticky; top: 0; z-index: 2; background: var(--bar); text-align: left; font-weight: 600; font-size: 11px; color: var(--dim);
+  height: 26px; padding: 0 8px; border-bottom: 1px solid var(--line); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.dt td { height: 27px; padding: 0 8px; border-bottom: 1px solid var(--divider-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  vertical-align: middle; }
+.dt th:first-child, .dt td:first-child { padding-left: 12px; }
+.dt th:last-child, .dt td:last-child { padding-right: 10px; }
+.dt .right { text-align: right; text-overflow: clip; }
+.dt .center { text-align: center; }
+.dt td .row, .dt td .chips { flex-wrap: nowrap; gap: 6px; min-width: 0; }
+.dt td > .row, .dt td > .conn-name { display: flex; max-width: 100%; }
+.dt-sort { all: unset; display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
+.dt-sort:hover, .dt-sort.on { color: var(--text); }
+.dt tbody tr:hover { background: var(--hover-soft); }
+.dt tr.sel, .dt tr.sel:hover { background: var(--sel); color: var(--sel-fg); }
+.dt:focus-visible tr.sel td:first-child { box-shadow: inset 2px 0 0 var(--accent); }
+.dt tr.sel .dim, .dt tr.sel .ok { color: var(--sel-dim); }
+.dt tr.dimmed td { opacity: .55; }
+.dt tr.linked td:first-child { box-shadow: inset 2px 0 0 var(--on); }
+.dt tr.dt-pad td { padding: 0; border: 0; height: auto; }
+.dt tr.dt-pad:hover { background: none; }
+.dt-empty { padding: 18px 14px; color: var(--dim); text-align: center; font-size: 12.5px; }
+.dt-empty .empty { margin: 0; }
+.dt .tag { line-height: 16px; }

@@ -1,15 +1,14 @@
-import { ArrowDownToLine, ArrowUpFromLine, FolderInput, Link2, Lock, Pencil, Plus, Trash2, Unlink, Wifi } from "lucide-react";
-import { useState } from "react";
-import { toast } from "sonner";
-import { api, errText, type ConnectionDef, type ConnectionRow, type ItemDetail, type KindLabel, type PropertyView } from "../../api";
+import { AppWindow, FolderInput, Gamepad2, Lock, Pencil, Plus, RefreshCw, Trash2, Wifi } from "lucide-react";
+import { useEffect, useState } from "react";
+import { api, type ItemDetail, type KindLabel, type PropertyView } from "../../api";
 import { CodeRow } from "../../components/DiffView";
 import { Tip, useDialog } from "../../components/Dialogs";
-import { Select, Tabs } from "../../components/controls";
-import { KindIcon } from "../../components/icons";
+import { Select, Spinner, Tabs } from "../../components/controls";
+import { DriverIcon } from "../../components/icons";
 import { Failure, Loading } from "../../components/shell";
-import { candidates, connectOp, disconnectOp } from "../../lib/connections";
 import type { InspectorTab, Shell } from "../../lib/shell";
 import { cx, useLoad } from "../../lib/ui";
+import { Connections } from "./Connections";
 
 export interface ItemActions {
   rename: (id: number, name: string) => void;
@@ -17,39 +16,46 @@ export interface ItemActions {
   move: (id: number, name: string, kind: KindLabel) => void;
   addRoom: (floor: number) => void;
   addDevice: (room: number) => void;
+  /** Open the device control panel. */
+  control: (id: number) => void;
 }
+
+const TABS: { id: InspectorTab; label: string }[] = [
+  { id: "properties", label: "Properties" },
+  { id: "connections", label: "Connections" },
+  { id: "network", label: "Network" },
+  { id: "variables", label: "Variables" },
+  { id: "events", label: "Events" },
+];
 
 /** Everything about one item, the way Composer's properties pane shows it. */
 export function Inspector({ id, shell, onSelect, actions }: {
   id: number; shell: Shell; onSelect: (id: number) => void; actions: ItemActions;
 }) {
   const item = useLoad(() => api.item(id), [id, shell.rev]);
-  // The app holds the tab: an assistant can switch it, and it says which one you're looking at.
+  // The driver's own web pages (driver.xml <tabs>). Most drivers have none; one that can't be
+  // asked (no web API) just shows none rather than an error on every selection.
+  const web = useLoad(() => api.driverTabs(id).catch(() => ({ tabs: [] })), [id]);
+  // The app holds the built-in tab: an assistant can switch it, and it says which one you're
+  // looking at. A web tab is local: it means nothing to anyone else.
   const { inspectorTab: tab, setInspectorTab: setTab } = shell;
+  const [webTab, setWebTab] = useState<string | null>(null);
+  // Web tabs once opened stay loaded (hidden) so switching back doesn't reload the page.
+  const [visited, setVisited] = useState<string[]>([]);
+  useEffect(() => { setWebTab(null); setVisited([]); }, [id]);
   const d = item.data?.id === id ? item.data : undefined;
+  const webTabs = web.data?.tabs ?? [];
 
   if (!d) return item.error ? <Failure error={item.error} retry={item.reload} /> : <Loading what="Reading the item" />;
 
-  const conns = d.connections.length + d.children.reduce((n, c) => n + c.connections.length, 0);
-  const tabs: { id: InspectorTab; label: React.ReactNode }[] = [
-    { id: "properties", label: <>Properties <span className="n">{d.properties.length}</span></> },
-    { id: "connections", label: <>Connections <span className="n">{conns}</span></> },
-    { id: "network", label: <>Network <span className="n">{d.network.length}</span></> },
-    { id: "variables", label: <>Variables <span className="n">{d.variables.length}</span></> },
-    { id: "events", label: <>Events <span className="n">{d.events.length}</span></> },
-  ];
-  const parts = d.path.split(" › ");
   const w = shell.writable;
   const why = w ? undefined : `${shell.director?.name ?? "This Director"} is read-only`;
+  const controllable = d.kind === "device" || d.kind === "proxy";
 
   return (
     <div className="panel insp">
-      <div className="crumbs">
-        {parts.slice(0, -1).map((p, i) => <span key={i}>{p}<span className="sep">›</span></span>)}
-        <b>{parts[parts.length - 1]}</b>
-      </div>
       <div className="insp-head">
-        <span className="insp-ic"><KindIcon kind={d.kind} driver={d.driver} size={20} /></span>
+        <span className="insp-ic"><DriverIcon driver={d.driver} kind={d.kind} proxy={d.device?.proxies[0] ?? (d.kind === "proxy" ? d.driver?.replace(/\.c4[iz]$/i, "") : null)} size={22} /></span>
         <div className="insp-title">
           <h2>{d.name} <span className="tag">{d.kind}</span> <span className="dim mono small">#{d.id}</span></h2>
           {d.device ? (
@@ -63,6 +69,11 @@ export function Inspector({ id, shell, onSelect, actions }: {
           ) : d.driver && <div className="insp-facts"><code>{d.driver}</code></div>}
         </div>
         <div className="insp-acts">
+          {controllable && (
+            <Tip text={w ? "Live state and commands (or double-click it in the tree)" : `${why}: you can watch its state, not send commands`}>
+              <span><button className="act small" onClick={() => actions.control(d.id)}><Gamepad2 size={14} strokeWidth={1.8} />Control</button></span>
+            </Tip>
+          )}
           {d.kind === "floor" && <Act icon={<Plus size={14} strokeWidth={1.8} />} label="Add room" why={why} onClick={() => actions.addRoom(d.id)} />}
           {d.kind === "room" && <Act icon={<Plus size={14} strokeWidth={1.8} />} label="Add device" why={why} onClick={() => actions.addDevice(d.id)} />}
           {d.kind !== "project" && <>
@@ -73,14 +84,76 @@ export function Inspector({ id, shell, onSelect, actions }: {
           </>}
         </div>
       </div>
-      <Tabs tabs={tabs} value={tab} onChange={setTab} />
-      <div className="panel-body">
-        {tab === "properties" && <Properties d={d} shell={shell} />}
-        {tab === "connections" && <Connections d={d} shell={shell} onSelect={onSelect} />}
-        {tab === "network" && <Network d={d} shell={shell} />}
-        {tab === "variables" && <Variables d={d} />}
-        {tab === "events" && <Events d={d} />}
+      <Tabs<string> tabs={[...TABS, ...webTabs.map((t) => ({ id: `web:${t.name}`, label: <><AppWindow size={12} strokeWidth={1.8} />{t.name}</> }))]}
+            value={webTab ? `web:${webTab}` : tab}
+            onChange={(t) => {
+              if (t.startsWith("web:")) {
+                const name = t.slice(4);
+                setWebTab(name);
+                setVisited((v) => (v.includes(name) ? v : [...v, name]));
+              } else {
+                setWebTab(null);
+                setTab(t as InspectorTab);
+              }
+            }} />
+      <div className={cx("panel-body", (webTab || tab === "connections") && "fill")}>
+        {!webTab && tab === "properties" && <Properties d={d} shell={shell} />}
+        {!webTab && tab === "connections" && <Connections d={d} shell={shell} onSelect={onSelect} />}
+        {!webTab && tab === "network" && <Network d={d} shell={shell} />}
+        {!webTab && tab === "variables" && <Variables d={d} />}
+        {!webTab && tab === "events" && <Events d={d} />}
+        {webTabs.filter((t) => visited.includes(t.name)).map((t) => (
+          <WebTab key={`${d.id}:${t.name}`} name={t.name} url={t.url} shown={webTab === t.name} />
+        ))}
       </div>
+    </div>
+  );
+}
+
+/** A driver's own page, the way Composer hosts it: full size, its scripts and websockets
+ *  allowed (openComposer serves it on 127.0.0.1 and proxies its calls to the controller). */
+function WebTab({ name, url, shown }: { name: string; url: string; shown: boolean }) {
+  const [state, setState] = useState<"checking" | "loading" | "ready" | "error">("checking");
+  const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    let gone = false;
+    setState("checking");
+    // A frame can't say it failed; ask first whether anything answers at that address.
+    const probe = /^https?:/i.test(url) ? fetch(url, { mode: "no-cors", cache: "no-store" }) : Promise.resolve();
+    probe.then(() => { if (!gone) setState("loading"); }, (e) => {
+      if (gone) return;
+      setError(`Nothing answered at the page's address (${e instanceof Error ? e.message : String(e)}).`);
+      setState("error");
+    });
+    return () => { gone = true; };
+  }, [url, attempt]);
+  useEffect(() => {
+    if (state !== "loading") return;
+    const t = setTimeout(() => { setError("The page didn't finish loading within 20 seconds."); setState("error"); }, 20_000);
+    return () => clearTimeout(t);
+  }, [state]);
+  return (
+    <div className="webtab" hidden={!shown}>
+      {state === "error" ? (
+        <div className="placeholder">
+          <AppWindow size={22} strokeWidth={1.5} />
+          <p><b>“{name}” couldn't be shown.</b> {error} The driver's page is served by openComposer from the driver package, through the controller's web API — check that the web API is on for this Director.</p>
+          <div className="row">
+            <button className="act" onClick={() => setAttempt((n) => n + 1)}><RefreshCw size={14} strokeWidth={1.8} />Try again</button>
+            {/* The check can be wrong (a webview that refuses the probe but not the frame). */}
+            <button className="act quiet" onClick={() => setState("loading")}>Show it anyway</button>
+          </div>
+        </div>
+      ) : (
+        <>
+          {state !== "ready" && <div className="loading webtab-wait"><Spinner size="lg" /><span>Loading “{name}”…</span></div>}
+          {state !== "checking" && (
+            <iframe key={attempt} title={name} src={url} className={cx(state === "ready" && "ready")}
+                    allow="clipboard-read; clipboard-write; fullscreen; autoplay" onLoad={() => setState("ready")} />
+          )}
+        </>
+      )}
     </div>
   );
 }
@@ -220,98 +293,6 @@ function PropEditor({ p, onSubmit, onCancel }: { p: PropertyView; onSubmit: (v: 
   );
 }
 
-// ---- connections ---------------------------------------------------------------------------
-
-function Connections({ d, shell, onSelect }: { d: ItemDetail; shell: Shell; onSelect: (id: number) => void }) {
-  const owners = [
-    { id: d.id, name: d.name, kind: d.kind as KindLabel, driver: d.driver, connections: d.connections },
-    ...d.children.filter((c) => c.connections.length),
-  ];
-  if (!owners.some((o) => o.connections.length)) return <p className="empty pad">No connections.</p>;
-  return (
-    <>
-      {owners.filter((o) => o.connections.length).map((o) => (
-        <div key={o.id}>
-          <div className="section row">
-            <KindIcon kind={o.kind} driver={o.driver} />{o.name}{o.id !== d.id && <span className="tag">{o.kind}</span>}
-          </div>
-          <ConnTable owner={{ id: o.id, name: o.name, room: d.room }} defs={o.connections} shell={shell} onSelect={onSelect} />
-        </div>
-      ))}
-    </>
-  );
-}
-
-/** One owner's connection definitions with what each is connected to. Also used for proxies. */
-function ConnTable({ owner, defs, shell, onSelect }: {
-  owner: ConnectionRow["device"]; defs: ConnectionDef[]; shell: Shell; onSelect: (id: number) => void;
-}) {
-  const { choose } = useDialog();
-
-  const connect = async (def: ConnectionDef) => {
-    try {
-      const from: ConnectionRow = { device: owner, connection: def };
-      const all = (await api.connections()).connections;
-      const options = candidates(all, from);
-      if (!options.length) {
-        toast.message(`Nothing in the project can take ${def.classes.join("/")} ${def.role === "input" ? "out" : "in"}.`);
-        return;
-      }
-      const key = (r: ConnectionRow) => `${r.device.id}:${r.connection.id}`;
-      const picked = await choose({
-        title: `Connect ${owner.name} › ${def.name}`,
-        description: def.role === "input" ? "Choose the output that feeds it." : "Choose a free input to feed.",
-        options: options.map((r) => ({ id: key(r), label: `${r.device.name} › ${r.connection.name}`,
-          detail: [r.device.room, r.connection.classes.join(" · "), r.connection.connected_to.length ? `already feeds ${r.connection.connected_to.length}` : ""].filter(Boolean).join(" · ") })),
-      });
-      const to = options.find((r) => key(r) === picked);
-      if (to) await shell.propose([connectOp(from, to)]);
-    } catch (e) {
-      toast.error(errText(e));
-    }
-  };
-
-  return (
-    <table className="grid-table">
-      <thead><tr><th>Connection</th><th>Classes</th><th>Connected to</th><th /></tr></thead>
-      <tbody>
-        {defs.map((c) => (
-          <tr key={c.id}>
-            <td>
-              <span className="conn-name">
-                {c.role === "input" ? <ArrowDownToLine size={13} strokeWidth={1.8} className="dim" /> : <ArrowUpFromLine size={13} strokeWidth={1.8} className="dim" />}
-                {c.name}<span className="dim mono small">#{c.id}</span>
-              </span>
-            </td>
-            <td><span className="chips">{c.classes.map((k) => <span key={k} className="chip cls">{k}</span>)}</span></td>
-            <td>
-              <span className="chips">
-                {c.connected_to.map((p, i) => (
-                  <span key={i} className="chip peer">
-                    <button className="link" onClick={() => onSelect(p.device.id)}>{p.device.name} › {p.connection ?? `#${p.binding}`}</button>
-                    {shell.writable && (
-                      <Tip text="Disconnect">
-                        <button className="chip-x" aria-label="Disconnect"
-                                onClick={() => shell.propose([disconnectOp(owner.id, c.id, c.role, p)])}><Unlink size={11} strokeWidth={1.8} /></button>
-                      </Tip>
-                    )}
-                  </span>
-                ))}
-                {!c.connected_to.length && <span className="dim">—</span>}
-              </span>
-            </td>
-            <td className="right">
-              {shell.writable && (c.role === "output" || !c.connected_to.length) && (
-                <button className="act small" onClick={() => connect(c)}><Link2 size={13} strokeWidth={1.8} />Connect…</button>
-              )}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
-  );
-}
-
 // ---- network, variables, events ------------------------------------------------------------
 
 function Network({ d, shell }: { d: ItemDetail; shell: Shell }) {
@@ -330,7 +311,7 @@ function Network({ d, shell }: { d: ItemDetail; shell: Shell }) {
             <td className="mono">{n.address}</td>
             <td className="mono dim">{n.uuid}</td>
             <td className="mono">{n.search_type || "—"}</td>
-            <td><span className="row"><span className={cx("dot", n.status === "online" && "on")} />{n.status || "—"}</span></td>
+            <td>{n.status ? <span className={cx("tag", n.status === "online" ? "on" : "warn")}>{n.status}</span> : "—"}</td>
             <td className="right">
               {shell.writable && (
                 <button className="act small danger" onClick={async () => {

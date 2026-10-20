@@ -2,7 +2,7 @@ import type {
   Activity, Announcement, AppStatus, Approval, BackupInfo, ConnectionRow, ConversationInfo, Diff,
   DirectorInfo, DriverDoc, Events, ItemDetail, McpStatus, NetworkView, Op, Outcome, Overview,
   ProgrammingEvent, Provider, ProviderStatus, SavedDirector, AccessMode, TreeNode, ZigbeeQuery, BackupResult,
-  AddDriverArgs, ControllerDriver, LibraryDriver, UiContext,
+  AddDriverArgs, ControllerDriver, LibraryDriver, UiContext, CommandParam, DeviceState, Effort, AuthRequest, McpGrant, DriverTab,
 } from "./types";
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -72,10 +72,20 @@ export const api = {
 
   updateMcp: (p: { port?: number; lan?: boolean; newToken?: boolean }) => call<McpStatus>("update_mcp", p),
   updateAgent: (p: { provider?: Provider; claudePath?: string; codexPath?: string; model?: string }) => call<void>("update_agent", p),
+  /** MCP clients waiting for the person to approve their sign-in. */
+  mcpAuthPending: () => call<AuthRequest[]>("mcp_auth_pending"),
+  mcpAuthDecide: (id: string, approve: boolean) => call<boolean>("mcp_auth_decide", { id, approve }),
+  mcpGrants: () => call<McpGrant[]>("mcp_grants"),
+  mcpRevoke: (id: string) => call<void>("mcp_revoke", { id }),
   agentProviders: () => call<ProviderStatus[]>("agent_providers"),
   agentList: () => call<ConversationInfo[]>("agent_list"),
-  agentNew: (provider?: Provider) => call<ConversationInfo>("agent_new", { provider: provider ?? null }),
-  agentSend: (id: string, text: string) => call<void>("agent_send", { id, text }),
+  agentNew: (provider?: Provider, model?: string | null, effort?: Effort | null) =>
+    call<ConversationInfo>("agent_new", { provider: provider ?? null, model: model || null, effort: effort || null }),
+  /** Switch model/effort mid-conversation: the CLI restarts and resumes the same session. */
+  agentConfigure: (id: string, model: string | null, effort: Effort | null) =>
+    call<ConversationInfo>("agent_configure", { id, model: model || null, effort: effort || null }),
+  /** `attachments` are absolute paths; the backend copies them where the agent may read them. */
+  agentSend: (id: string, text: string, attachments: string[] = []) => call<void>("agent_send", { id, text, attachments }),
   agentStop: (id: string) => call<void>("agent_stop", { id }),
   agentDelete: (id: string) => call<void>("agent_delete", { id }),
 
@@ -107,6 +117,16 @@ export const api = {
   /** Install-if-needed, add and optionally identify, as one approval. Like `propose`, resolves
    *  once it is decided; fails up front when the file is nowhere openComposer can get it. */
   addDriver: (a: AddDriverArgs) => action<Outcome>("add_driver", { ...a }),
+
+  /** Driver icons as data URLs, for the drivers that carry one (.c4z); the rest get none. */
+  driverIcons: (filenames?: string[]) => action<{ icons: Record<string, string> }>("driver_icons", { filenames }),
+  /** The driver's own web pages (its `<tabs>`), as URLs openComposer serves. */
+  driverTabs: (device: number) => action<{ tabs: DriverTab[] }>("driver_tabs", { device }),
+  /** A device's variables right now (power, level, input…). */
+  deviceState: (device: number) => action<DeviceState>("device_state", { device }),
+  /** Send a command now — the user's own click, so no approval card; refused on read-only Directors. */
+  sendCommand: (device: number, command: string, params: CommandParam[] = []) =>
+    action<{ status: "sent"; reply: string[] }>("send_command", { device, command, params }),
 
   /** Tell the backend what the window shows (for the agent's `ui_context`). */
   setUiContext: (context: UiContext) => call<void>("set_ui_context", { context }),

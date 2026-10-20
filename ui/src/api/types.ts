@@ -39,6 +39,32 @@ export interface McpStatus {
   url: string;
   lan: boolean;
   error: string | null;
+  /** The port actually bound: the configured one, or a loopback fallback when it was taken. */
+  port: number;
+}
+
+/** An MCP client asking to sign in through the browser (app/src/oauth.rs); the person
+ *  approves it here. */
+export interface AuthRequest {
+  id: string;
+  client_name: string;
+  redirect_uri: string;
+  /** Where the request came from, as the browser reached openComposer. */
+  host: string;
+}
+
+/** An MCP client signed in that way: revocable. */
+export interface McpGrant {
+  id: string;
+  client_name: string;
+  created: string;
+  last_used: string | null;
+}
+
+/** A driver's own web page (driver.xml `<tabs>`), served by openComposer on 127.0.0.1. */
+export interface DriverTab {
+  name: string;
+  url: string;
 }
 
 export interface AppStatus {
@@ -191,7 +217,44 @@ export interface ItemDetail {
   network_connections: { id: number; name: string; classes: string[] }[];
   variables: Variable[];
   events: { id: number; name: string; programming: CodeLineView[] }[];
+  /** What the driver says it can be sent (Composer's device-specific commands); null when the
+   *  item has no driver definition. */
+  commands: CommandDef[] | null;
   children: { id: number; name: string; kind: KindLabel; driver: string | null; connections: ConnectionDef[] }[];
+}
+
+/** A command's parameter, declared like a property (crates/c4/src/director.rs `PropertyDef`). */
+export interface ParamDef {
+  name: string;
+  prop_type: string;
+  default: string | null;
+  readonly: boolean;
+  /** LIST options. */
+  items: string[];
+  minimum: string | null;
+  maximum: string | null;
+}
+
+export interface CommandDef {
+  name: string;
+  /** Composer's line template; `NAME` stands for the device. */
+  description: string;
+  params: ParamDef[];
+}
+
+/** One parameter of a command being sent (crates/c4/src/ops.rs `CodeParam`). */
+export interface CommandParam {
+  name: string;
+  /** STRING, INTEGER, … as the driver declares it; STRING when left out. */
+  type?: string;
+  value: string;
+}
+
+/** `device_state`: `variables` is GetVariablesByDevice as JSON (attributes prefixed with `@`,
+ *  the value as `#text`), read through `lib/control.ts`. */
+export interface DeviceState {
+  device: number;
+  variables: unknown;
 }
 
 export interface ConnectionRow {
@@ -390,6 +453,8 @@ export type Op =
   /** Checked against the driver's property schema before anyone is asked. */
   | { op: "set_property"; device: number; name: string; value: string }
   | { op: "run_action"; device: number; command: string }
+  /** Sent at once from the app's own controls; approved like a change when an assistant asks. */
+  | { op: "send_command"; device: number; command: string; params?: CommandParam[] }
   | { op: "add_code"; device: number; event: number; parent?: number; before?: number; target: number;
       command: string; params?: { name: string; type?: string; value: string }[]; display: string }
   | { op: "remove_code"; device: number; event: number; id: number }
@@ -464,6 +529,8 @@ export type Entry =
   | { role: "status"; text: string }
   | { role: "error"; text: string };
 
+export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+
 export interface ConversationInfo {
   id: string;
   provider: Provider;
@@ -472,6 +539,13 @@ export interface ConversationInfo {
   busy: boolean;
   entries: Entry[];
   cost_usd: number;
+  /** Model alias or id; null = the CLI's default (or Settings › Agent's). */
+  model: string | null;
+  /** Claude's effort level; null = default. */
+  effort: Effort | null;
+  /** openComposer tools the CLI loaded when it started; null until it has. 0 means the chat
+   *  can't see the project (the backend also pushes an error entry saying why). */
+  tools: number | null;
 }
 
 export interface ProviderStatus {
@@ -511,4 +585,6 @@ export interface Events {
   "project-changed": { director: string };
   backups: BackupInfo[];
   "ui-command": UiCommand;
+  "mcp-auth": AuthRequest;
+  "mcp-auth-decided": { id: string; approve: boolean };
 }

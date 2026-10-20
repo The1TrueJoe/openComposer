@@ -6,9 +6,9 @@
  *  `?fresh` in the URL starts with no certificate and no Directors, to see onboarding. */
 
 import type {
-  AccessMode, Activity, Announcement, Approval, BackupInfo, Change, CodeLineView, Config, ConnectionDef, ControllerDriver, ConversationInfo,
-  DirectorInfo, Entry, Events, ItemDetail, ItemKind, ItemRef, LibraryDriver, McpStatus, Op, Outcome, Peer, Provider, TreeNode,
-  UiContext,
+  AccessMode, Activity, Announcement, Approval, BackupInfo, Change, CodeLineView, CommandParam, Config, ConnectionDef, ControllerDriver,
+  AuthRequest, ConversationInfo, DirectorInfo, Effort, McpGrant, Entry, Events, ItemDetail, ItemKind, ItemRef, LibraryDriver, McpStatus, Op, Outcome, Peer, Provider,
+  TreeNode, UiContext,
 } from "../api/types";
 import { splitContext } from "./agent.ts";
 import {
@@ -60,11 +60,36 @@ let nextId = 1000;
 /** Driver files on the mock controller: everything the project uses, plus what gets installed. */
 const installed = new Set([...project.items.values()].flatMap((i) => (i.driver ? [i.driver] : [])));
 let library: LibraryDriver[] = fresh ? [] : seedLibrary();
+/** MCP sign-ins: `?auth` in the URL has a client ask a few seconds after load. */
+const authPending: AuthRequest[] = [];
+let grants: McpGrant[] = fresh ? [] : [
+  { id: "g-1", client_name: "Claude Code", created: new Date(Date.now() - 6 * 86_400_000).toISOString(), last_used: new Date(Date.now() - 20 * 60_000).toISOString() },
+];
+if (typeof location !== "undefined" && new URLSearchParams(location.search).has("auth")) {
+  setTimeout(() => {
+    const req = { id: `auth-${Date.now().toString(36)}`, client_name: "Claude Code", redirect_uri: "http://localhost:53682/callback", host: "127.0.0.1:7710" };
+    authPending.push(req);
+    emit("mcp-auth", req);
+    emit("attention", { kind: "mcp-auth", id: req.id, title: `${req.client_name} wants to connect to openComposer` });
+  }, 2500);
+}
+
+/** A driver's web tab, standing in for the page openComposer would serve from its package. */
+function tabPage(title: string, device: string): string {
+  const html = `<!doctype html><meta charset="utf-8"><style>body{font:13px -apple-system,sans-serif;margin:0;padding:18px;color:#1d2129;background:#fff}`
+    + `@media (prefers-color-scheme:dark){body{background:#1e1f24;color:#e7e9ee}}h1{font-size:15px;margin:0 0 10px}`
+    + `.g{display:grid;grid-template-columns:repeat(3,72px);gap:8px}button{height:40px;border-radius:8px;border:1px solid #8884;background:transparent;color:inherit;font:inherit}</style>`
+    + `<h1>${title} — ${device}</h1><p>The driver's own page (mock). In the app this is served by openComposer from the driver package.</p>`
+    + `<div class="g">${["Power", "Up", "Menu", "Left", "OK", "Right", "Back", "Down", "Home"].map((b) => `<button>${b}</button>`).join("")}</div>`;
+  return `data:text/html;charset=utf-8,${encodeURIComponent(html)}`;
+}
+
 /** What the window last said it shows (`set_ui_context`); the mock agent reads it. */
 let uiContext: UiContext | null = null;
 
 function mcpStatus(): McpStatus {
-  return { listening: true, url: `http://${config.mcp.lan ? "192.168.1.25" : "127.0.0.1"}:${config.mcp.port}/mcp`, lan: config.mcp.lan, error: null };
+  return { listening: true, url: `http://${config.mcp.lan ? "192.168.1.25" : "127.0.0.1"}:${config.mcp.port}/mcp`, lan: config.mcp.lan, error: null,
+    port: config.mcp.port };
 }
 
 function info(id: string): DirectorInfo {
@@ -178,6 +203,7 @@ function itemDetail(id: number): ItemDetail {
     network_connections: project.network.some((n) => n.device === id) ? [{ id: 6001, name: "IP Connection", classes: ["TCP"] }] : [],
     variables: project.variables.filter((v) => v.device === id),
     events: dev ? Object.entries(dev.events).map(([eid, name]) => ({ id: Number(eid), name, programming: project.programming.get(`${id}:${eid}`) ?? [] })) : [],
+    commands: dev ? dev.commands ?? [] : null,
     children: it.children.map((c) => ({ ...short(c), kind: item(c).kind, driver: item(c).driver, connections: connectionsOf(c) })),
   };
 }
@@ -200,6 +226,10 @@ function describe(op: Op): string {
     case "set_property": return `Set ${n(op.device)} property “${op.name}” to “${masked(op.name, op.value)}”`;
     case "install_driver": return `Install driver file ${op.filename} from ${op.source}`;
     case "run_action": return `Run action “${op.command}” on ${n(op.device)}`;
+    case "send_command": {
+      const ps = (op.params ?? []).map((p) => `${p.name}=${p.value}`).join(", ");
+      return `Send ${op.command}${ps ? ` (${ps})` : ""} to ${n(op.device)}`;
+    }
     case "add_code": return `Add to ${n(op.device)} programming: “${op.display.replace("NAME", project.items.get(op.target)?.name ?? "")}”`;
     case "remove_code": return `Remove programming line #${op.id} from ${n(op.device)}`;
     case "load_project": return `Replace the whole project with ${op.label}`;
@@ -281,6 +311,7 @@ function predict(ops: Op[]): Change[] {
       }
       case "install_driver":
       case "run_action":
+      case "send_command":
       case "add_code":
       case "remove_code":
         break;
@@ -362,6 +393,9 @@ function apply(op: Op): number[] {
     case "install_driver":
       installed.add(op.filename);
       return [];
+    case "send_command":
+      command(op.device, op.command, op.params ?? []);
+      return [];
     case "run_action":
     case "add_code":
     case "remove_code":
@@ -369,6 +403,84 @@ function apply(op: Op): number[] {
     case "load_project":
       return [];
   }
+}
+
+// ---- device control (send_command / device_state) ---------------------------------------------
+
+/** The device whose variables a command changes: a proxy's parent, otherwise itself. */
+const owner = (id: number) => (item(id).kind === "proxy" ? item(id).parent ?? id : id);
+
+function setVar(device: number, name: string, value: string) {
+  const v = project.variables.find((x) => x.device === device && x.name === name);
+  if (v) v.value = value;
+  else {
+    const id = 1000 + project.variables.filter((x) => x.device === device).length;
+    project.variables.push({ device, id, name, var_type: 1, readonly: true, hidden: false, description: "", value });
+  }
+}
+const getVar = (device: number, name: string) => project.variables.find((x) => x.device === device && x.name === name)?.value;
+
+/** What a command does to the fixture's state, roughly as the real devices would. */
+function command(target: number, cmd: string, params: CommandParam[]): string[] {
+  const d = owner(target);
+  const p = (n: string) => params.find((x) => x.name === n)?.value ?? "";
+  const clamp = (n: number) => String(Math.max(0, Math.min(100, Math.round(n))));
+  const light = getVar(d, "LIGHT_LEVEL") != null;
+  switch (cmd) {
+    case "ON":
+      if (light) { setVar(d, "LIGHT_LEVEL", getVar(d, "LIGHT_LEVEL") === "0" ? "100" : getVar(d, "LIGHT_LEVEL")!); setVar(d, "LIGHT_STATE", "1"); }
+      else setVar(d, "POWER_STATE", "On");
+      break;
+    case "OFF":
+      if (light) { setVar(d, "LIGHT_LEVEL", "0"); setVar(d, "LIGHT_STATE", "0"); }
+      else setVar(d, "POWER_STATE", "Off");
+      break;
+    case "TOGGLE":
+      return command(target, getVar(d, "LIGHT_STATE") === "1" ? "OFF" : "ON", params);
+    case "SET_LEVEL":
+    case "RAMP_TO_LEVEL":
+      setVar(d, "LIGHT_LEVEL", clamp(Number(p("LEVEL"))));
+      setVar(d, "LIGHT_STATE", Number(p("LEVEL")) > 0 ? "1" : "0");
+      break;
+    case "SET_VOLUME_LEVEL": setVar(d, "VOLUME_LEVEL", clamp(Number(p("LEVEL")))); break;
+    case "PULSE_VOL_UP": setVar(d, "VOLUME_LEVEL", clamp(Number(getVar(d, "VOLUME_LEVEL") ?? 0) + 1)); break;
+    case "PULSE_VOL_DOWN": setVar(d, "VOLUME_LEVEL", clamp(Number(getVar(d, "VOLUME_LEVEL") ?? 0) - 1)); break;
+    case "MUTE_ON": setVar(d, "MUTE_STATE", "1"); break;
+    case "MUTE_OFF": setVar(d, "MUTE_STATE", "0"); break;
+    case "MUTE_TOGGLE": setVar(d, "MUTE_STATE", getVar(d, "MUTE_STATE") === "1" ? "0" : "1"); break;
+    case "SET_INPUT": setVar(d, "CURRENT_INPUT", p("INPUT")); break;
+    case "PLAY": setVar(d, "PLAY_STATE", "Playing"); break;
+    case "PAUSE": setVar(d, "PLAY_STATE", "Paused"); break;
+    case "STOP": setVar(d, "PLAY_STATE", "Stopped"); break;
+    case "SET_SETPOINT_HEAT": setVar(d, "HEAT_SETPOINT_F", p("SETPOINT")); break;
+    case "SET_SETPOINT_COOL": setVar(d, "COOL_SETPOINT_F", p("SETPOINT")); break;
+    case "SET_MODE_HVAC": setVar(d, "HVAC_MODE", p("MODE")); break;
+  }
+  return [];
+}
+
+/** GetVariablesByDevice the way the backend hands it over: Director's XML as JSON, one
+ *  `<variable deviceid variableid name …>value</variable>` per variable. */
+function deviceVariables(id: number) {
+  const vars = project.variables.filter((v) => v.device === id).map((v) => ({
+    "@deviceid": String(v.device), "@variableid": String(v.id), "@name": v.name, "@type": String(v.var_type),
+    "@readonly": v.readonly ? "1" : "0", "@hidden": v.hidden ? "1" : "0", "@description": v.description, "#text": v.value,
+  }));
+  return { "@name": "GetVariablesByDevice", ...(vars.length ? { variable: vars.length === 1 ? vars[0] : vars } : {}) };
+}
+
+/** A driver icon as an SVG data URL: a tile with the maker's initials. Only some .c4z files
+ *  "have" one, so the generic icons get seen too. */
+function mockIcon(file: string): string | null {
+  if (!/\.c4z$/i.test(file) || /ecobee|epson/i.test(file)) return null;
+  const doc = DRIVERS.find((d) => d.filename === file);
+  const label = (doc?.manufacturer ?? file).replace(/[^A-Za-z]/g, "").slice(0, 2).toUpperCase() || "?";
+  let h = 0;
+  for (const c of file) h = (h * 31 + c.charCodeAt(0)) % 360;
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 32 32">`
+    + `<defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="hsl(${h},62%,52%)"/><stop offset="1" stop-color="hsl(${(h + 40) % 360},62%,38%)"/></linearGradient></defs>`
+    + `<rect width="32" height="32" rx="7" fill="url(#g)"/><text x="16" y="21" font-family="-apple-system,Segoe UI,sans-serif" font-size="13" font-weight="700" text-anchor="middle" fill="white">${label}</text></svg>`;
+  return `data:image/svg+xml;base64,${btoa(svg)}`;
 }
 
 function outcome(a: Approval): Outcome {
@@ -603,7 +715,10 @@ async function designTurn(c: ConversationInfo, text: string) {
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
 async function agentTurn(c: ConversationInfo, raw: string) {
-  if (!c.entries.length) push(c, { role: "status", text: `Connected to ${c.provider === "claude" ? "Claude" : "Codex"} (17 openComposer tools).` });
+  if (c.tools == null) {
+    c.tools = 17;
+    push(c, { role: "status", text: `Connected to ${c.provider === "claude" ? "Claude" : "Codex"}${c.model ? ` · ${c.model}` : ""} · 17 openComposer tools` });
+  }
   await sleep(500);
   const { context, text } = splitContext(raw);
   if (context) return designTurn(c, text);
@@ -735,12 +850,13 @@ async function act(name: string, a: Args): Promise<unknown> {
     case "network_status": {
       const found = SDDP.filter((s) => s.device_type.startsWith("c4:") && !s.device_type.startsWith("c4:control4"))
         .map((s) => ({ uuid: s.host, address: s.address, address_type: 1, device_type: s.device_type }));
-      const bound = new Set(project.network.map((n) => n.uuid));
+      // Identified by the discovered id or, like the backend, by IP address.
+      const bound = new Set(project.network.flatMap((n) => [n.uuid, n.address]).filter(Boolean));
       return {
         identified: project.network.map((n) => ({ device: { id: n.device, name: item(n.device).name, path: path(n.device) },
           address_type: n.address_type, address: n.address, uuid: n.uuid, search_type: n.search_type, status: n.status })),
         discovered: found,
-        discovered_not_in_project: found.filter((f) => !bound.has(f.uuid)),
+        discovered_not_in_project: found.filter((f) => !bound.has(f.uuid) && !bound.has(f.address) && !f.device_type.startsWith("c4:director")),
       };
     }
     case "zigbee":
@@ -792,6 +908,32 @@ async function act(name: string, a: Args): Promise<unknown> {
     case "add_driver":
       log("You (openComposer)", "add_driver", `${a.filename} → #${a.room}`);
       return propose(addDriverOps(a), (a.reason as string) ?? null, "You (openComposer)");
+    case "driver_icons": {
+      await sleep(200);
+      const wanted = (a.filenames as string[] | undefined) ?? [...new Set([...project.items.values()].flatMap((i) => (i.driver ? [i.driver] : [])))];
+      return { icons: Object.fromEntries(wanted.flatMap((f) => { const i = mockIcon(f); return i ? [[f, i]] : []; })) };
+    }
+    case "driver_tabs": {
+      await sleep(150);
+      const id = Number(a.device);
+      // The Sony driver "declares" two tabs; the second points nowhere, to show the error state.
+      if (id === 20) return { tabs: [{ name: "Remote Buttons", url: tabPage("Remote Buttons", item(20).name) }, { name: "Setup", url: "http://127.0.0.1:9/ui/mock/missing.html" }] };
+      if (id === 22) return { tabs: [{ name: "Settings", url: tabPage("Settings", item(22).name) }] };
+      return { tabs: [] };
+    }
+    case "device_state":
+      await sleep(90);
+      return { device: Number(a.device), variables: deviceVariables(Number(a.device)) };
+    case "send_command": {
+      const d = config.directors.find((x) => x.id === config.active_director)!;
+      if (d.mode === "read_only") throw `${d.name} is read-only in openComposer; switch it to “approve each write” in Directors to control devices`;
+      const id = Number(a.device);
+      item(id);
+      await sleep(160);
+      const reply = command(id, String(a.command), (a.params as CommandParam[] | undefined) ?? []);
+      log("You (openComposer)", "send_command", `${a.command} → #${id}`);
+      return { status: "sent", reply };
+    }
     case "load_backup":
       log("You (openComposer)", "load_backup", String(a.backup));
       return propose([{ op: "load_project", label: String(a.backup) }], (a.reason as string) ?? null, "You (openComposer)");
@@ -968,6 +1110,23 @@ async function handle(cmd: string, a: Args): Promise<unknown> {
       if (a.model != null) config.agent.model = String(a.model) || null;
       emit("config", config);
       return null;
+    case "mcp_auth_pending":
+      return authPending;
+    case "mcp_auth_decide": {
+      const i = authPending.findIndex((x) => x.id === a.id);
+      if (i < 0) return false;
+      const [req] = authPending.splice(i, 1);
+      if (a.approve) grants = [...grants, { id: `g-${Date.now().toString(36)}`, client_name: req.client_name, created: now(), last_used: null }];
+      emit("mcp-auth-decided", { id: req.id, approve: !!a.approve });
+      emit("config", config);
+      return true;
+    }
+    case "mcp_grants":
+      return grants;
+    case "mcp_revoke":
+      grants = grants.filter((g) => g.id !== a.id);
+      emit("config", config);
+      return null;
     case "agent_providers":
       await sleep(250);
       return [
@@ -978,17 +1137,33 @@ async function handle(cmd: string, a: Args): Promise<unknown> {
       return [...conversations].sort((x, y) => y.created.localeCompare(x.created));
     case "agent_new": {
       const c: ConversationInfo = { id: `c-${Date.now().toString(36)}`, provider: (a.provider as Provider) ?? config.agent.provider,
-        title: "New conversation", created: now(), busy: false, entries: [], cost_usd: 0 };
+        title: "New conversation", created: now(), busy: false, entries: [], cost_usd: 0,
+        model: (a.model as string) || null, effort: (a.effort as Effort) || null, tools: null };
       conversations.unshift(c);
+      return c;
+    }
+    case "agent_configure": {
+      const c = conv(String(a.id));
+      if (c.busy) throw "wait for the current reply to finish (or stop it) before switching";
+      c.model = (a.model as string) || null;
+      c.effort = (a.effort as Effort) || null;
+      // The real CLI restarts with --resume and reports itself again on the next message.
+      if (c.tools != null) c.tools = null;
+      emit("agent", c);
       return c;
     }
     case "agent_send": {
       const c = conv(String(a.id));
       if (c.busy) throw "still working on the previous message";
       if (c.title === "New conversation") c.title = String(a.text).slice(0, 60);
+      const files = (a.attachments as string[] | undefined) ?? [];
+      // The backend copies attachments next to the conversation and tells the agent where.
+      const text = files.length
+        ? `${a.text}\n\nAttached files (read them with your Read tool):\n${files.map((f) => `- attachments/${c.id}/${f.split(/[\\/]/).pop()}`).join("\n")}`
+        : String(a.text);
       c.busy = true;
-      push(c, { role: "user", text: String(a.text), at: now() });
-      void agentTurn(c, String(a.text));
+      push(c, { role: "user", text, at: now() });
+      void agentTurn(c, text);
       return null;
     }
     case "agent_stop": {

@@ -51,3 +51,13 @@
 .backup-warn { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin: 10px 12px 4px; padding: 8px 10px; border-radius: 8px;
   border: 1px solid color-mix(in srgb, var(--warn) 26.7%, transparent); background: color-mix(in srgb, var(--warn) 5%, transparent); color: var(--warn); font-size: 12px; }
 .backup-warn b { color: var(--text); }
+
+.conn-state { display: inline-flex; color: var(--dim); }
+.conn-state.on { color: var(--on); }
+.grants { display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; margin-bottom: 4px; }
+.grant { display: flex; align-items: center; gap: 10px; padding: 7px 10px; background: var(--bg); }
+.grant + .grant { border-top: 1px solid var(--line); }
+details.advanced { margin-top: 10px; }
+details.advanced summary { cursor: pointer; color: var(--dim); font-size: 12px; padding: 4px 0; }
+details.advanced summary:hover { color: var(--text); }
+details.advanced[open] summary { margin-bottom: 6px; }

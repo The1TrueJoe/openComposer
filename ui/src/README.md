@@ -13,7 +13,10 @@ lib/              things that are not React components
   diff.ts           how a semantic diff is grouped, counted and highlighted (diff.check.ts tests it)
   connections.ts    what can connect to what, and the ops that do it
   project.ts        tree questions: where is this, which rooms, what matches a filter
-  agent.ts          which approval a proposing tool call is waiting on; the ask bar's context line
+  agent.ts          which approval a proposing tool call is waiting on; the ask bar's context line;
+                    attachments in a message; model/effort remembered per surface (useAgentPrefs)
+  control.ts        device control: live variables, proxy families, which command a quick control sends
+  driverIcons.ts    driver icons, fetched once per session in batches (useDriverIcon)
   network.ts        devices on the LAN that aren't in the project, and what to identify them as
   files.ts          native file pickers (paths only cross to the backend)
   shell.ts          the `Shell` every page is handed (incl. Design's selection and inspector tab)
@@ -23,7 +26,10 @@ lib/              things that are not React components
 components/       used by more than one page
   DiffView, DiffGraph, ApprovalCard, ApprovalsDrawer   the approval / diff UI
   Transcript        an agent conversation as chat (Agent tab and Design's ask bar)
-  Panes, Dialogs, ContextMenu, controls, JsonTree, Markdown, icons, setup, shell
+  AgentControls     model/effort/provider, attachments, conversation switcher, "no tools" warning
+  DataTable         the one compact table (TanStack Table + Virtual): sort, keys, responsive columns
+  McpAuth           the "<client> wants to connect" prompt for MCP sign-ins
+  Panes, Dialogs, ContextMenu, controls, JsonTree, Markdown, icons (DriverIcon), setup, shell
 
 pages/<tab>/      one folder per tab, lazy-loaded by App.tsx
 

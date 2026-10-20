@@ -33,13 +33,13 @@ export interface Unidentified {
  *  and anything already identified are left out. */
 export function unidentified(net: NetworkView | undefined, scan: Announcement[] | undefined): Unidentified[] {
   const physical = net?.discovered ?? [];
-  const bound = new Set((net?.identified ?? []).flatMap((x) => [x.uuid, x.address]));
+  const bound = new Set((net?.identified ?? []).flatMap((x) => [x.uuid, x.address]).filter(Boolean));
   // Director has these and knows they're bound (they're discovered but not in the free list).
   const free = new Set((net?.discovered_not_in_project ?? []).map((p) => p.address));
   const boundIps = new Set(physical.filter((p) => !free.has(p.address)).map((p) => p.address));
   const out = new Map<string, Unidentified>();
   for (const p of net?.discovered_not_in_project ?? []) {
-    if (isController(p.device_type) || bound.has(p.uuid)) continue;
+    if (isController(p.device_type) || bound.has(p.uuid) || bound.has(p.address)) continue;
     out.set(p.address, { address: p.address, device_type: p.device_type, host: null, manufacturer: "", model: "", driver: "",
       identity: { address: p.uuid, search_type: p.device_type }, seenBy: ["director"] });
   }

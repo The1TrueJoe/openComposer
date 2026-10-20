@@ -1,12 +1,18 @@
+/** Items › Search: one search across the controller's drivers, the library and Control4's
+ *  online database, as a table, with the picked driver's details and "Add to room…" below. */
+
+import { createColumnHelper } from "@tanstack/react-table";
 import { BadgeCheck, CircleHelp, FileUp, Globe, HardDrive, Plus, Search, Server, X, type LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
+import { DataTable } from "../../components/DataTable";
 import { Tip } from "../../components/Dialogs";
 import { Spinner } from "../../components/controls";
+import { DriverIcon } from "../../components/icons";
 import type { Shell } from "../../lib/shell";
 import { cx, useLoad } from "../../lib/ui";
-import type { Add } from "./AddDevices";
-import { best, declares, fromOnline, matchesText, merge, type DriverRow, type Local, type Where } from "./drivers";
+import type { Add } from "./ItemsPane";
+import { best, categoryOf, declares, fromOnline, matchesText, merge, type DriverRow, type Local, type Where } from "./drivers";
 
 /** Text, and optionally an SDDP type ("Find driver" on a discovered device). */
 export interface Query {
@@ -15,8 +21,8 @@ export interface Query {
 }
 
 const AVAIL: Record<Where | "unknown", [label: string, icon: LucideIcon, cls: string, tip: string]> = {
-  controller: ["on controller", Server, "on", "Installed on this controller"],
-  library: ["in library", HardDrive, "accent", "In openComposer's library on this computer: installed as part of the add"],
+  controller: ["controller", Server, "on", "Installed on this controller"],
+  library: ["library", HardDrive, "accent", "In openComposer's library on this computer: installed as part of the add"],
   online: ["online", Globe, "warn", "In Control4's driver database, not on this computer: adding downloads it (checked against the database's checksum) and installs it in the same approval"],
   unknown: ["no driver", CircleHelp, "", "No driver for this device was found here or online"],
 };
@@ -27,15 +33,9 @@ export function Avail({ where }: { where: Where | "unknown" }) {
   return <Tip text={tip}><span className={cx("tag avail", cls)}><Icon size={11} strokeWidth={1.8} />{label}</span></Tip>;
 }
 
-const GROUPS: { where: Where; title: string }[] = [
-  { where: "controller", title: "On the controller" },
-  { where: "library", title: "In the library" },
-  { where: "online", title: "Online" },
-];
+const RANK: Record<Where, number> = { controller: 0, library: 1, online: 2 };
+const col = createColumnHelper<DriverRow>();
 
-const byName = (a: DriverRow, b: DriverRow) => `${a.manufacturer} ${a.name}`.localeCompare(`${b.manufacturer} ${b.name}`);
-
-/** One search across the controller's drivers, the library and Control4's online database. */
 export function DriverSearch({ shell, local, controllerError, query, onQuery, picked, onPick, room, add, focus, onImport }: {
   shell: Shell;
   local: Local;
@@ -51,11 +51,8 @@ export function DriverSearch({ shell, local, controllerError, query, onQuery, pi
 }) {
   const [text, setText] = useState(query.text);
   const input = useRef<HTMLInputElement>(null);
-  const list = useRef<HTMLDivElement>(null);
   useEffect(() => { if (focus) input.current?.focus(); }, [focus]);
-  // A row picked from outside (a file just imported) may be far down the list.
-  useEffect(() => { list.current?.querySelector(".drv.sel")?.scrollIntoView({ block: "nearest" }); }, [picked, local.library.length]);
-  // Follow a query set from outside (Find driver, an import), not our own trimmed echo of it.
+  // Follow a query set from outside (Find driver), not our own trimmed echo of it.
   useEffect(() => setText((t) => (t.trim() === query.text ? t : query.text)), [query.text]);
   // Local lists filter as you type; the database is on the internet, so it waits for a pause.
   useEffect(() => {
@@ -64,8 +61,8 @@ export function DriverSearch({ shell, local, controllerError, query, onQuery, pi
   }, [text, query, onQuery]);
 
   const online = useLoad(() => (
-    query.type ? api.searchDrivers({ search_type: query.type, rows: 40 })
-      : query.text.length >= 2 ? api.searchDrivers({ text: query.text, rows: 40 })
+    query.type ? api.searchDrivers({ search_type: query.type, rows: 50 })
+      : query.text.length >= 2 ? api.searchDrivers({ text: query.text, rows: 50 })
       : Promise.resolve(null)
   ), [query.text, query.type]);
 
@@ -75,8 +72,25 @@ export function DriverSearch({ shell, local, controllerError, query, onQuery, pi
     (query.type ? declares(r, query.type) || hits.has(r.filename.toLowerCase()) : true)
     // The database's own matching is fuzzier than ours; keep what it found for the text.
     && ((!query.type && hits.has(r.filename.toLowerCase())) || matchesText(r, text))), [all, hits, query.type, text]);
-  const sel = all.find((r) => r.filename === picked) ?? null;
+  // Only a pick that is among the results: one made in My Drivers may not be.
+  const sel = shown.find((r) => r.filename === picked) ?? null;
   const searching = !!query.type || query.text.length >= 2;
+  const why = shell.writable ? undefined : `${shell.director?.name ?? "This Director"} is read-only`;
+
+  const columns = useMemo(() => [
+    col.accessor("name", {
+      header: "Driver",
+      cell: (c) => (
+        <span className="row nowrap ellip">
+          <DriverIcon driver={c.row.original.filename} proxy={c.row.original.primary_proxy ?? categoryOf(c.row.original).id} size={16} />
+          <span className="ellip">{c.getValue()}</span>
+          {c.row.original.certified && <Tip text="Certified by Control4"><BadgeCheck size={12} strokeWidth={1.8} className="ok" /></Tip>}
+        </span>
+      ),
+    }),
+    col.accessor("manufacturer", { header: "Maker", meta: { width: "24%", hideBelow: 340 }, cell: (c) => <span className="ellip">{c.getValue() || "—"}</span> }),
+    col.accessor((r) => RANK[best(r)], { id: "where", header: "Source", meta: { width: 92 }, cell: (c) => <Avail where={best(c.row.original)} /> }),
+  ], []);
 
   return (
     <>
@@ -87,58 +101,48 @@ export function DriverSearch({ shell, local, controllerError, query, onQuery, pi
             <button className="chip-x" aria-label="Clear the type" onClick={() => onQuery({ ...query, type: null })}><X size={11} strokeWidth={1.8} /></button>
           </span>
         )}
-        <input ref={input} placeholder={query.type ? "Narrow down…" : "Search drivers: “lg oled”, “denon”…"} value={text}
+        <input ref={input} placeholder={query.type ? "Narrow down…" : "Search every driver: “lg oled”, “denon”…"} value={text}
                onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && onQuery({ ...query, text: text.trim() })} />
         {online.loading && searching && <Spinner />}
       </div>
-      <div className="panel-body" ref={list}>
-        {!searching && <p className="hint pad-t">What's on the controller and in the library is listed below. Type to search Control4's online database too (~25,000 drivers).</p>}
-        {local.controller == null && controllerError && <p className="hint pad-t warn">Couldn't list the controller's drivers: {controllerError}</p>}
-        {online.error && <p className="hint pad-t err">Online search failed: {online.error}</p>}
-        {GROUPS.map((g) => {
-          const rows = shown.filter((r) => best(r) === g.where).sort(byName);
-          if (!rows.length) return null;
-          const total = g.where === "online" && online.data && online.data.total > online.data.drivers.length ? ` of ${online.data.total}` : "";
-          return (
-            <div key={g.where}>
-              <div className="group">{g.title} <span className="n">{rows.length}{total}</span></div>
-              {rows.map((d) => (
-                <button key={d.filename} className={cx("drv", picked === d.filename && "sel")} onClick={() => onPick(d.filename)}
-                        onDoubleClick={() => shell.writable && void add(d)}>
-                  <span className="drv-top">
-                    <b>{d.name}</b>
-                    {d.certified && <Tip text="Certified by Control4"><BadgeCheck size={13} strokeWidth={1.8} className="ok" /></Tip>}
-                    {d.control_method && <span className="spread tag">{d.control_method}</span>}
-                  </span>
-                  <span className="drv-sub">{[d.manufacturer, d.model].filter(Boolean).join(" · ") || "—"}</span>
-                  <span className="drv-file mono">{d.filename}{d.version && <span> · v{d.version}</span>}</span>
-                </button>
-              ))}
-            </div>
-          );
-        })}
-        {searching && online.data && !shown.length && <p className="empty pad">No drivers match{query.type ? <> <code>{query.type}</code></> : ` “${query.text}”`}.</p>}
-        {!searching && !shown.length && !local.controller && !local.library.length && <p className="empty pad">Nothing installed or in the library to show yet.</p>}
-      </div>
+      {(!searching || (local.controller == null && controllerError) || online.error) && (
+        <div className="notes">
+          {!searching && <p className="hint pad-t">Your drivers are listed; type to search Control4's online database too (~25,000 drivers).</p>}
+          {local.controller == null && controllerError && <p className="hint pad-t warn">Couldn't list the controller's drivers: {controllerError}</p>}
+          {online.error && <p className="hint pad-t err">Online search failed: {online.error}</p>}
+        </div>
+      )}
+      <DataTable data={shown} columns={columns} rowId={(r) => r.filename} label="Drivers" sort={[{ id: "where", desc: false }]}
+                 selected={picked} onSelect={(r) => onPick(r.filename)} onActivate={(r) => { if (!why) void add(r); }}
+                 empty={searching && online.loading ? <span className="dim"><Spinner />Searching…</span>
+                   : <p className="empty">{searching ? <>No drivers match{query.type ? <> <code>{query.type}</code></> : ` “${query.text}”`}.</> : "Nothing installed or in the library yet."}</p>} />
+      {online.data && online.data.total > online.data.drivers.length && (
+        <p className="hint pad-t dim small">Showing {online.data.drivers.length} of {online.data.total} online matches — narrow the search to see others.</p>
+      )}
       {sel && <Detail d={sel} shell={shell} room={room} add={add} onImport={onImport} />}
     </>
   );
 }
 
-function Detail({ d, shell, room, add, onImport }: {
-  d: DriverRow; shell: Shell; room: { id: number; name: string } | null; add: Add; onImport: (filename: string) => Promise<void>;
+/** The picked driver: where it can come from, what it is, and adding it. */
+export function Detail({ d, shell, room, add, onImport }: {
+  d: DriverRow; shell: Shell; room: { id: number; name: string } | null; add: Add; onImport?: (filename: string) => Promise<void>;
 }) {
   const why = shell.writable ? undefined : `${shell.director?.name ?? "This Director"} is read-only`;
   const onlineOnly = best(d) === "online";
   return (
     <div className="drv-detail">
-      <div className="chips">
-        {d.where.map((w) => <Avail key={w} where={w} />)}
-        {d.library?.source === "composer" && <span className="dim small">from Composer's driver folder</span>}
+      <div className="drv-detail-head">
+        <DriverIcon driver={d.filename} proxy={d.primary_proxy ?? categoryOf(d).id} size={28} />
+        <div className="drv-detail-title">
+          <b>{d.name}</b>
+          <span className="dim small">{[d.manufacturer, d.model].filter(Boolean).join(" · ") || "—"}</span>
+        </div>
+        <span className="chips spread">{d.where.map((w) => <Avail key={w} where={w} />)}</span>
       </div>
       <div className="drv-facts">
         <span className="k">File</span><code>{d.filename}</code>
-        <span className="k">By</span><span>{d.manufacturer || "—"}{d.version && <span className="dim"> · v{d.version}</span>}</span>
+        <span className="k">Version</span><span>{d.version ?? "—"}{d.library?.source === "composer" && <span className="dim"> · from Composer's driver folder</span>}</span>
         {d.control_method && <><span className="k">Control</span><span>{d.control_method}</span></>}
         {!!d.proxies.length && <><span className="k">Proxies</span><span>{[...new Set(d.proxies)].join(", ")}</span></>}
         {!!d.search_types.length && <><span className="k">SDDP</span><span className="mono">{d.search_types.join(", ")}</span></>}
@@ -150,7 +154,7 @@ function Detail({ d, shell, room, add, onImport }: {
             <Plus size={13} strokeWidth={1.8} />{room ? `Add to ${room.name}…` : "Add to room…"}
           </button></span>
         </Tip>
-        {onlineOnly && (
+        {onlineOnly && onImport && (
           <button className="act small" onClick={() => void onImport(d.filename)}><FileUp size={13} strokeWidth={1.8} />Import file…</button>
         )}
       </div>
