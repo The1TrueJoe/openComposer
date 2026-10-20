@@ -111,3 +111,62 @@ mod tests {
         assert_eq!(d.version, Some(105));
     }
 }
+
+/// Metadata read from a driver file on disk: a `.c4i` is a `<devicedata>` document, a
+/// `.c4z` is a zip with the same document in `driver.xml`.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct LocalDriver {
+    pub filename: String,
+    pub name: String,
+    pub manufacturer: String,
+    pub model: String,
+    pub version: Option<i64>,
+    pub creator: String,
+    pub control_method: String,
+    pub search_types: Vec<String>,
+    pub proxies: Vec<String>,
+    /// Network connection ids (type 4): what identifying the device binds.
+    pub network_bindings: Vec<u32>,
+    pub size: u64,
+}
+
+impl LocalDriver {
+    pub fn read(filename: &str, bytes: &[u8]) -> Option<Self> {
+        let xml = if filename.to_ascii_lowercase().ends_with(".c4z") {
+            let mut z = zip::ZipArchive::new(std::io::Cursor::new(bytes)).ok()?;
+            let mut f = z.by_name("driver.xml").ok()?;
+            let mut s = String::new();
+            std::io::Read::read_to_string(&mut f, &mut s).ok()?;
+            s
+        } else {
+            String::from_utf8_lossy(bytes).into_owned()
+        };
+        let doc = roxmltree::Document::parse_with_options(&xml, roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() }).ok()?;
+        let root = doc.descendants().find(|n| n.has_tag_name("devicedata"))?;
+        let t = |tag: &str| crate::xml::child_text(root, tag).unwrap_or_default().to_string();
+        let texts = |tag: &str| -> Vec<String> {
+            root.descendants().filter(|n| n.has_tag_name(tag)).filter_map(|n| n.text()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect()
+        };
+        let mut proxies = texts("proxy");
+        proxies.dedup();
+        let network_bindings = root
+            .descendants()
+            .filter(|n| n.has_tag_name("connection"))
+            .filter(|c| crate::xml::child_u32(*c, "type") == Some(4))
+            .filter_map(|c| crate::xml::child_u32(c, "id"))
+            .collect();
+        Some(Self {
+            filename: filename.to_string(),
+            name: t("name"),
+            manufacturer: t("manufacturer"),
+            model: t("model"),
+            version: t("version").parse().ok(),
+            creator: t("creator"),
+            control_method: t("controlmethod"),
+            search_types: texts("search_type"),
+            proxies,
+            network_bindings,
+            size: bytes.len() as u64,
+        })
+    }
+}

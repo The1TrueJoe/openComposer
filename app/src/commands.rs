@@ -180,10 +180,11 @@ pub async fn disconnect_director(app: S<'_>, id: String) -> R<()> {
     Ok(())
 }
 
-/// Find controllers on the LAN by SDDP.
+/// Find controllers on the LAN by SDDP. Controllers answer `*` or their exact type, not a
+/// prefix wildcard, so search for everything and keep the controllers.
 #[tauri::command]
 pub async fn discover_controllers() -> R<Value> {
-    let found = c4::sddp::discover("c4:control4*", std::time::Duration::from_secs(3)).await.map_err(err)?;
+    let found = c4::sddp::discover("*", std::time::Duration::from_secs(3)).await.map_err(err)?;
     Ok(json!(found.into_iter().filter(|a| a.is_controller()).collect::<Vec<_>>()))
 }
 
@@ -221,12 +222,23 @@ pub async fn action(app: S<'_>, name: String, args: Option<Value>) -> R<Value> {
         "load_backup" => actions::load_backup(app, req(a)?, UI_SOURCE).await,
         "driver_status" => actions::driver_status(app, req(a)?).await,
         "install_driver" => actions::install_driver(app, req(a)?, UI_SOURCE).await,
+        "controller_drivers" => actions::controller_drivers(app, self::args(a)?).await,
+        "library_drivers" => Ok(actions::library_drivers(app)),
+        "import_driver" => actions::import_driver(app, req(a)?),
+        "add_driver" => actions::add_driver(app, req(a)?, UI_SOURCE).await,
         other => return Err(format!("unknown action {other}")),
     };
-    if matches!(name.as_str(), "propose_changes" | "load_backup" | "backup_project" | "install_driver") {
+    if matches!(name.as_str(), "propose_changes" | "load_backup" | "backup_project" | "install_driver" | "add_driver" | "import_driver") {
         app.log(UI_SOURCE, &name, String::new(), r.is_ok(), t.elapsed().as_millis() as u64);
     }
     r.map_err(err)
+}
+
+/// The UI reports what it shows, so assistants can resolve "this" and "here".
+#[tauri::command]
+pub async fn set_ui_context(app: S<'_>, context: Value) -> R<()> {
+    *app.ui.write().unwrap() = context;
+    Ok(())
 }
 
 #[tauri::command]

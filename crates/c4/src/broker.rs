@@ -87,6 +87,30 @@ impl Broker {
         }
     }
 
+    /// Every driver file installed on the controller (not proxies), with manufacturer,
+    /// model, version and SDDP search types — the same list Composer reads.
+    pub async fn list_drivers(&self) -> Result<Vec<serde_json::Value>> {
+        let mut out = Vec::new();
+        for agents in [false, true] {
+            let q = format!(r#"{{"isProxy":false,"isAgent":{agents}}}"#);
+            let r = self
+                .http
+                .get(format!("{}/api/v1/drivers/files", self.base))
+                .query(&[("query", q.as_str())])
+                .bearer_auth(&self.token)
+                .send()
+                .await
+                .map_err(|e| self.http_err(e))?;
+            if !r.status().is_success() {
+                return Err(BrokerError::Status { what: "the driver list".into(), status: r.status().as_u16(), body: trim(&r.text().await.unwrap_or_default()) });
+            }
+            if let Ok(serde_json::Value::Array(a)) = r.json().await {
+                out.extend(a);
+            }
+        }
+        Ok(out)
+    }
+
     /// Download a driver file (for complete backups).
     pub async fn download_driver(&self, name: &str) -> Result<Option<Vec<u8>>> {
         let r = self.http.get(self.url(name, "")).bearer_auth(&self.token).send().await.map_err(|e| self.http_err(e))?;

@@ -1,6 +1,6 @@
 /* Network, Connections' "Connect" pane and Zigbee: candidate rows and raw answers. */
-.cand { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 12px; border-bottom: 1px solid #ffffff08; font-size: 12.5px; }
-.cand:hover { background: #ffffff05; }
+.cand { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 7px 12px; border-bottom: 1px solid var(--divider); font-size: 12.5px; }
+.cand:hover { background: var(--hover-soft); }
 .conn-sel { display: flex; flex-direction: column; gap: 2px; padding: 12px; border-bottom: 1px solid var(--line); }
 .conn-sel p { margin: 6px 0 0; }
 .drv-matches { border: 1px solid var(--line); border-radius: 8px; background: var(--bg); overflow: hidden; }
@@ -17,9 +17,9 @@
   overflow-wrap: anywhere; }
 .jt-toggle { border: 0; background: none; color: inherit; cursor: pointer; padding-top: 0; padding-bottom: 0; padding-right: 0; width: 100%; text-align: left; }
 .jt-toggle:hover .jt-key { color: var(--text); }
-.jt-key { color: #a9cbff; }
+.jt-key { color: var(--syn-key); }
 .jt-dim { color: var(--dim); }
-.jt-v.jt-string { color: #c6efd6; }
-.jt-v.jt-number { color: #ffcf85; }
-.jt-v.jt-boolean { color: #d7b4ff; }
+.jt-v.jt-string { color: var(--syn-str); }
+.jt-v.jt-number { color: var(--syn-num); }
+.jt-v.jt-boolean { color: var(--syn-bool); }
 .jt-v.jt-null { color: var(--dim); }

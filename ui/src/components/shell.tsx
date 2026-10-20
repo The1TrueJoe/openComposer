@@ -81,14 +81,10 @@ export function DirectorPicker({ status, info, onManage, onSwitch }: {
 }
 
 export function StatusBar({ status, info }: { status: AppStatus; info: DirectorInfo | null }) {
-  const { mcp, identity } = status;
+  const { identity } = status;
   const active = status.config.directors.find((d) => d.id === status.config.active_director);
   return (
     <footer className="status">
-      <span className="status-item" title={mcp.error ?? "MCP server for Claude Code, Codex and other clients"}>
-        <span className={cx("dot", mcp.listening && "on", mcp.error && "bad")} />
-        MCP {mcp.listening ? <span className="mono">{mcp.url}</span> : <span className="err">{mcp.error ?? "stopped"}</span>}
-      </span>
       {active && (
         <span className="status-item">
           <span className={cx("dot", status.connected.includes(active.id) && "on")} />

@@ -156,6 +156,61 @@ pub struct InstallDriverArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct IdentifyArgs {
+    /// The device's network identity as Director knows it: the `uuid` of a discovered
+    /// physical device (network_status) or the SDDP `<Type>-<Host>`.
+    pub address: String,
+    /// SDDP search type, e.g. Denon:AVR-X2100W.
+    pub search_type: String,
+    /// 1 = IP/SDDP (default), 3 = Zigbee.
+    #[serde(default)]
+    pub address_type: Option<u32>,
+    /// Network binding id; defaults to the driver's declared one (usually 6001).
+    #[serde(default)]
+    pub binding: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct AddDriverArgs {
+    #[serde(default)]
+    pub director: Option<String>,
+    /// Room to put the device in.
+    pub room: u32,
+    /// Driver file name, e.g. receiver_Denon_AVR-X2100W_serial_ip.c4i
+    pub filename: String,
+    /// Name for the new device (defaults to the driver's name).
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Also identify it on the network in the same approval.
+    #[serde(default)]
+    pub identify: Option<IdentifyArgs>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ImportDriverArgs {
+    /// Absolute path of a .c4z or .c4i on this computer.
+    pub path: String,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema, serde::Serialize)]
+pub struct UiShowArgs {
+    /// design, network, programming, agent, backups, activity or settings.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub view: Option<String>,
+    /// Select this item in the project tree (opens Design).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item: Option<u32>,
+    /// Inspector tab: properties, connections, network, variables or events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab: Option<String>,
+    /// Open the approvals drawer.
+    #[serde(default)]
+    pub approvals: bool,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct LoadBackupArgs {
     #[serde(default)]
     pub director: Option<String>,
@@ -274,6 +329,8 @@ pub async fn backup_now(app: &Arc<App>, a: DirectorArg) -> AppResult<Value> {
             for name in snap.project.drivers().into_iter().filter(|d| !c4::c4p::is_builtin_driver(d)) {
                 match b.download_driver(&name).await {
                     Ok(Some(bytes)) => {
+                        // Every backup also stocks the driver library for later installs.
+                        let _ = crate::library::store(app, &name, &bytes);
                         drivers.insert(name, bytes);
                     }
                     _ => missing.push(name),
@@ -403,4 +460,95 @@ pub async fn load_backup(app: &Arc<App>, a: LoadBackupArgs, source: &str) -> App
     let label = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
     let r = approvals::propose(app, a.director.as_deref(), vec![Op::LoadProject { label, xml }], a.reason, source).await?;
     Ok(outcome(&r))
+}
+
+pub async fn controller_drivers(app: &Arc<App>, a: DirectorArg) -> AppResult<Value> {
+    let s = app.session(a.director.as_deref()).await?;
+    let b = app.broker(&s).await?;
+    let list = b.list_drivers().await.map_err(|e| AppError::Other(e.to_string()))?;
+    Ok(json!({ "drivers": list }))
+}
+
+pub fn library_drivers(app: &App) -> Value {
+    json!({ "drivers": crate::library::list(app) })
+}
+
+pub fn import_driver(app: &App, a: ImportDriverArgs) -> AppResult<Value> {
+    let d = crate::library::import(app, std::path::Path::new(&a.path))?;
+    Ok(serde_json::to_value(d).unwrap_or_default())
+}
+
+/// Add a device for a driver file, installing the file first if the controller lacks it
+/// (from the library or another connected Director), optionally identifying it on the
+/// network — one approval for all of it.
+pub async fn add_driver(app: &Arc<App>, a: AddDriverArgs, source: &str) -> AppResult<Value> {
+    let s = app.session(a.director.as_deref()).await?;
+    let mut ops = Vec::new();
+    let mut meta = crate::library::find(app, &a.filename).map(|(_, d)| d.meta);
+    let installed = match app.broker(&s).await {
+        Ok(b) => b.driver_info(&a.filename).await.map_err(|e| AppError::Other(e.to_string()))?,
+        // Without the web API we can't install; Director will say if the file is missing.
+        Err(_) => Some(Value::Null),
+    };
+    if installed.is_none() {
+        let (bytes, from) = match crate::library::find(app, &a.filename) {
+            Some((bytes, d)) => (bytes, if d.source == "composer" { "Composer's driver folder".to_string() } else { "the driver library".to_string() }),
+            None => from_other_director(app, &s.id, &a.filename).await.ok_or_else(|| {
+                AppError::Other(format!(
+                    "{} isn't on this controller, in the driver library, or on another connected Director. \
+                     Get the file (the manufacturer's site or Control4's dealer portal) and import it into the library first.",
+                    a.filename
+                ))
+            })?,
+        };
+        if meta.is_none() {
+            meta = c4::drivers::LocalDriver::read(&a.filename, &bytes);
+        }
+        ops.push(Op::InstallDriver { filename: a.filename.clone(), source: from, bytes });
+    }
+    let name = a
+        .name
+        .clone()
+        .filter(|n| !n.trim().is_empty())
+        .or_else(|| meta.as_ref().map(|m| m.name.clone()).filter(|n| !n.is_empty()))
+        .unwrap_or_else(|| a.filename.clone());
+    ops.push(Op::AddDevice { room: a.room, name, driver: a.filename.clone() });
+    if let Some(id) = a.identify {
+        let binding = id.binding.or_else(|| meta.as_ref().and_then(|m| m.network_bindings.first().copied())).unwrap_or(6001);
+        ops.push(Op::AddNetworkBinding {
+            device: 0,
+            binding,
+            address_type: id.address_type.unwrap_or(1),
+            address: id.address,
+            search_type: id.search_type,
+        });
+    }
+    let r = approvals::propose(app, Some(&s.id), ops, a.reason, source).await?;
+    Ok(outcome(&r))
+}
+
+async fn from_other_director(app: &Arc<App>, except: &str, filename: &str) -> Option<(Vec<u8>, String)> {
+    for id in app.connected().await.into_iter().filter(|id| id != except) {
+        let Ok(s) = app.session(Some(&id)).await else { continue };
+        let Ok(b) = app.broker(&s).await else { continue };
+        if let Ok(Some(bytes)) = b.download_driver(filename).await {
+            let _ = crate::library::store(app, filename, &bytes);
+            return Some((bytes, format!("Director {}", s.director.info.name)));
+        }
+    }
+    None
+}
+
+pub fn ui_context(app: &App) -> Value {
+    let ctx = app.ui.read().unwrap().clone();
+    if ctx.is_null() {
+        json!({ "note": "the openComposer window hasn't reported what it shows (is it open?)" })
+    } else {
+        ctx
+    }
+}
+
+pub fn ui_show(app: &App, a: UiShowArgs) -> AppResult<Value> {
+    app.emit("ui-command", &a);
+    Ok(json!({ "ok": true, "shown": a }))
 }

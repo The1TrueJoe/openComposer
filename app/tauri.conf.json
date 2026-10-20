@@ -18,8 +18,7 @@
         "width": 1440,
         "height": 900,
         "minWidth": 1024,
-        "minHeight": 640,
-        "backgroundColor": "#1e1f24"
+        "minHeight": 640
       }
     ],
     "security": { "csp": null }

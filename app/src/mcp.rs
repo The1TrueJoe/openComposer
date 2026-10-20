@@ -188,6 +188,47 @@ impl OpenComposerMcp {
         self.run("install_driver", s, actions::install_driver(&self.app, a, self.source)).await
     }
 
+    #[tool(description = "Driver files installed on the controller (manufacturer, model, version, SDDP search types).",
+        annotations(read_only_hint = true))]
+    async fn controller_drivers(&self, Parameters(a): Parameters<DirectorArg>) -> Result<CallToolResult, McpError> {
+        self.run("controller_drivers", String::new(), actions::controller_drivers(&self.app, a)).await
+    }
+
+    #[tool(description = "Driver files in openComposer's library (imported, from backups, or Composer's folders on this PC).",
+        annotations(read_only_hint = true))]
+    async fn library_drivers(&self) -> Result<CallToolResult, McpError> {
+        self.run("library_drivers", String::new(), async { Ok(actions::library_drivers(&self.app)) }).await
+    }
+
+    #[tool(description = "Copy a .c4z/.c4i from this computer into openComposer's driver library.",
+        annotations(read_only_hint = false, destructive_hint = false))]
+    async fn import_driver(&self, Parameters(a): Parameters<ImportDriverArgs>) -> Result<CallToolResult, McpError> {
+        let s = a.path.clone();
+        self.run("import_driver", s, async { actions::import_driver(&self.app, a) }).await
+    }
+
+    #[tool(description = "Add a device to a room from a driver file, installing the file first when the controller \
+        doesn't have it (from the library or another Director) and optionally identifying it on the network — one \
+        approval. Use this rather than propose_changes when adding drivers.",
+        annotations(read_only_hint = false, destructive_hint = false))]
+    async fn add_driver(&self, Parameters(a): Parameters<AddDriverArgs>) -> Result<CallToolResult, McpError> {
+        let s = format!("{} → #{}", a.filename, a.room);
+        self.run("add_driver", s, actions::add_driver(&self.app, a, self.source)).await
+    }
+
+    #[tool(description = "What the openComposer window is showing right now: view, selected item (id, name, path), \
+        inspector tab. Use it to resolve \"this\", \"here\", \"the selected device\".", annotations(read_only_hint = true))]
+    async fn ui_context(&self) -> Result<CallToolResult, McpError> {
+        self.run("ui_context", String::new(), async { Ok(actions::ui_context(&self.app)) }).await
+    }
+
+    #[tool(description = "Steer the openComposer window: switch view, select an item in the project tree, pick the \
+        inspector tab, or open the approvals drawer. Use it to show the user what you're talking about.",
+        annotations(read_only_hint = false, destructive_hint = false))]
+    async fn ui_show(&self, Parameters(a): Parameters<UiShowArgs>) -> Result<CallToolResult, McpError> {
+        self.run("ui_show", format!("{:?} {:?} {:?}", a.view, a.item, a.tab), async { actions::ui_show(&self.app, a) }).await
+    }
+
     #[tool(description = "Replace the Director's whole project with a backup from the library (Composer's Load Project). \
         Needs approval; a restore point of the current project is saved first.",
         annotations(read_only_hint = false, destructive_hint = true))]

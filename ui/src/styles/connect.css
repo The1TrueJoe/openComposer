@@ -6,7 +6,7 @@
   display: flex;
   justify-content: center;
   padding: 56px 16px;
-  background: radial-gradient(circle at 50% 18%, #262832 0%, var(--bg) 60%);
+  background: radial-gradient(circle at 50% 18%, var(--glow) 0%, var(--bg) 60%);
 }
 .connect-card {
   width: 100%;
@@ -46,7 +46,7 @@
   cursor: default;
 }
 .connect-row + .connect-row { border-top: 1px solid var(--line); }
-.connect-row:hover { background: #24262d; }
+.connect-row:hover { background: var(--side-hover); }
 .connect-row.last { box-shadow: inset 2px 0 0 var(--accent); }
 .connect-text { display: flex; flex-direction: column; gap: 1px; min-width: 0; flex: 1; }
 .connect-text b { font-weight: 600; }

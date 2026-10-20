@@ -394,7 +394,26 @@ async fn apply_all(app: &Arc<App>, session: &Session, ops: &[Op]) -> (Vec<Applie
         None
     };
     let mut applied = Vec::new();
+    let mut last_device: Option<u32> = None;
     for (i, op) in ops.iter().enumerate() {
+        // Resolve "the device added earlier in this batch" now that Director has its id.
+        let resolved;
+        let op = match op {
+            Op::AddNetworkBinding { device: 0, binding, address_type, address, search_type } => match last_device {
+                Some(d) => {
+                    resolved = Op::AddNetworkBinding {
+                        device: d,
+                        binding: *binding,
+                        address_type: *address_type,
+                        address: address.clone(),
+                        search_type: search_type.clone(),
+                    };
+                    &resolved
+                }
+                None => return (applied, Some("identify refers to a new device, but none was added before it".into())),
+            },
+            other => other,
+        };
         let result = match op {
             Op::InstallDriver { filename, bytes, .. } => match app.broker(session).await {
                 Ok(b) => b
@@ -407,7 +426,12 @@ async fn apply_all(app: &Arc<App>, session: &Session, ops: &[Op]) -> (Vec<Applie
             _ => session.director.apply(op, template.as_deref()).await.map_err(|e| e.to_string()),
         };
         match result {
-            Ok(a) => applied.push(a),
+            Ok(a) => {
+                if matches!(op, Op::AddDevice { .. }) {
+                    last_device = a.created.first().copied();
+                }
+                applied.push(a)
+            }
             Err(e) => {
                 let msg = if ops.len() > 1 {
                     format!("change {} of {} failed, the rest were not attempted: {e}", i + 1, ops.len())

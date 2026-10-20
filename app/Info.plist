@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- macOS 15+ blocks LAN traffic (controller connections, SDDP discovery) for apps that
+       don't declare why they need it; this text is what the permission prompt shows. -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>openComposer connects to your Control4 controllers and finds devices on your network.</string>
+</dict>
+</plist>

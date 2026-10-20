@@ -2,7 +2,7 @@
 
 import type { AppStatus, Approval, DirectorInfo, Op, Outcome, SavedDirector } from "../api";
 
-export type View = "design" | "connections" | "network" | "programming" | "agent" | "backups" | "activity" | "settings";
+export type View = "design" | "network" | "programming" | "agent" | "backups" | "activity" | "settings";
 
 export interface Shell {
   status: AppStatus;

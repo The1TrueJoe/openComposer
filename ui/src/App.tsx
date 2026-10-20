@@ -12,7 +12,6 @@ import { useBackendEvent } from "./lib/ui";
 // One chunk per tab: only one is on screen, and the agent's markdown and the settings forms
 // don't need to be parsed before the project tree can draw.
 const DesignPage = lazy(() => import("./pages/design/DesignPage").then((m) => ({ default: m.DesignPage })));
-const ConnectionsPage = lazy(() => import("./pages/connections/ConnectionsPage").then((m) => ({ default: m.ConnectionsPage })));
 const NetworkPage = lazy(() => import("./pages/network/NetworkPage").then((m) => ({ default: m.NetworkPage })));
 const ProgrammingPage = lazy(() => import("./pages/programming/ProgrammingPage").then((m) => ({ default: m.ProgrammingPage })));
 const AgentPage = lazy(() => import("./pages/agent/AgentPage").then((m) => ({ default: m.AgentPage })));
@@ -22,7 +21,6 @@ const SettingsPage = lazy(() => import("./pages/settings/SettingsPage").then((m)
 
 const VIEWS: { id: View; label: string }[] = [
   { id: "design", label: "Design" },
-  { id: "connections", label: "Connections" },
   { id: "network", label: "Network" },
   { id: "programming", label: "Programming" },
   { id: "agent", label: "Agent" },
@@ -153,7 +151,6 @@ export default function App() {
             <PageBoundary key={view}>
             <Suspense fallback={<Loading />}>
               {view === "design" ? <DesignPage shell={shell} />
-                : view === "connections" ? <ConnectionsPage shell={shell} />
                 : view === "network" ? <NetworkPage shell={shell} />
                 : view === "programming" ? <ProgrammingPage shell={shell} />
                 : view === "agent" ? <AgentPage shell={shell} />

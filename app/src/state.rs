@@ -26,6 +26,9 @@ pub struct App {
     sessions: tokio::sync::Mutex<HashMap<String, Arc<Session>>>,
     pub approvals: Approvals,
     pub agents: crate::agent::Agents,
+    /// What the window is showing (view, selected item, tab), reported by the UI so an
+    /// assistant can answer "this" questions and steer the window.
+    pub ui: RwLock<serde_json::Value>,
     activity: Mutex<VecDeque<Activity>>,
     activity_seq: AtomicU64,
     pub http: reqwest::Client,
@@ -95,6 +98,7 @@ impl App {
             sessions: Default::default(),
             approvals: Approvals::default(),
             agents: Default::default(),
+            ui: RwLock::new(serde_json::Value::Null),
             activity: Mutex::new(VecDeque::new()),
             activity_seq: AtomicU64::new(0),
             http: reqwest::Client::builder()

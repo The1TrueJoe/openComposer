@@ -10,6 +10,7 @@ pub mod bridge;
 pub mod certs;
 pub mod commands;
 pub mod config;
+pub mod library;
 pub mod mcp;
 pub mod proc;
 pub mod state;
@@ -62,6 +63,7 @@ pub fn run() {
             commands::disconnect_director,
             commands::discover_controllers,
             commands::action,
+            commands::set_ui_context,
             commands::approvals,
             commands::decide_approval,
             commands::activity,

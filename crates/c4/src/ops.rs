@@ -33,6 +33,7 @@ pub enum Op {
     },
     RemoveConnection { consumer_device: u32, consumer_binding: u32, class: String },
     /// Identify a device on the network (what Composer's "Identify" does for SDDP).
+    /// `device: 0` means the device added earlier in the same batch.
     AddNetworkBinding { device: u32, binding: u32, address_type: u32, address: String, search_type: String },
     RemoveNetworkBinding { device: u32, binding: u32 },
     /// Set a driver property (what typing into Composer's property grid does).
@@ -142,7 +143,8 @@ impl Op {
                 format!("Disconnect {} #{consumer_binding} ({class})", n(*consumer_device))
             }
             Op::AddNetworkBinding { device, address, search_type, .. } => {
-                format!("Identify {} as {search_type} at {address}", n(*device))
+                let who = if *device == 0 { "the new device".to_string() } else { n(*device) };
+                format!("Identify {who} as {search_type} at {address}")
             }
             Op::RemoveNetworkBinding { device, .. } => format!("Remove network identity of {}", n(*device)),
             Op::SetProperty { device, name, value } => {
@@ -289,6 +291,8 @@ impl Op {
                 }
             }
             Op::AddNetworkBinding { device, binding, address_type, address, search_type } => {
+                // 0 = the device an earlier op in this batch added (it took the last id).
+                let device = &if *device == 0 { p.next_item_id } else { *device };
                 p.item(*device).ok_or(OpError::NoSuchItem(*device))?;
                 p.network_bindings.retain(|n| !(n.device == *device && n.binding == *binding));
                 p.network_bindings.push(NetworkBinding {
