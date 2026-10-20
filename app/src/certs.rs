@@ -81,6 +81,74 @@ pub fn from_pem_files(cert: &Path, key: &Path) -> anyhow::Result<StoredIdentity>
     Ok(StoredIdentity { cert_pem, key_pem, label: file_label(cert) })
 }
 
+/// Whatever files someone picked or dropped: PEM certificates and keys in any
+/// arrangement, or a .p12. Composer keeps the certificate in `composer.pem` and the key
+/// in `composer.key` beside it, so a lone certificate brings its sibling `.key` along.
+pub fn from_files(paths: &[std::path::PathBuf], password: Option<&str>) -> anyhow::Result<StoredIdentity> {
+    let is_p12 = |p: &Path| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("p12") || e.eq_ignore_ascii_case("pfx"));
+    if let Some(p12) = paths.iter().find(|p| is_p12(p)) {
+        return match password {
+            Some(pw) => from_p12(p12, pw),
+            None => anyhow::bail!("NEEDS_PASSWORD: {} is password-protected; enter its password", file_label(p12)),
+        };
+    }
+    let mut certs = String::new();
+    let mut key: Option<String> = None;
+    let mut label = None;
+    let mut take = |p: &Path, blocks: Vec<String>| {
+        for block in blocks {
+            if block.contains("CERTIFICATE-----") {
+                certs.push_str(&block);
+                label.get_or_insert_with(|| file_label(p));
+            } else if block.contains("PRIVATE KEY-----") && key.is_none() {
+                key = Some(block);
+            }
+        }
+    };
+    for p in paths {
+        take(p, read_blocks(p)?);
+    }
+    // composer.pem + composer.key: a certificate on its own brings the .key beside it.
+    let siblings: Vec<_> = paths.iter().map(|p| p.with_extension("key")).filter(|s| s.is_file() && !paths.contains(s)).collect();
+    for s in siblings {
+        take(&s, read_blocks(&s)?);
+    }
+    let names = paths.iter().map(|p| file_label(p)).collect::<Vec<_>>().join(", ");
+    if certs.is_empty() {
+        anyhow::bail!("no certificate in {names}; choose composer.pem (with composer.key) or a .p12");
+    }
+    let Some(key_pem) = key else {
+        anyhow::bail!("{names} holds the certificate but not its private key, and there was no matching .key beside it; choose composer.key too");
+    };
+    let id = StoredIdentity { cert_pem: certs, key_pem, label: label.unwrap_or_default() };
+    id.identity().map_err(|e| anyhow::anyhow!("the certificate and key don't work together: {e}"))?;
+    Ok(id)
+}
+
+fn read_blocks(p: &Path) -> anyhow::Result<Vec<String>> {
+    let text = std::fs::read_to_string(p).map_err(|e| anyhow::anyhow!("can't read {}: {e}", file_label(p)))?;
+    Ok(pem_blocks(&text))
+}
+
+/// `-----BEGIN …-----` … `-----END …-----` blocks, each with its trailing newline.
+fn pem_blocks(text: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur: Option<String> = None;
+    for line in text.lines() {
+        if line.starts_with("-----BEGIN ") {
+            cur = Some(String::new());
+        }
+        if let Some(c) = cur.as_mut() {
+            c.push_str(line.trim_end());
+            c.push('\n');
+        }
+        if line.starts_with("-----END ") {
+            out.extend(cur.take());
+        }
+    }
+    out
+}
+
 pub fn from_p12(path: &Path, password: &str) -> anyhow::Result<StoredIdentity> {
     let data = std::fs::read(path)?;
     let ks = p12_keystore::KeyStore::from_pkcs12(&data, password, p12_keystore::Pkcs12ImportPolicy::Relaxed)

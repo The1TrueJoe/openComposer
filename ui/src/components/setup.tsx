@@ -1,11 +1,13 @@
 /** The two things openComposer needs before it can talk to anything — a client certificate and
- *  a Director — shared by first-run onboarding and Settings. */
+ *  a Director — shared by the connect wizard and Settings. */
 
 import { FileKey2, KeyRound, Radar, Plus, ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { api, errText, type AccessMode, type Announcement, type IdentityStatus } from "../api";
+import { useDropFiles } from "../lib/drop";
 import { baseName, pickFiles } from "../lib/files";
+import { cx } from "../lib/ui";
 import { Select, Spinner } from "./controls";
 
 export const MODES: { value: AccessMode; label: string }[] = [
@@ -13,64 +15,72 @@ export const MODES: { value: AccessMode; label: string }[] = [
   { value: "read_only", label: "Read only" },
 ];
 
+/** Certificate files by drag-and-drop or picking: composer.pem + composer.key (a lone
+ *  composer.pem brings the .key beside it), or a .p12, which then asks for its password. */
 export function CertificateForm({ identity, onChanged }: { identity: IdentityStatus; onChanged: () => void }) {
-  const [p12, setP12] = useState<string | null>(null);
+  const [needsPassword, setNeedsPassword] = useState<string[] | null>(null);
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
-  const run = async (f: () => Promise<void>) => {
+  const importPaths = async (paths: string[], pw: string | null = null) => {
+    if (!paths.length) return;
     setBusy(true);
+    setError(null);
     try {
-      await f();
+      await api.importFiles(paths, pw);
       toast.success("Certificate imported");
-      setP12(null);
+      setNeedsPassword(null);
       setPassword("");
       onChanged();
     } catch (e) {
-      toast.error(errText(e));
+      const msg = errText(e);
+      if (msg.startsWith("NEEDS_PASSWORD")) setNeedsPassword(paths);
+      else setError(msg);
     } finally {
       setBusy(false);
     }
   };
-
-  const importPem = async () => {
-    const files = await pickFiles({ title: "Choose composer.pem (and its .key, if separate)", extensions: ["pem", "key", "crt", "cer"], multiple: true });
-    if (!files.length) return;
-    // Composer's own export is one file with both; some tools write the key separately.
-    const key = files.length > 1 ? files.find((f) => /key/i.test(baseName(f))) ?? files[1] : null;
-    const cert = files.find((f) => f !== key) ?? files[0];
-    await run(() => api.importPem(cert, key));
+  const drop = useDropFiles((paths) => void importPaths(paths), isCertFile);
+  const choose = async () => {
+    const files = await pickFiles({
+      title: "Choose composer.pem and composer.key (or a .p12)",
+      extensions: ["pem", "key", "crt", "cer", "p12", "pfx"],
+      multiple: true,
+    });
+    await importPaths(files);
   };
 
   return (
     <div className="cert">
-      <div className="cert-state">
-        {identity.loaded
-          ? <><ShieldCheck size={16} strokeWidth={1.8} className="ok" /><div><b>{identity.label}</b>
-              {identity.fingerprint && <div className="mono dim">{identity.fingerprint}</div>}</div></>
-          : <><KeyRound size={16} strokeWidth={1.8} className="dim" /><div><b>No certificate</b>
-              <div className="dim">Directors only talk to a client holding a Composer certificate.</div></div></>}
-      </div>
+      {identity.loaded && (
+        <div className="cert-state">
+          <ShieldCheck size={16} strokeWidth={1.8} className="ok" />
+          <div><b>{identity.label}</b>{identity.fingerprint && <div className="mono dim">{identity.fingerprint}</div>}</div>
+        </div>
+      )}
       {identity.error && <p className="err">{identity.error}</p>}
-      <div className="row">
-        <button className="act" disabled={busy} onClick={importPem}><FileKey2 size={14} strokeWidth={1.8} />Import PEM…</button>
-        <button className="act" disabled={busy} onClick={async () => {
-          const [f] = await pickFiles({ title: "Choose a .p12 certificate", extensions: ["p12", "pfx"] });
-          if (f) setP12(f);
-        }}><FileKey2 size={14} strokeWidth={1.8} />Import .p12…</button>
-        {busy && <Spinner />}
+      <div ref={drop.ref} {...drop.handlers} className={cx("cert-drop", drop.over && "over")}>
+        {busy ? <Spinner /> : <FileKey2 size={22} strokeWidth={1.5} />}
+        <b>{identity.loaded ? "Drop a different certificate here" : "Drop composer.pem and composer.key here"}</b>
+        <span className="dim">or a <code>.p12</code> export — kept encrypted on this computer, with the key in the OS keychain</span>
+        <button className="act" disabled={busy} onClick={choose}><FileKey2 size={14} strokeWidth={1.8} />Choose files…</button>
       </div>
-      {p12 && (
-        <form className="row p12" onSubmit={(e) => { e.preventDefault(); void run(() => api.importP12(p12, password)); }}>
-          <code>{baseName(p12)}</code>
+      {error && <p className="err">{error}</p>}
+      {needsPassword && (
+        <form className="row p12" onSubmit={(e) => { e.preventDefault(); void importPaths(needsPassword, password); }}>
+          <KeyRound size={14} strokeWidth={1.8} className="dim" />
+          <code>{needsPassword.map(baseName).join(", ")}</code>
           <input type="password" placeholder="Password" value={password} autoFocus onChange={(e) => setPassword(e.target.value)} />
           <button className="act primary" disabled={busy}>Import</button>
-          <button type="button" className="act quiet" onClick={() => setP12(null)}>Cancel</button>
+          <button type="button" className="act quiet" onClick={() => setNeedsPassword(null)}>Cancel</button>
         </form>
       )}
     </div>
   );
 }
+
+const isCertFile = (p: string) => /\.(pem|key|crt|cer|p12|pfx)$/i.test(p);
 
 /** Add a Director by address, or pick one SDDP found on this network. */
 export function AddDirectorForm({ onAdded }: { onAdded: (id: string) => void }) {

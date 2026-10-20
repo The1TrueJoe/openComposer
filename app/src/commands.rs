@@ -69,6 +69,15 @@ pub async fn import_identity_pem(app: S<'_>, cert: String, key: Option<String>) 
     app.set_identity(id).map_err(err)
 }
 
+/// Any picked or dropped certificate files (see `certs::from_files`). A .p12 without a
+/// password fails with a message starting `NEEDS_PASSWORD:` so the UI can ask for it.
+#[tauri::command]
+pub async fn import_identity_files(app: S<'_>, paths: Vec<String>, password: Option<String>) -> R<()> {
+    let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
+    let id = certs::from_files(&paths, password.as_deref()).map_err(err)?;
+    app.set_identity(id).map_err(err)
+}
+
 #[tauri::command]
 pub async fn import_identity_p12(app: S<'_>, path: String, password: String) -> R<()> {
     let id = certs::from_p12(&PathBuf::from(path), &password).map_err(err)?;

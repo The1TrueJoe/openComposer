@@ -54,6 +54,7 @@ pub fn run() {
             commands::app_status,
             commands::import_identity_pem,
             commands::import_identity_p12,
+            commands::import_identity_files,
             commands::add_director,
             commands::update_director,
             commands::remove_director,

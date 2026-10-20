@@ -1,9 +1,10 @@
 import { FileUp } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { api, errText, isMock, type AddDriverArgs } from "../../api";
+import { api, errText, type AddDriverArgs } from "../../api";
 import { Tip } from "../../components/Dialogs";
 import { Tabs } from "../../components/controls";
+import { useDropFiles } from "../../lib/drop";
 import { baseName, pickFiles } from "../../lib/files";
 import type { Shell } from "../../lib/shell";
 import { cx, plural, useLoad } from "../../lib/ui";
@@ -103,7 +104,7 @@ export function AddDevices({ shell, room, rooms, focus, onAdded }: {
     await importPaths(paths);
   };
 
-  const drop = useDropFiles(importPaths);
+  const drop = useDropFiles(importPaths, isDriverFile);
 
   return (
     <div ref={drop.ref} className={cx("add-pane", drop.over && "drop-over")} {...drop.handlers}>
@@ -124,57 +125,4 @@ export function AddDevices({ shell, room, rooms, focus, onAdded }: {
       {element}
     </div>
   );
-}
-
-/** Files dragged onto the pane. In the app the webview reports drops with real paths (and the
- *  page never sees an HTML drop); the browser mock only gets file names, so it makes up paths
- *  the mock backend accepts. */
-function useDropFiles(onPaths: (paths: string[]) => void) {
-  const ref = useRef<HTMLDivElement>(null);
-  const [over, setOver] = useState(false);
-  const handler = useRef(onPaths);
-  handler.current = onPaths;
-
-  useEffect(() => {
-    if (isMock) return;
-    let off: (() => void) | undefined;
-    let gone = false;
-    let carrying = false;
-    // Positions are physical pixels of the window; the pane's rect is CSS pixels.
-    const inside = (p: { x: number; y: number }) => {
-      const r = ref.current?.getBoundingClientRect();
-      const x = p.x / devicePixelRatio, y = p.y / devicePixelRatio;
-      return !!r && x >= r.left && x <= r.right && y >= r.top && y <= r.bottom;
-    };
-    void import("@tauri-apps/api/webview").then(({ getCurrentWebview }) => getCurrentWebview().onDragDropEvent((e) => {
-      const p = e.payload;
-      if (p.type === "leave") { carrying = false; setOver(false); return; }
-      if (p.type === "enter") carrying = p.paths.some(isDriverFile);
-      if (p.type === "drop") {
-        setOver(false);
-        if (inside(p.position)) handler.current(p.paths);
-        carrying = false;
-        return;
-      }
-      setOver(carrying && inside(p.position));
-    })).then((u) => { if (gone) u(); else off = u; });
-    return () => { gone = true; off?.(); };
-  }, []);
-
-  const handlers = isMock ? {
-    onDragOver: (e: React.DragEvent) => {
-      if (!e.dataTransfer.types.includes("Files")) return;
-      e.preventDefault();
-      setOver(true);
-    },
-    onDragLeave: (e: React.DragEvent) => {
-      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setOver(false);
-    },
-    onDrop: (e: React.DragEvent) => {
-      e.preventDefault();
-      setOver(false);
-      handler.current([...e.dataTransfer.files].map((f) => `/Users/you/Downloads/${f.name}`));
-    },
-  } : {};
-  return { ref, over, handlers };
 }

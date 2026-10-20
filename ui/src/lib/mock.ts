@@ -926,6 +926,14 @@ async function handle(cmd: string, a: Args): Promise<unknown> {
       connected.delete(String(a.id));
       emit("director", { id: String(a.id), connected: false });
       return null;
+    case "import_identity_files": {
+      const paths = (a.paths as string[]) ?? [];
+      if (paths.some((p) => /\.(p12|pfx)$/i.test(p)) && !a.password) throw "NEEDS_PASSWORD: that .p12 is password-protected; enter its password";
+      if (!paths.some((p) => /\.(pem|crt|cer|p12|pfx)$/i.test(p))) throw `no certificate in ${paths.join(", ")}; choose composer.pem (with composer.key) or a .p12`;
+      await sleep(300);
+      identity = { loaded: true, label: `${paths[0].split(/[\\/]/).pop()} (Telaak Integration)`, fingerprint: "a4:9e:20:7c:1b:f3:58:d2:6a:0e", error: null };
+      return null;
+    }
     case "discover_controllers":
       await sleep(1500);
       return SDDP.filter((s) => s.device_type.startsWith("c4:control4_")).concat([

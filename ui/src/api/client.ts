@@ -52,6 +52,9 @@ export const api = {
   status: () => call<AppStatus>("app_status"),
   importPem: (cert: string, key: string | null) => call<void>("import_identity_pem", { cert, key }),
   importP12: (path: string, password: string) => call<void>("import_identity_p12", { path, password }),
+  /** Any picked/dropped certificate files; a .p12 without a password rejects with a message
+   *  starting "NEEDS_PASSWORD:". */
+  importFiles: (paths: string[], password: string | null = null) => call<void>("import_identity_files", { paths, password }),
 
   addDirector: (name: string, host: string, mode: AccessMode) => call<SavedDirector>("add_director", { name, host, mode }),
   updateDirector: (id: string, patch: { name?: string; host?: string; mode?: AccessMode; webApi?: boolean; webApiAddr?: string }) =>
