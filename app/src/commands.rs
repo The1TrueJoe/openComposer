@@ -184,8 +184,47 @@ pub async fn disconnect_director(app: S<'_>, id: String) -> R<()> {
 /// prefix wildcard, so search for everything and keep the controllers.
 #[tauri::command]
 pub async fn discover_controllers() -> R<Value> {
-    let found = c4::sddp::discover("*", std::time::Duration::from_secs(3)).await.map_err(err)?;
-    Ok(json!(found.into_iter().filter(|a| a.is_controller()).collect::<Vec<_>>()))
+    let found: Vec<_> = c4::sddp::discover("*", std::time::Duration::from_secs(3))
+        .await
+        .map_err(err)?
+        .into_iter()
+        .filter(|a| a.is_controller())
+        .collect();
+    // Every controller answers SDDP, but only the primary runs a Director; secondaries
+    // report "disabled" on the unauthenticated status endpoint (and don't listen on 5021).
+    let http = reqwest::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .timeout(std::time::Duration::from_secs(3))
+        .build()
+        .map_err(err)?;
+    let mut out = Vec::new();
+    let statuses = futures_status(&http, found.iter().map(|a| a.address.clone()).collect()).await;
+    for (a, director) in found.into_iter().zip(statuses) {
+        let mut v = serde_json::to_value(a).map_err(err)?;
+        v["director"] = json!(director);
+        out.push(v);
+    }
+    // Controllers running a Director first.
+    out.sort_by_key(|v| v["director"] != "connected");
+    Ok(json!(out))
+}
+
+/// `director` from each controller's `GET /api/v1/status`, concurrently; `None` if it
+/// didn't answer.
+async fn futures_status(http: &reqwest::Client, addrs: Vec<String>) -> Vec<Option<String>> {
+    let mut set = tokio::task::JoinSet::new();
+    for (i, addr) in addrs.iter().enumerate() {
+        let (http, addr) = (http.clone(), addr.clone());
+        set.spawn(async move {
+            let v: Option<Value> = async { http.get(format!("https://{addr}/api/v1/status")).send().await.ok()?.json().await.ok() }.await;
+            (i, v.and_then(|v| v["director"].as_str().map(String::from)))
+        });
+    }
+    let mut out = vec![None; addrs.len()];
+    while let Some(Ok((i, d))) = set.join_next().await {
+        out[i] = d;
+    }
+    out
 }
 
 fn args<T: serde::de::DeserializeOwned + Default>(v: Value) -> R<T> {

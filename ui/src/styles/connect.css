@@ -60,3 +60,7 @@
   padding-top: 6px;
   border-top: 1px solid var(--line);
 }
+
+/* Secondary controllers: listed so nothing looks missing, but there's nothing to open. */
+.connect-row.secondary { opacity: .6; }
+.connect-row.secondary:hover { background: var(--side); }

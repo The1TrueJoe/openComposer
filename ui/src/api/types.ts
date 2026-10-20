@@ -84,6 +84,9 @@ export interface Announcement {
   config_url: string;
   max_age: number | null;
   headers: Record<string, string>;
+  /** Controllers only: the Director's state from the controller itself ("connected" on
+   *  the primary, "disabled" on secondaries); null if it didn't say. */
+  director?: string | null;
 }
 
 // ---- project views (app/src/views.rs) --------------------------------------------------------

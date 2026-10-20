@@ -125,6 +125,19 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
               : (
                 <div className="connect-list">
                   {found.map((f) => {
+                    if (f.director === "disabled") {
+                      return (
+                        <div key={f.host || f.address} className="connect-row secondary">
+                          <span className="dot" />
+                          <div className="connect-text">
+                            <b>{f.host || f.model}</b>
+                            <span className="dim mono">{f.address} · {f.model || f.device_type}</span>
+                            <span className="dim">Secondary controller — no Director here; the project lives on the main controller.</span>
+                          </div>
+                          <span className="tag">secondary</span>
+                        </div>
+                      );
+                    }
                     const s = savedFor(f);
                     const key = s?.id ?? `found:${f.address}`;
                     const on = !!s && status.connected.includes(s.id);

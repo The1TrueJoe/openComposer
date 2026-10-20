@@ -930,7 +930,11 @@ async function handle(cmd: string, a: Args): Promise<unknown> {
       await sleep(1500);
       return SDDP.filter((s) => s.device_type.startsWith("c4:control4_")).concat([
         { host: "c4-core3-000fff445566", address: "192.168.1.11", device_type: "c4:control4_core3:C4-CORE3", manufacturer: "Control4", model: "CORE3", driver: "" },
-      ]).map((s) => ({ kind: "200 OK", primary_proxy: "", proxies: [], config_url: "", max_age: 1800, headers: {}, ...s }));
+      ]).map((s) => ({
+        kind: "200 OK", primary_proxy: "", proxies: [], config_url: "", max_age: 1800, headers: {}, ...s,
+        // The CORE3 plays a secondary controller: no Director of its own.
+        director: s.address === "192.168.1.11" ? "disabled" : "connected",
+      }));
     case "action":
       return act(String(a.name), (a.args as Args | null) ?? {});
     case "set_ui_context":
