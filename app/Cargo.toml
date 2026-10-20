@@ -1,0 +1,6 @@
+[package]
+name = "opencomposer"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

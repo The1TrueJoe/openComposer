@@ -1,0 +1,122 @@
+<currentstate>
+  <properties>
+    <iditemcurrent>120</iditemcurrent>
+  </properties>
+  <systemitems>
+    <item majorversion="3" minorversion="3" buildnumber="3" buildrevision="660628">
+      <id>1</id>
+      <name>Sample House</name>
+      <type>1</type>
+      <created_datetime>2024-01-01T00:00:00Z</created_datetime>
+      <itemdata><uuid>00000000-0000-0000-0000-000000000001</uuid><project_version>10</project_version></itemdata>
+      <subitems>
+        <item>
+          <id>2</id><name>Home</name><type>2</type>
+          <itemdata><large_image>locations_lg/site.gif</large_image></itemdata>
+          <subitems>
+            <item>
+              <id>3</id><name>House</name><type>3</type>
+              <subitems>
+                <item>
+                  <id>4</id><name>Main</name><type>4</type>
+                  <subitems>
+                    <item>
+                      <id>10</id><name>Living</name><type>8</type>
+                      <itemdata><config_data_file>roomdevice.c4i</config_data_file></itemdata>
+                      <state />
+                      <c4i>roomdevice.c4i</c4i>
+                      <subitems>
+                        <item>
+                          <id>20</id><name>Living TV</name><type>6</type>
+                          <itemdata><config_data_file>tv_samsung_ip.c4z</config_data_file></itemdata>
+                          <state>&lt;lua_gen_persisting&gt;&lt;properties&gt;&lt;property&gt;&lt;name&gt;IP Address&lt;/name&gt;&lt;value&gt;192.168.1.50&lt;/value&gt;&lt;/property&gt;&lt;property&gt;&lt;name&gt;Debug Mode&lt;/name&gt;&lt;value&gt;Off&lt;/value&gt;&lt;/property&gt;&lt;/properties&gt;&lt;/lua_gen_persisting&gt;</state>
+                          <c4i>tv_samsung_ip.c4z</c4i>
+                          <subitems>
+                            <item>
+                              <id>22</id><name>TV</name><type>7</type>
+                              <itemdata><config_data_file>tv.c4i</config_data_file></itemdata>
+                              <state /><c4i>tv.c4i</c4i>
+                            </item>
+                          </subitems>
+                        </item>
+                        <item>
+                          <id>21</id><name>Receiver</name><type>6</type>
+                          <itemdata><config_data_file>receiver_denon_ip.c4i</config_data_file></itemdata>
+                          <state />
+                          <c4i>receiver_denon_ip.c4i</c4i>
+                        </item>
+                      </subitems>
+                    </item>
+                    <item>
+                      <id>11</id><name>Kitchen</name><type>8</type>
+                      <itemdata><config_data_file>roomdevice.c4i</config_data_file></itemdata>
+                      <state /><c4i>roomdevice.c4i</c4i>
+                    </item>
+                  </subitems>
+                </item>
+              </subitems>
+            </item>
+          </subitems>
+        </item>
+        <item>
+          <id>100100</id><name>Scheduler</name><type>9</type>
+          <itemdata><config_data_file>control4_agent_scheduler.c4i</config_data_file></itemdata>
+          <state /><c4i>control4_agent_scheduler.c4i</c4i>
+        </item>
+      </subitems>
+    </item>
+  </systemitems>
+  <bindings>
+    <boundbinding>
+      <deviceid>21</deviceid>
+      <bindingid>2000</bindingid>
+      <boundconsumers>
+        <bound>
+          <deviceid>20</deviceid>
+          <bindingid>1000</bindingid>
+          <name>HDMI 1</name>
+          <boundclasses><boundclass>HDMI</boundclass></boundclasses>
+        </bound>
+      </boundconsumers>
+    </boundbinding>
+  </bindings>
+  <networkbindings>
+    <networkbinding>
+      <deviceid>20</deviceid>
+      <networkbindingid>6001</networkbindingid>
+      <addresstype>1</addresstype>
+      <addr>192.168.1.50</addr>
+      <uuid>Samsung:QN75-tv-00:11:22:33:44:55</uuid>
+      <ssdptype>Samsung:QN75</ssdptype>
+      <status>online</status>
+    </networkbinding>
+  </networkbindings>
+  <variables>
+    <variable deviceid="100001" variableid="1125" name="Garage Timer" type="4" readonly="0" hidden="0" description="">1</variable>
+  </variables>
+  <event_mgr>
+    <event>
+      <deviceid>20</deviceid>
+      <eventid>1</eventid>
+      <codeitem>
+        <id>0</id><device>0</device><type>1</type><display /><enabled>1</enabled><creator>0</creator><creatorstate /><cmdcond />
+        <subitems>
+          <codeitem>
+            <id>1</id><device>20</device><type>1</type>
+            <display>Turn on Living TV</display><enabled>1</enabled><creator>0</creator><creatorstate />
+            <cmdcond><devicecommand owneridtype="" owneriditem="-1"><command>ON</command><params /></devicecommand></cmdcond>
+            <subitems>
+              <codeitem>
+                <id>2</id><device>21</device><type>1</type>
+                <display>Set Receiver input to HDMI 1</display><enabled>1</enabled><creator>0</creator><creatorstate />
+                <cmdcond><devicecommand owneridtype="" owneriditem="-1"><command>INPUT</command><params /></devicecommand></cmdcond>
+                <subitems />
+              </codeitem>
+            </subitems>
+          </codeitem>
+        </subitems>
+      </codeitem>
+    </event>
+  </event_mgr>
+  <plugins />
+</currentstate>
