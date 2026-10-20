@@ -47,5 +47,5 @@ OPENCOMPOSER_DATA=/tmp/oc C4_CERT=… C4_KEY=… cargo run -p opencomposer --exa
   `ssh -L 18443:127.0.0.1:8443 admin@optiplex.local` and `VIRTUAL_WEB_API=127.0.0.1:18443`).
   Not yet used against the real EA-1. Backups still lack mm.db / identity.db / images
   (served over SMB by the controller).
-- Property edits, Z-Wave and programming edits haven't been captured from Composer yet.
+- Z-Wave and programming edits haven't been captured from Composer yet.
 - Codex agent path is unverified (no Codex on the dev machine).

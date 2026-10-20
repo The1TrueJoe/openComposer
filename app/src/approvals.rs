@@ -137,6 +137,7 @@ pub async fn propose(
     let before = session.snapshot(true).await?;
     let catalog = session.catalog(false).await?;
     check_connections(&ops, &catalog, &before.project)?;
+    check_properties(&ops, &catalog, &before.project)?;
     check_drivers(app, &session, &ops).await?;
     let names = catalog.names();
     let mut predicted = before.project.clone();
@@ -258,6 +259,36 @@ async fn check_drivers(app: &Arc<App>, session: &Session, ops: &[Op]) -> AppResu
                 "{d} isn't on this controller yet; install it first with install_driver \
                  (from a file on this computer, a backup that contains it, or another Director)"
             )));
+        }
+    }
+    Ok(())
+}
+
+/// Property values are checked against the driver's declared schema, as Composer's
+/// property grid would restrict them.
+fn check_properties(ops: &[Op], cat: &c4::Catalog, p: &c4::Project) -> AppResult<()> {
+    for op in ops {
+        let Op::SetProperty { device, name, value } = op else { continue };
+        let who = p.name_of(*device);
+        let Some(def) = cat.devices.get(device).and_then(|d| d.properties.iter().find(|x| x.name == *name)) else {
+            return Err(AppError::Other(format!("“{who}” has no property “{name}” (get_item lists its properties)")));
+        };
+        if def.readonly {
+            return Err(AppError::Other(format!("“{who}” property “{name}” is read-only; the driver sets it")));
+        }
+        if !def.items.is_empty() && !def.items.iter().any(|i| i == value) {
+            return Err(AppError::Other(format!("“{name}” must be one of: {}", def.items.join(", "))));
+        }
+        if def.prop_type.contains("INTEGER") || def.prop_type.contains("FLOAT") {
+            let v: f64 = value.parse().map_err(|_| AppError::Other(format!("“{name}” needs a number")))?;
+            let bound = |b: &Option<String>| b.as_deref().and_then(|x| x.parse::<f64>().ok());
+            if bound(&def.minimum).is_some_and(|m| v < m) || bound(&def.maximum).is_some_and(|m| v > m) {
+                return Err(AppError::Other(format!(
+                    "“{name}” must be between {} and {}",
+                    def.minimum.clone().unwrap_or_default(),
+                    def.maximum.clone().unwrap_or_default()
+                )));
+            }
         }
     }
     Ok(())
