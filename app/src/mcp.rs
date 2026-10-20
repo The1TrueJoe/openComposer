@@ -11,7 +11,7 @@ use std::time::Instant;
 use axum::extract::{Request, State};
 use axum::http::StatusCode;
 use axum::middleware::{self, Next};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::{CallToolResult, Implementation, ServerCapabilities, ServerConfig};
@@ -261,7 +261,7 @@ impl ServerHandler for OpenComposerMcp {
     }
 }
 
-async fn require_token(State(app): State<Arc<App>>, req: Request, next: Next) -> Result<Response, StatusCode> {
+async fn require_token(State(app): State<Arc<App>>, req: Request, next: Next) -> Response {
     let expected = app.config.read().unwrap().mcp.token.clone();
     let header = req
         .headers()
@@ -273,11 +273,14 @@ async fn require_token(State(app): State<Arc<App>>, req: Request, next: Next) ->
         q.split('&').find_map(|kv| kv.strip_prefix("token=")).map(str::to_string)
     });
     let given = header.or(query).unwrap_or_default();
-    if constant_time_eq(given.as_bytes(), expected.as_bytes()) {
-        Ok(next.run(req).await)
-    } else {
-        Err(StatusCode::UNAUTHORIZED)
+    // The fixed token (stdio bridge, in-app agent, header-configured clients) or one issued
+    // through sign-in.
+    if constant_time_eq(given.as_bytes(), expected.as_bytes()) || (!given.is_empty() && crate::oauth::valid(&app, &given)) {
+        return next.run(req).await;
     }
+    // Tell MCP clients where to sign in (they then open the browser to /authorize).
+    let challenge = crate::oauth::challenge(req.headers());
+    (StatusCode::UNAUTHORIZED, [(axum::http::header::WWW_AUTHENTICATE, challenge)]).into_response()
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -351,7 +354,11 @@ pub async fn restart(app: Arc<App>) {
     let router = axum::Router::new()
         .nest_service("/mcp", service("MCP client"))
         .nest_service("/agent/mcp", service("In-app agent"))
-        .layer(middleware::from_fn_with_state(app.clone(), require_token));
+        .layer(middleware::from_fn_with_state(app.clone(), require_token))
+        // Driver web tabs: guarded by a per-launch key in the path, not the bearer token.
+        .merge(crate::webui::router(app.clone()))
+        // Sign-in for MCP clients; approval happens in the app window.
+        .merge(crate::oauth::router(app.clone()));
     set_status(&app, McpStatus { listening: true, url, lan: cfg.lan, error: fallback, port });
     let task = tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, router).await {

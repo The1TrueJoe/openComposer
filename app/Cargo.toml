@@ -5,31 +5,36 @@ edition.workspace = true
 
 [dependencies]
 anyhow = "1.0.104"
-axum = "0.8.9"
+axum = { version = "0.8.9", features = ["ws"] }
 base64 = "0.23.1"
 c4 = { version = "0.1.0", path = "../crates/c4" }
 chacha20poly1305 = "0.11.0"
 chrono = { version = "0.4.45", features = ["serde"] }
 directories = "6.0.0"
+futures-util = "0.3.34"
 hex = "0.4.3"
 keyring = "4.2.0"
 p12-keystore = "0.4.1"
 rand = "0.10.3"
 reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
 rmcp = { version = "3.6.0", features = ["server", "transport-streamable-http-server", "macros", "schemars"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 schemars = "1.2.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
+sha2 = "0.11.1"
 tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-single-instance = "2"
 thiserror = "2.0.21"
 tokio = { version = "1.54.0", features = ["full"] }
+tokio-tungstenite = { version = "0.30.0", features = ["rustls-tls-webpki-roots"] }
 tower = "0.5.3"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 uuid = { version = "1.28.0", features = ["v4", "serde"] }
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

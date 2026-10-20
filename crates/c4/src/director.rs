@@ -92,6 +92,15 @@ pub struct DeviceInfo {
     /// `<small image_source="c4z">icons/device_sm.png</small>`: where the driver's own icon
     /// lives inside its package (`www/<path>`). `None` for drivers using Composer's images.
     pub icon: Option<String>,
+    /// Web tabs the driver declares (`<tabs><tab name file/>`): pages in its www folder.
+    pub tabs: Vec<DriverTab>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct DriverTab {
+    pub name: String,
+    /// Path inside the package's www folder, e.g. `html/index.html`.
+    pub file: String,
 }
 
 /// Driver definitions for every item, keyed by item id.
@@ -266,6 +275,11 @@ impl Director {
                 .and_then(|n| n.text())
                 .map(|t| t.trim().to_string())
                 .filter(|t| !t.is_empty());
+            info.tabs = dd
+                .descendants()
+                .filter(|n| n.has_tag_name("tab"))
+                .filter_map(|t| Some(DriverTab { name: t.attribute("name")?.to_string(), file: t.attribute("file")?.to_string() }))
+                .collect();
             if let Some(cmds) = child(dd, "commands") {
                 for c in cmds.children().filter(|c| c.has_tag_name("command")) {
                     info.commands.push(CommandDef {

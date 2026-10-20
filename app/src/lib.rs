@@ -12,9 +12,11 @@ pub mod commands;
 pub mod config;
 pub mod library;
 pub mod mcp;
+pub mod oauth;
 pub mod proc;
 pub mod state;
 pub mod views;
+pub mod webui;
 
 use tauri::{Emitter, Manager};
 use tauri_plugin_notification::NotificationExt;
@@ -65,6 +67,10 @@ pub fn run() {
             commands::discover_controllers,
             commands::action,
             commands::set_ui_context,
+            commands::mcp_auth_pending,
+            commands::mcp_auth_decide,
+            commands::mcp_grants,
+            commands::mcp_revoke,
             commands::approvals,
             commands::decide_approval,
             commands::activity,

@@ -696,3 +696,15 @@ pub async fn device_state(app: &Arc<App>, a: StateArgs) -> AppResult<Value> {
     let v = s.director.read("GetVariablesByDevice", &[("iddevice".into(), json!(a.device))]).await?;
     Ok(json!({ "device": a.device, "variables": v }))
 }
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct TabsArgs {
+    #[serde(default)]
+    pub director: Option<String>,
+    pub device: u32,
+}
+
+/// The web tabs a device's driver declares, as URLs to open in the app (see `webui`).
+pub async fn driver_tabs(app: &Arc<App>, a: TabsArgs) -> AppResult<Value> {
+    crate::webui::tabs(app, a.director.as_deref(), a.device).await
+}

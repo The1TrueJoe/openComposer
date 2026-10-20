@@ -235,3 +235,7 @@ pub fn programming(p: &Project, cat: &Catalog, device: Option<u32>) -> Value {
         .collect();
     json!({ "events": events })
 }
+
+pub fn html_escape(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}

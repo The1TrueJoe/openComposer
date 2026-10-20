@@ -368,6 +368,19 @@ pub fn tls_config(identity: &Identity, pin: Option<&str>) -> Result<(rustls::Cli
     Ok((config, seen))
 }
 
+/// TLS for a controller's web API when a token, not a client certificate, authenticates:
+/// the controller's self-signed certificate is accepted (pinned when `pin` is given).
+pub fn web_tls_config(pin: Option<&str>) -> rustls::ClientConfig {
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let verifier = PinVerifier { pin: pin.map(|p| p.to_ascii_lowercase()), seen: Default::default(), provider: provider.clone() };
+    rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .expect("ring supports the default TLS versions")
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(verifier))
+        .with_no_client_auth()
+}
+
 /// Try every address a name resolves to at once and keep the first that answers.
 /// `.local` names often resolve to an IPv6 link-local address that never connects,
 /// or to an interface on another subnet, before the one that works.

@@ -45,6 +45,22 @@ pub struct McpConfig {
     /// Listen on all interfaces (token still required) instead of loopback only.
     pub lan: bool,
     pub token: String,
+    /// Clients that signed in with OAuth (see `oauth.rs`), each revocable.
+    #[serde(default)]
+    pub grants: Vec<Grant>,
+}
+
+/// An MCP client signed in through the browser and approved in the app. Only hashes of
+/// its tokens are kept.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Grant {
+    pub id: String,
+    pub client_name: String,
+    pub access_hash: String,
+    pub refresh_hash: String,
+    pub created: chrono::DateTime<chrono::Utc>,
+    #[serde(default)]
+    pub last_used: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -76,7 +92,7 @@ impl Default for Config {
         Self {
             directors: vec![],
             active_director: None,
-            mcp: McpConfig { port: DEFAULT_MCP_PORT, lan: true, token: new_token() },
+            mcp: McpConfig { port: DEFAULT_MCP_PORT, lan: true, token: new_token(), grants: vec![] },
             agent: AgentConfig { provider: Provider::Claude, claude_path: None, codex_path: None, model: None },
         }
     }

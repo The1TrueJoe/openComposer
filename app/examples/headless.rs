@@ -37,7 +37,7 @@ async fn main() -> anyhow::Result<()> {
     })?;
     mcp::restart(app.clone()).await;
     let cfg = app.config();
-    println!("MCP {} token {}", mcp::status().url, cfg.mcp.token);
+    println!("MCP {} token {} webui-key {}", mcp::status().url, cfg.mcp.token, opencomposer::webui::key());
 
     // Auto-approver for the writable (virtual) Director only.
     let a2 = app.clone();
@@ -48,6 +48,11 @@ async fn main() -> anyhow::Result<()> {
                     println!("auto-approving: {:?}", ap.descriptions);
                     a2.approvals.decide(&ap.id, true, None);
                 }
+            }
+            // Stand-in for the person clicking Allow on an MCP sign-in.
+            for r in opencomposer::oauth::pending() {
+                println!("auto-approving sign-in for {}", r.client_name);
+                opencomposer::oauth::decide(&r.id, true);
             }
             tokio::time::sleep(Duration::from_millis(300)).await;
         }

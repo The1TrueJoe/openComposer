@@ -66,6 +66,11 @@ impl Broker {
         Ok(Self { base, http, token, fingerprint })
     }
 
+    /// The bearer token (driver web tabs are opened with it, as Composer does).
+    pub fn token(&self) -> &str {
+        &self.token
+    }
+
     fn url(&self, name: &str, suffix: &str) -> String {
         let enc: String = name
             .bytes()

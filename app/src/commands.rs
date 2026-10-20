@@ -277,6 +277,7 @@ pub async fn action(app: S<'_>, name: String, args: Option<Value>) -> R<Value> {
         "driver_icons" => actions::driver_icons(app, self::args(a)?).await,
         "send_command" => actions::send_command(app, req(a)?, UI_SOURCE).await,
         "device_state" => actions::device_state(app, req(a)?).await,
+        "driver_tabs" => actions::driver_tabs(app, req(a)?).await,
         other => return Err(format!("unknown action {other}")),
     };
     if matches!(name.as_str(), "propose_changes" | "load_backup" | "backup_project" | "install_driver" | "add_driver" | "import_driver" | "send_command") {
@@ -380,4 +381,42 @@ pub async fn agent_stop(app: S<'_>, id: String) -> R<()> {
 pub async fn agent_delete(app: S<'_>, id: String) -> R<()> {
     app.agents.remove(&id).await;
     Ok(())
+}
+
+/// MCP clients waiting for sign-in approval.
+#[tauri::command]
+pub async fn mcp_auth_pending() -> R<Vec<crate::oauth::AuthRequest>> {
+    Ok(crate::oauth::pending())
+}
+
+#[tauri::command]
+pub async fn mcp_auth_decide(app: S<'_>, id: String, approve: bool) -> R<bool> {
+    let ok = crate::oauth::decide(&id, approve);
+    app.emit("mcp-auth-decided", json!({ "id": id, "approve": approve }));
+    Ok(ok)
+}
+
+#[derive(Serialize)]
+pub struct GrantView {
+    id: String,
+    client_name: String,
+    created: chrono::DateTime<chrono::Utc>,
+    last_used: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// MCP clients signed in through the browser.
+#[tauri::command]
+pub async fn mcp_grants(app: S<'_>) -> R<Vec<GrantView>> {
+    Ok(app
+        .config()
+        .mcp
+        .grants
+        .into_iter()
+        .map(|g| GrantView { id: g.id, client_name: g.client_name, created: g.created, last_used: g.last_used })
+        .collect())
+}
+
+#[tauri::command]
+pub async fn mcp_revoke(app: S<'_>, id: String) -> R<()> {
+    app.update_config(|c| c.mcp.grants.retain(|g| g.id != id)).map(|_| ()).map_err(err)
 }
