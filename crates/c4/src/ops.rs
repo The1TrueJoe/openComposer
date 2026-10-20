@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::model::{Binding, Item, ItemKind, NetworkBinding, Project};
 use crate::soap::Call;
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
     /// Add a driver to a room. The driver file must already be on the controller.
@@ -39,6 +39,7 @@ pub enum Op {
     LoadProject {
         label: String,
         #[serde(skip_serializing, default)]
+        #[schemars(skip)]
         xml: String,
     },
 }
@@ -47,8 +48,8 @@ pub enum Op {
 pub enum OpError {
     #[error("no item #{0} in this project")]
     NoSuchItem(u32),
-    #[error("{what} must go in a {expected}, but #{id} “{name}” is a {actual}")]
-    WrongParent { what: &'static str, expected: &'static str, id: u32, name: String, actual: &'static str },
+    #[error("{what} must go in a {expected}, but #{id} “{name}” is {actual}")]
+    WrongParent { what: &'static str, expected: &'static str, id: u32, name: String, actual: String },
     #[error("“{0}” can't be removed: it is the top of the project")]
     CantRemoveRoot(String),
     #[error("a name can't be empty")]
@@ -176,7 +177,7 @@ impl Op {
                         expected: allowed.first().map(|k| k.label()).unwrap_or("different place"),
                         id: target.id,
                         name: target.name.clone(),
-                        actual: target.kind.label(),
+                        actual: with_article(target.kind.label()),
                     });
                 }
                 if p.subtree(*id).contains(parent) {
@@ -313,6 +314,11 @@ impl Op {
     }
 }
 
+fn with_article(word: &str) -> String {
+    let an = word.starts_with(['a', 'e', 'i', 'o', 'u']);
+    format!("{} {word}", if an { "an" } else { "a" })
+}
+
 fn next_id(p: &mut Project) -> u32 {
     let max = p.items.keys().copied().filter(|k| *k < 100_000).max().unwrap_or(0);
     p.next_item_id = p.next_item_id.max(max) + 1;
@@ -335,7 +341,7 @@ fn expect_kind(p: &Project, id: u32, kinds: &[ItemKind], what: &'static str, exp
     if kinds.contains(&it.kind) {
         Ok(())
     } else {
-        Err(OpError::WrongParent { what, expected, id, name: it.name.clone(), actual: it.kind.label() })
+        Err(OpError::WrongParent { what, expected, id, name: it.name.clone(), actual: with_article(it.kind.label()) })
     }
 }
 

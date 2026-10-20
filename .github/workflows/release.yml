@@ -1,0 +1,49 @@
+name: release
+
+# Builds the macOS universal .app/.dmg and the Windows NSIS installer, unsigned,
+# into a draft GitHub release. Run it from the Actions tab or push a v* tag.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            args: --target universal-apple-darwin
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+          - os: windows-latest
+            args: ""
+            rust_targets: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.rust_targets }}
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      - run: npm ci --prefix ui
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: app
+          tauriScript: npx -y @tauri-apps/cli@2.12.3
+          args: ${{ matrix.args }}
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('build-{0}', github.run_number) }}
+          releaseName: openComposer ${{ github.ref_type == 'tag' && github.ref_name || format('build {0}', github.run_number) }}
+          releaseBody: Unsigned builds. macOS: right-click → Open the first time. Windows: SmartScreen → More info → Run anyway.
+          releaseDraft: true
+          prerelease: ${{ github.ref_type != 'tag' }}

@@ -1,0 +1,46 @@
+# openComposer — working notes
+
+## Ground rules
+- Commit on `main`; never force-push. No `Co-Authored-By` or other attribution trailers.
+- **Never write to a real controller without the owner's explicit OK.** Develop and test
+  writes against the Windows Virtual Director (`optiplex.local`, OS 3.3.3). The real EA-1
+  (`192.168.1.172`) is read-only unless the owner says otherwise.
+- Never commit certificates, keys, project data or Control4's code/logs. `poc/out*`,
+  `*.pem`, `*.key`, `*.p12` are ignored; keep it that way.
+- Before you say it works, run it, and say what you could not verify.
+
+## Code
+- Comments explain *why*. Module headers say what the module is for and what it is not.
+- Errors are written for the person reading them: what happened and what to do.
+- One registry per concept: tools are the typed functions in `app/src/actions.rs`, wrapped
+  for MCP in `mcp.rs` and for the UI in `commands.rs`. Add a capability there, once.
+- Every change to a Director is an `Op` (`crates/c4/src/ops.rs`) with `predict` (applies to a
+  model, validates) and `calls` (what Composer would send). Writes go through
+  `approvals::propose`; nothing else calls `Director::apply`.
+- Version differences go in `crates/c4/src/dialect.rs`, not inline.
+- `ponytail:` marks a deliberate shortcut, with its limit and the upgrade path.
+
+## Checks
+```bash
+cargo test --workspace
+npm --prefix ui run build
+```
+Live, read-only smoke test (needs the Composer cert):
+```bash
+C4_CERT=composer.pem C4_KEY=composer.key cargo run -p c4 --example live -- optiplex.local 192.168.1.172
+```
+Headless MCP server for end-to-end tests (auto-approves writes on the first host only —
+point it at the Virtual Director):
+```bash
+OPENCOMPOSER_DATA=/tmp/oc C4_CERT=… C4_KEY=… cargo run -p opencomposer --example headless -- optiplex.local 192.168.1.172
+```
+
+## Known gaps
+- `AddBinding` is accepted by Director but the binding did not appear in a test on the
+  Virtual Director; verification flagged it as predicted-but-missing. Compare with
+  Composer's own call (it sends writes with `async="True"`).
+- Driver files are not installed or backed up yet. The controller's REST broker issues a
+  token via `POST /api/v1/localjwt` over mutual TLS; drivers then go to
+  `PUT /api/v1/drivers/files/<name>`. Not yet exercised.
+- Property edits, Z-Wave and programming edits haven't been captured from Composer yet.
+- Codex agent path is unverified (no Codex on the dev machine).
