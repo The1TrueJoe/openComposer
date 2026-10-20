@@ -334,6 +334,9 @@ export type Op =
   /** Checked against the driver's property schema before anyone is asked. */
   | { op: "set_property"; device: number; name: string; value: string }
   | { op: "run_action"; device: number; command: string }
+  | { op: "add_code"; device: number; event: number; parent?: number; before?: number; target: number;
+      command: string; params?: { name: string; type?: string; value: string }[]; display: string }
+  | { op: "remove_code"; device: number; event: number; id: number }
   /** Only ever produced by `install_driver`; the file's bytes are not serialized back. */
   | { op: "install_driver"; filename: string; source: string }
   /** Only ever produced by `load_backup`; the XML is not serialized back. */

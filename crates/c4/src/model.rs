@@ -135,6 +135,13 @@ pub struct Variable {
     pub value: String,
 }
 
+impl CodeItem {
+    /// The line as Composer shows it: `NAME` replaced by the device it acts on.
+    pub fn text(&self, p: &Project) -> String {
+        if self.display.contains("NAME") { self.display.replace("NAME", &p.name_of(self.device)) } else { self.display.clone() }
+    }
+}
+
 /// A line of programming: a command, conditional, loop… with nested children.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CodeItem {

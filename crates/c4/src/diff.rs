@@ -340,7 +340,7 @@ pub fn diff(before: &Project, after: &Project, names: &Names, opts: DiffOptions)
             owner: cx.item(dev),
             event: ev,
             event_name: names.event(dev, ev).map(String::from),
-            lines: diff_code(&flatten(b), &flatten(a)),
+            lines: diff_code(&flatten(b, before), &flatten(a, after)),
         });
     }
 
@@ -351,15 +351,15 @@ pub fn diff(before: &Project, after: &Project, names: &Names, opts: DiffOptions)
     Diff { changes, summary }
 }
 
-fn flatten(code: &[CodeItem]) -> Vec<(usize, String, bool)> {
-    fn walk(items: &[CodeItem], depth: usize, out: &mut Vec<(usize, String, bool)>) {
+fn flatten(code: &[CodeItem], p: &Project) -> Vec<(usize, String, bool)> {
+    fn walk(items: &[CodeItem], p: &Project, depth: usize, out: &mut Vec<(usize, String, bool)>) {
         for c in items {
-            out.push((depth, c.display.clone(), c.enabled));
-            walk(&c.children, depth + 1, out);
+            out.push((depth, c.text(p), c.enabled));
+            walk(&c.children, p, depth + 1, out);
         }
     }
     let mut out = Vec::new();
-    walk(code, 0, &mut out);
+    walk(code, p, 0, &mut out);
     out
 }
 

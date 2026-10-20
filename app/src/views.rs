@@ -131,10 +131,10 @@ fn connections_of(p: &Project, cat: &Catalog, id: u32) -> Vec<Value> {
         .collect()
 }
 
-fn code_lines(code: &[CodeItem], depth: usize, out: &mut Vec<Value>) {
+fn code_lines(p: &Project, code: &[CodeItem], depth: usize, out: &mut Vec<Value>) {
     for c in code {
-        out.push(json!({ "depth": depth, "text": c.display, "enabled": c.enabled, "id": c.id }));
-        code_lines(&c.children, depth + 1, out);
+        out.push(json!({ "depth": depth, "text": c.text(p), "enabled": c.enabled, "id": c.id, "target": c.device }));
+        code_lines(p, &c.children, depth + 1, out);
     }
 }
 
@@ -160,7 +160,7 @@ pub fn item(p: &Project, cat: &Catalog, id: u32) -> Option<Value> {
         for (eid, name) in &d.events {
             let mut lines = Vec::new();
             if let Some(code) = p.programming.get(&event_key(id, *eid)) {
-                code_lines(code, 0, &mut lines);
+                code_lines(p, code, 0, &mut lines);
             }
             events.push(json!({ "id": eid, "name": name, "programming": lines }));
         }
@@ -178,6 +178,7 @@ pub fn item(p: &Project, cat: &Catalog, id: u32) -> Option<Value> {
         "device": info.map(device_info),
         "properties": properties,
         "actions": info.map(|d| d.actions.iter().map(|(n, c)| json!({ "name": n, "command": c })).collect::<Vec<_>>()),
+        "commands": info.map(|d| &d.commands),
         "connections": connections_of(p, cat, id),
         "network": p.network_bindings.iter().filter(|n| n.device == id).collect::<Vec<_>>(),
         "network_connections": info.map(|d| d.connections.iter().filter(|c| c.conn_type == 4)
@@ -228,7 +229,7 @@ pub fn programming(p: &Project, cat: &Catalog, device: Option<u32>) -> Value {
                 return None;
             }
             let mut lines = Vec::new();
-            code_lines(code, 0, &mut lines);
+            code_lines(p, code, 0, &mut lines);
             Some(json!({ "device": short_item(p, d), "event": e, "event_name": names.event(d, e), "lines": lines }))
         })
         .collect();

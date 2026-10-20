@@ -37,6 +37,24 @@ pub enum Op {
     RemoveNetworkBinding { device: u32, binding: u32 },
     /// Set a driver property (what typing into Composer's property grid does).
     SetProperty { device: u32, name: String, value: String },
+    /// Add a programming line that sends `command` to `target` when `device`'s `event`
+    /// fires. `parent` 0 = top level; `before` 0 = at the end.
+    AddCode {
+        device: u32,
+        event: u32,
+        #[serde(default)]
+        parent: u32,
+        #[serde(default)]
+        before: u32,
+        target: u32,
+        command: String,
+        #[serde(default)]
+        params: Vec<CodeParam>,
+        /// The line as Composer shows it; `NAME` stands for the target.
+        display: String,
+    },
+    /// Remove a programming line (and anything nested under it).
+    RemoveCode { device: u32, event: u32, id: u32 },
     /// Press one of a driver's Actions (Composer's Actions tab). Changes nothing in the
     /// project, but can do anything on the device, so it is approved like a write.
     RunAction { device: u32, command: String },
@@ -59,6 +77,19 @@ pub enum Op {
     },
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
+pub struct CodeParam {
+    pub name: String,
+    /// STRING, INTEGER, … as the driver declares it.
+    #[serde(default = "string_type")]
+    pub r#type: String,
+    pub value: String,
+}
+
+fn string_type() -> String {
+    "STRING".into()
+}
+
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum OpError {
     #[error("no item #{0} in this project")]
@@ -77,6 +108,8 @@ pub enum OpError {
     NotConnected { device: String, binding: u32, class: String },
     #[error("{device} has no network binding #{binding}")]
     NoNetworkBinding { device: String, binding: u32 },
+    #[error("no programming line #{id} under that event")]
+    NoSuchCode { id: u32 },
     #[error("project to load does not parse: {0}")]
     BadProject(String),
 }
@@ -117,6 +150,10 @@ impl Op {
                 format!("Set {} property “{name}” to “{shown}”", n(*device))
             }
             Op::RunAction { device, command } => format!("Run action “{command}” on {}", n(*device)),
+            Op::AddCode { device, target, display, .. } => {
+                format!("Add to {} programming: “{}”", n(*device), display.replace("NAME", &p.name_of(*target)))
+            }
+            Op::RemoveCode { device, id, .. } => format!("Remove programming line #{id} from {}", n(*device)),
             Op::InstallDriver { filename, source, bytes } => {
                 format!("Install driver file {filename} ({} KB) from {source}", bytes.len().div_ceil(1024))
             }
@@ -277,6 +314,31 @@ impl Op {
             Op::RunAction { device, .. } => {
                 p.item(*device).ok_or(OpError::NoSuchItem(*device))?;
             }
+            Op::AddCode { device, event, parent, before, target, display, .. } => {
+                p.item(*device).ok_or(OpError::NoSuchItem(*device))?;
+                p.item(*target).ok_or(OpError::NoSuchItem(*target))?;
+                let code = p.programming.entry(crate::model::event_key(*device, *event)).or_default();
+                let id = max_code_id(code) + 1;
+                let line = crate::model::CodeItem {
+                    id,
+                    kind: 1,
+                    device: *target,
+                    // Director stores Composer's template with NAME in it; views fill it in.
+                    display: display.clone(),
+                    enabled: true,
+                    cmdcond: String::new(),
+                    children: vec![],
+                };
+                let siblings = if *parent == 0 { code } else { &mut find_code(code, *parent).ok_or(OpError::NoSuchCode { id: *parent })?.children };
+                let pos = if *before == 0 { siblings.len() } else { siblings.iter().position(|c| c.id == *before).ok_or(OpError::NoSuchCode { id: *before })? };
+                siblings.insert(pos, line);
+            }
+            Op::RemoveCode { device, event, id } => {
+                let code = p.programming.get_mut(&crate::model::event_key(*device, *event)).ok_or(OpError::NoSuchCode { id: *id })?;
+                if !remove_code(code, *id) {
+                    return Err(OpError::NoSuchCode { id: *id });
+                }
+            }
             Op::InstallDriver { .. } => {}
             Op::LoadProject { xml, .. } => {
                 *p = Project::parse(xml).map_err(|e| OpError::BadProject(e.to_string()))?;
@@ -338,6 +400,29 @@ impl Op {
                 );
                 vec![Call::new("SendToDevice").num("iddevice", *device).xml("data", cmd)]
             }
+            Op::AddCode { device, event, parent, before, target, command, params, display } => {
+                let e = crate::xml::escape;
+                let ps: String = params
+                    .iter()
+                    .map(|p| format!(r#"<param><name>{}</name><value type="{}"><static>{}</static></value></param>"#, e(&p.name), e(&p.r#type), e(&p.value)))
+                    .collect();
+                let cmdcond = format!(r#"<devicecommand owneridtype="" owneriditem="-1"><command>{}</command><params>{ps}</params></devicecommand>"#, e(command));
+                vec![
+                    Call::new("AddCodeItem")
+                        .num("iddevice", *device)
+                        .num("idevent", *event)
+                        .num("idparentcodeitem", *parent)
+                        .num("idbeforecodeitem", *before)
+                        .num("idcreator", 0)
+                        .num("type", 1)
+                        .num("idcmdconddevice", *target)
+                        .str("displayname", display)
+                        .xml("cmdcond", cmdcond),
+                ]
+            }
+            Op::RemoveCode { device, event, id } => vec![
+                Call::new("RemoveCodeItem").num("iddevice", *device).num("idevent", *event).num("idcodeitem", *id),
+            ],
             Op::RunAction { device, command } => {
                 let cmd = format!(
                     r#"<devicecommand owneridtype="" owneriditem="-1"><command>LUA_ACTION</command><params><param><name>ACTION</name><value type="STRING"><static>{}</static></value></param></params></devicecommand>"#,
@@ -390,6 +475,30 @@ fn expect_kind(p: &Project, id: u32, kinds: &[ItemKind], what: &'static str, exp
     } else {
         Err(OpError::WrongParent { what, expected, id, name: it.name.clone(), actual: with_article(it.kind.label()) })
     }
+}
+
+fn max_code_id(code: &[crate::model::CodeItem]) -> u32 {
+    code.iter().map(|c| c.id.max(max_code_id(&c.children))).max().unwrap_or(0)
+}
+
+fn find_code(code: &mut [crate::model::CodeItem], id: u32) -> Option<&mut crate::model::CodeItem> {
+    for c in code.iter_mut() {
+        if c.id == id {
+            return Some(c);
+        }
+        if let Some(f) = find_code(&mut c.children, id) {
+            return Some(f);
+        }
+    }
+    None
+}
+
+fn remove_code(code: &mut Vec<crate::model::CodeItem>, id: u32) -> bool {
+    if let Some(pos) = code.iter().position(|c| c.id == id) {
+        code.remove(pos);
+        return true;
+    }
+    code.iter_mut().any(|c| remove_code(&mut c.children, id))
 }
 
 fn prune_code(code: &mut Vec<crate::model::CodeItem>, gone: &[u32]) {
@@ -447,6 +556,25 @@ mod tests {
         Op::RemoveItem { id: 21 }.predict(&mut p).unwrap();
         let code = &p.programming["20:1"];
         assert!(code[0].children.is_empty(), "the receiver line under the TV event is gone");
+    }
+
+    #[test]
+    fn programming_lines_insert_and_remove() {
+        let before = sample();
+        let mut after = before.clone();
+        Op::AddCode {
+            device: 20, event: 1, parent: 1, before: 0, target: 21, command: "INPUT".into(),
+            params: vec![], display: "Select HDMI 2 on NAME".into(),
+        }
+        .predict(&mut after)
+        .unwrap();
+        let d = diff(&before, &after, &Names::default(), DiffOptions::default());
+        let [Change::ProgrammingChanged { lines, .. }] = d.changes.as_slice() else { panic!("{:?}", d.changes) };
+        let added: Vec<_> = lines.iter().filter(|l| l.op == crate::diff::LineOp::Added).map(|l| (l.depth, l.text.as_str())).collect();
+        assert_eq!(added, [(1, "Select HDMI 2 on Receiver")]);
+        Op::RemoveCode { device: 20, event: 1, id: 2 }.predict(&mut after).unwrap();
+        assert_eq!(after.programming["20:1"][0].children.len(), 1, "only the new line remains under the TV line");
+        assert!(matches!(Op::RemoveCode { device: 20, event: 1, id: 99 }.predict(&mut after), Err(OpError::NoSuchCode { .. })));
     }
 
     #[test]

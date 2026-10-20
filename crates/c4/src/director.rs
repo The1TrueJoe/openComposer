@@ -64,6 +64,15 @@ pub struct PropertyDef {
     pub maximum: Option<String>,
 }
 
+/// A command programming can send to a device (Composer's "Device Specific Commands").
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CommandDef {
+    pub name: String,
+    /// Composer's line template; `NAME` stands for the device.
+    pub description: String,
+    pub params: Vec<PropertyDef>,
+}
+
 /// What a device's driver declares, from the `devicedata` in `GetItems`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DeviceInfo {
@@ -79,6 +88,7 @@ pub struct DeviceInfo {
     pub events: BTreeMap<u32, String>,
     pub properties: Vec<PropertyDef>,
     pub actions: Vec<(String, String)>,
+    pub commands: Vec<CommandDef>,
 }
 
 /// Driver definitions for every item, keyed by item id.
@@ -246,6 +256,31 @@ impl Director {
                         child_text(a, "name").unwrap_or_default().into(),
                         child_text(a, "command").unwrap_or_default().into(),
                     ));
+                }
+            }
+            if let Some(cmds) = child(dd, "commands") {
+                for c in cmds.children().filter(|c| c.has_tag_name("command")) {
+                    info.commands.push(CommandDef {
+                        name: child_text(c, "name").unwrap_or_default().into(),
+                        description: child_text(c, "description").unwrap_or_default().into(),
+                        params: child(c, "params")
+                            .map(|ps| {
+                                ps.children()
+                                    .filter(|p| p.has_tag_name("param"))
+                                    .map(|p| PropertyDef {
+                                        name: child_text(p, "name").unwrap_or_default().into(),
+                                        prop_type: child_text(p, "type").unwrap_or_default().into(),
+                                        items: child(p, "items")
+                                            .map(|i| i.children().filter_map(|c| c.text()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+                                            .unwrap_or_default(),
+                                        minimum: child_text(p, "minimum").map(String::from),
+                                        maximum: child_text(p, "maximum").map(String::from),
+                                        ..Default::default()
+                                    })
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                    });
                 }
             }
             if cat.room_template.is_none() && child_u32(item, "type") == Some(8) {

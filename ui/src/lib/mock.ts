@@ -195,6 +195,8 @@ function describe(op: Op): string {
     case "set_property": return `Set ${n(op.device)} property “${op.name}” to “${masked(op.name, op.value)}”`;
     case "install_driver": return `Install driver file ${op.filename} from ${op.source}`;
     case "run_action": return `Run action “${op.command}” on ${n(op.device)}`;
+    case "add_code": return `Add to ${n(op.device)} programming: “${op.display.replace("NAME", project.items.get(op.target)?.name ?? "")}”`;
+    case "remove_code": return `Remove programming line #${op.id} from ${n(op.device)}`;
     case "load_project": return `Replace the whole project with ${op.label}`;
   }
 }
@@ -272,6 +274,8 @@ function predict(ops: Op[]): Change[] {
       }
       case "install_driver":
       case "run_action":
+      case "add_code":
+      case "remove_code":
         break;
       case "load_project":
         changes.push({ kind: "property_changed", item: itemRef(20), property: "Power On Delay (ms)", from: "2500", to: "3000" });
@@ -352,6 +356,8 @@ function apply(op: Op): number[] {
       installed.add(op.filename);
       return [];
     case "run_action":
+    case "add_code":
+    case "remove_code":
       return [];
     case "load_project":
       return [];

@@ -139,6 +139,7 @@ pub async fn propose(
     check_connections(&ops, &catalog, &before.project)?;
     check_properties(&ops, &catalog, &before.project)?;
     check_actions(&ops, &catalog, &before.project)?;
+    check_code(&ops, &catalog, &before.project)?;
     check_drivers(app, &session, &ops).await?;
     let names = catalog.names();
     let mut predicted = before.project.clone();
@@ -288,6 +289,35 @@ fn check_properties(ops: &[Op], cat: &c4::Catalog, p: &c4::Project) -> AppResult
                     "“{name}” must be between {} and {}",
                     def.minimum.clone().unwrap_or_default(),
                     def.maximum.clone().unwrap_or_default()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Programming lines must hang off an event the device declares and send a command the
+/// target declares (when it declares any — proxies' built-in commands aren't listed).
+fn check_code(ops: &[Op], cat: &c4::Catalog, p: &c4::Project) -> AppResult<()> {
+    for op in ops {
+        let Op::AddCode { device, event, target, command, .. } = op else { continue };
+        if let Some(d) = cat.devices.get(device) {
+            if !d.events.is_empty() && !d.events.contains_key(event) {
+                let have: Vec<String> = d.events.iter().map(|(id, n)| format!("{id} {n}")).collect();
+                return Err(AppError::Other(format!(
+                    "“{}” has no event {event}; its events are: {}",
+                    p.name_of(*device),
+                    have.join(", ")
+                )));
+            }
+        }
+        if let Some(t) = cat.devices.get(target) {
+            if !t.commands.is_empty() && !t.commands.iter().any(|c| c.name == *command) {
+                let have: Vec<&str> = t.commands.iter().map(|c| c.name.as_str()).collect();
+                return Err(AppError::Other(format!(
+                    "“{}” has no command “{command}”; its commands are: {}",
+                    p.name_of(*target),
+                    have.join(", ")
                 )));
             }
         }
