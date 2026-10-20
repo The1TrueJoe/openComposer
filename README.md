@@ -66,6 +66,11 @@ npx @tauri-apps/cli@2.12.3 dev --config app/tauri.conf.json
 Release installers (unsigned macOS universal `.dmg` and Windows NSIS `.exe`) are built by
 the `release` workflow: run it from the Actions tab or push a `v*` tag.
 
+Because they're unsigned, the first launch is blocked:
+- **macOS**: open it once, then System Settings → Privacy & Security → **Open Anyway**
+  (or `xattr -dr com.apple.quarantine /Applications/openComposer.app`).
+- **Windows**: SmartScreen → More info → **Run anyway**.
+
 ## Layout
 
 ```
