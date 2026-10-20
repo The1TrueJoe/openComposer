@@ -7,7 +7,7 @@
  *  3. Connecting — and the project opens. */
 
 import { createColumnHelper } from "@tanstack/react-table";
-import { ArrowLeft, ArrowRight, Check, Plug, Plus, Radar, RefreshCw } from "lucide-react";
+import { ArrowLeft, KeyRound, ArrowRight, Check, Plug, Plus, Radar, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, errText, type Announcement, type AppStatus, type DirectorInfo, type SavedDirector } from "../api";
 import { cx } from "../lib/ui";
@@ -136,6 +136,9 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
 
         {step.kind === "controller" && <>
           <h1>Connect to a Director</h1>
+          {!status.identity.unlocked && (
+            <p className="hint"><KeyRound size={13} strokeWidth={1.8} /> Unlocking your certificate — if macOS asks to use the keychain, choose Allow (or Always Allow).</p>
+          )}
           <p className="lede">Pick the controller whose project you want to open.</p>
 
           <section className="connect-sec">

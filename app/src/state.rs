@@ -23,6 +23,8 @@ pub struct App {
     pub config: RwLock<Config>,
     pub identity: RwLock<Option<StoredIdentity>>,
     pub identity_error: RwLock<Option<String>>,
+    /// Becomes true once the stored identity has been read (or found absent).
+    unlocked: tokio::sync::watch::Sender<bool>,
     sessions: tokio::sync::Mutex<HashMap<String, Arc<Session>>>,
     pub approvals: Approvals,
     pub agents: crate::agent::Agents,
@@ -88,15 +90,16 @@ impl App {
         let config = Config::load(&paths.config());
         // Persist a generated MCP token on first run.
         let _ = config.save(&paths.config());
-        let (identity, identity_error) = match certs::load(&paths.identity()) {
-            Ok(i) => (i, None),
-            Err(e) => (None, Some(e.to_string())),
-        };
+        // The identity is unlocked later (`unlock_identity`): reading the keychain can wait on
+        // a macOS prompt, and the window and MCP server must not wait with it.
+        let (identity, identity_error) = (None, None);
+        let (unlocked, _) = tokio::sync::watch::channel(false);
         Arc::new(Self {
             paths,
             config: RwLock::new(config),
             identity: RwLock::new(identity),
             identity_error: RwLock::new(identity_error),
+            unlocked,
             sessions: Default::default(),
             approvals: Approvals::default(),
             agents: Default::default(),
@@ -110,6 +113,33 @@ impl App {
                 .expect("http client"),
             emitter: OnceLock::new(),
         })
+    }
+
+    /// Read the stored identity off the startup path. The OS may ask the person for keychain
+    /// access first; everything that needs the certificate waits for this (`identity_for_use`).
+    pub fn unlock_identity(self: &Arc<Self>) {
+        let app = self.clone();
+        std::thread::spawn(move || {
+            match certs::load(&app.paths.identity()) {
+                Ok(i) => *app.identity.write().unwrap() = i,
+                Err(e) => *app.identity_error.write().unwrap() = Some(e.to_string()),
+            }
+            app.unlocked.send_replace(true);
+            app.emit("identity", serde_json::json!({ "unlocked": true }));
+        });
+    }
+
+    pub fn identity_unlocked(&self) -> bool {
+        *self.unlocked.borrow()
+    }
+
+    /// The client identity, waiting (up to two minutes) for the keychain unlock at startup.
+    async fn identity_for_use(&self) -> AppResult<c4::Identity> {
+        let mut rx = self.unlocked.subscribe();
+        if tokio::time::timeout(std::time::Duration::from_secs(120), rx.wait_for(|v| *v)).await.is_err() {
+            return Err(AppError::Other("still waiting for keychain access to the certificate — answer the macOS prompt".into()));
+        }
+        Ok(self.identity.read().unwrap().clone().ok_or(AppError::NoIdentity)?.identity()?)
     }
 
     pub fn set_emitter(&self, f: Emitter) {
@@ -140,12 +170,14 @@ impl App {
     /// Use an identity for this run only, without touching the keychain (tests).
     pub fn use_identity(&self, id: StoredIdentity) {
         *self.identity.write().unwrap() = Some(id);
+        self.unlocked.send_replace(true);
     }
 
     pub fn set_identity(&self, id: StoredIdentity) -> anyhow::Result<()> {
         certs::save(&self.paths.identity(), &id)?;
         *self.identity.write().unwrap() = Some(id);
         *self.identity_error.write().unwrap() = None;
+        self.unlocked.send_replace(true);
         Ok(())
     }
 
@@ -179,13 +211,7 @@ impl App {
                 return Ok(s.clone());
             }
         }
-        let identity = self
-            .identity
-            .read()
-            .unwrap()
-            .clone()
-            .ok_or(AppError::NoIdentity)?
-            .identity()?;
+        let identity = self.identity_for_use().await?;
         let director = Director::connect(&saved.host, &identity, saved.fingerprint.as_deref()).await?;
         if saved.fingerprint.is_none() {
             let fp = director.info.server_fingerprint.clone();
@@ -243,7 +269,7 @@ impl App {
                 return Ok(b.clone());
             }
         }
-        let identity = self.identity.read().unwrap().clone().ok_or(AppError::NoIdentity)?.identity()?;
+        let identity = self.identity_for_use().await?;
         let addr = saved.web_api_addr.clone().unwrap_or_else(|| saved.host.clone());
         let b = Arc::new(
             c4::broker::Broker::connect(&addr, &identity, saved.web_api_fingerprint.as_deref())

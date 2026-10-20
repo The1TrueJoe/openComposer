@@ -28,6 +28,8 @@ fn err(e: impl std::fmt::Display) -> String {
 #[derive(Serialize)]
 pub struct IdentityStatus {
     loaded: bool,
+    /// False while the stored certificate is still being unlocked (macOS may be asking).
+    unlocked: bool,
     label: Option<String>,
     fingerprint: Option<String>,
     error: Option<String>,
@@ -48,6 +50,7 @@ pub async fn app_status(app: S<'_>) -> R<AppStatus> {
     let id = app.identity.read().unwrap().clone();
     let identity = IdentityStatus {
         loaded: id.is_some(),
+        unlocked: app.identity_unlocked(),
         label: id.as_ref().map(|i| i.label.clone()),
         fingerprint: id.as_ref().and_then(|i| i.identity().ok()).map(|i| i.fingerprint()),
         error: app.identity_error.read().unwrap().clone(),

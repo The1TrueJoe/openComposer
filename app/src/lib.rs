@@ -50,6 +50,7 @@ pub fn run() {
                 let _ = handle.emit(event, payload);
             }));
             tauri::async_runtime::spawn(mcp::restart(app.clone()));
+            app.unlock_identity();
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

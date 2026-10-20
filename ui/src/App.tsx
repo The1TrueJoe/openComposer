@@ -79,6 +79,8 @@ export default function App() {
     }
   });
   useBackendEvent("mcp", (mcp) => setStatus((s) => s && { ...s, mcp }));
+  // The stored certificate finished unlocking (after any keychain prompt).
+  useBackendEvent("identity", () => refreshStatus());
   useBackendEvent("director", (d) => {
     setStatus((s) => s && {
       ...s, connected: d.connected ? [...new Set([...s.connected, d.id])] : s.connected.filter((x) => x !== d.id),

@@ -29,6 +29,8 @@ export interface Config {
 
 export interface IdentityStatus {
   loaded: boolean;
+  /** False while the stored certificate is being unlocked (macOS may be asking for keychain access). */
+  unlocked: boolean;
   label: string | null;
   fingerprint: string | null;
   error: string | null;
@@ -587,4 +589,5 @@ export interface Events {
   "ui-command": UiCommand;
   "mcp-auth": AuthRequest;
   "mcp-auth-decided": { id: string; approve: boolean };
+  identity: { unlocked: boolean };
 }

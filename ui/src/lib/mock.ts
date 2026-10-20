@@ -47,8 +47,8 @@ const config: Config = {
   agent: { provider: "claude", claude_path: null, codex_path: null, model: null },
 };
 let identity = fresh
-  ? { loaded: false, label: null as string | null, fingerprint: null as string | null, error: null as string | null }
-  : { loaded: true, label: "composer.pem (Telaak Integration)", fingerprint: "a4:9e:20:7c:1b:f3:58:d2:6a:0e", error: null };
+  ? { loaded: false, unlocked: true, label: null as string | null, fingerprint: null as string | null, error: null as string | null }
+  : { loaded: true, unlocked: true, label: "composer.pem (Telaak Integration)", fingerprint: "a4:9e:20:7c:1b:f3:58:d2:6a:0e", error: null };
 const connected = new Set<string>(fresh ? [] : ["d-telaak"]);
 const approvals: Approval[] = fresh ? [] : [showcaseApproval(), agentApproval(), ...historyApprovals()];
 const waiting = new Map<string, (o: Outcome) => void>();
@@ -1011,7 +1011,7 @@ async function handle(cmd: string, a: Args): Promise<unknown> {
     case "import_identity_p12": {
       await sleep(300);
       const file = String(a.cert ?? a.path).split(/[\\/]/).pop();
-      identity = { loaded: true, label: `${file} (Telaak Integration)`, fingerprint: "a4:9e:20:7c:1b:f3:58:d2:6a:0e", error: null };
+      identity = { loaded: true, unlocked: true, label: `${file} (Telaak Integration)`, fingerprint: "a4:9e:20:7c:1b:f3:58:d2:6a:0e", error: null };
       return null;
     }
     case "add_director": {
@@ -1073,7 +1073,7 @@ async function handle(cmd: string, a: Args): Promise<unknown> {
       if (paths.some((p) => /\.(p12|pfx)$/i.test(p)) && !a.password) throw "NEEDS_PASSWORD: that .p12 is password-protected; enter its password";
       if (!paths.some((p) => /\.(pem|crt|cer|p12|pfx)$/i.test(p))) throw `no certificate in ${paths.join(", ")}; choose composer.pem (with composer.key) or a .p12`;
       await sleep(300);
-      identity = { loaded: true, label: `${paths[0].split(/[\\/]/).pop()} (Telaak Integration)`, fingerprint: "a4:9e:20:7c:1b:f3:58:d2:6a:0e", error: null };
+      identity = { loaded: true, unlocked: true, label: `${paths[0].split(/[\\/]/).pop()} (Telaak Integration)`, fingerprint: "a4:9e:20:7c:1b:f3:58:d2:6a:0e", error: null };
       return null;
     }
     case "discover_controllers":
