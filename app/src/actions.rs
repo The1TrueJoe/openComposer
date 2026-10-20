@@ -493,13 +493,19 @@ pub async fn add_driver(app: &Arc<App>, a: AddDriverArgs, source: &str) -> AppRe
     if installed.is_none() {
         let (bytes, from) = match crate::library::find(app, &a.filename) {
             Some((bytes, d)) => (bytes, if d.source == "composer" { "Composer's driver folder".to_string() } else { "the driver library".to_string() }),
-            None => from_other_director(app, &s.id, &a.filename).await.ok_or_else(|| {
-                AppError::Other(format!(
-                    "{} isn't on this controller, in the driver library, or on another connected Director. \
-                     Get the file (the manufacturer's site or Control4's dealer portal) and import it into the library first.",
-                    a.filename
-                ))
-            })?,
+            None => match from_other_director(app, &s.id, &a.filename).await {
+                Some(found) => found,
+                None => {
+                    let bytes = c4::drivers::download(&app.http, &a.filename).await.map_err(|e| {
+                        AppError::Other(format!(
+                            "{e}. It isn't on this controller, in the driver library or on another connected \
+                             Director either; import the file into the library first."
+                        ))
+                    })?;
+                    let _ = crate::library::store(app, &a.filename, &bytes);
+                    (bytes, "Control4's driver database (checksum verified)".to_string())
+                }
+            },
         };
         if meta.is_none() {
             meta = c4::drivers::LocalDriver::read(&a.filename, &bytes);

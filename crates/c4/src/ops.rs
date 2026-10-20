@@ -355,9 +355,12 @@ impl Op {
     /// from an existing room, which [`crate::Director::apply`] supplies.
     pub fn calls(&self, room_template: Option<&str>) -> Vec<Call> {
         match self {
-            Op::AddDevice { room, name, driver } => vec![
-                Call::new("AddDevice").num("idparent", *room).str("name", name).str("c4z_name", driver),
-            ],
+            Op::AddDevice { room, name, driver } => {
+                // Composer names the parameter after the file type; Director treats a
+                // c4z_name as a .c4z whatever its extension says.
+                let param = if driver.to_ascii_lowercase().ends_with(".c4i") { "c4i_name" } else { "c4z_name" };
+                vec![Call::new("AddDevice").num("idparent", *room).str("name", name).str(param, driver)]
+            }
             Op::AddRoom { floor, name } => vec![
                 Call::new("AddItem")
                     .num("idparent", *floor)
@@ -579,6 +582,14 @@ mod tests {
         Op::RemoveCode { device: 20, event: 1, id: 2 }.predict(&mut after).unwrap();
         assert_eq!(after.programming["20:1"][0].children.len(), 1, "only the new line remains under the TV line");
         assert!(matches!(Op::RemoveCode { device: 20, event: 1, id: 99 }.predict(&mut after), Err(OpError::NoSuchCode { .. })));
+    }
+
+    #[test]
+    fn add_device_names_the_driver_parameter_by_file_type() {
+        let c4i = Op::AddDevice { room: 1, name: "TV".into(), driver: "tv_Vizio_SV421XVT.c4i".into() }.calls(None);
+        assert!(c4i[0].encode(false).contains(r#"<param name="c4i_name" type="string">tv_Vizio_SV421XVT.c4i</param>"#));
+        let c4z = Op::AddDevice { room: 1, name: "AVR".into(), driver: "sony_strdn840.c4z".into() }.calls(None);
+        assert!(c4z[0].encode(false).contains(r#"<param name="c4z_name" type="string">sony_strdn840.c4z</param>"#));
     }
 
     #[test]

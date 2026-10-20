@@ -4,11 +4,68 @@
 //! (~24.7k drivers). Each document carries the driver file name, version, md5,
 //! manufacturer/model, proxies, connection names/classes and — usefully — the SDDP
 //! `searchType`, which is how a discovered device is matched to its driver.
-//! It does not hand out the driver files themselves.
+//! The files themselves are served from the site root, `https://drivers.control4.com/<file>`,
+//! and the index's `md5sum` lets a download be checked before it is installed.
 
 use serde::{Deserialize, Serialize};
 
 pub const SOLR: &str = "https://drivers.control4.com/solr/drivers/browse";
+pub const FILES: &str = "https://drivers.control4.com";
+
+#[derive(Debug, thiserror::Error)]
+pub enum DownloadError {
+    #[error("the driver database has no file named {0}")]
+    NotListed(String),
+    #[error("couldn't download {name}: {source}")]
+    Http { name: String, source: reqwest::Error },
+    #[error("{name} downloaded but its checksum doesn't match the database ({got} ≠ {want}); not using it")]
+    Checksum { name: String, got: String, want: String },
+}
+
+/// Download a driver file from the online database, checked against the index's md5.
+pub async fn download(http: &reqwest::Client, filename: &str) -> Result<Vec<u8>, DownloadError> {
+    let q = format!("filename:\"{}\"", filename.replace('"', ""));
+    let v: serde_json::Value = http
+        .get(SOLR)
+        .query(&[("q", q.as_str()), ("wt", "json"), ("rows", "1")])
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|source| DownloadError::Http { name: filename.into(), source })?
+        .json()
+        .await
+        .map_err(|source| DownloadError::Http { name: filename.into(), source })?;
+    let doc = v["response"]["docs"]
+        .as_array()
+        .and_then(|d| d.iter().find(|d| s(d, "filename").eq_ignore_ascii_case(filename)))
+        .ok_or_else(|| DownloadError::NotListed(filename.into()))?;
+    let want = s(doc, "md5sum").to_ascii_lowercase();
+    let bytes = http
+        .get(format!("{FILES}/{}", url_path(filename)))
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|source| DownloadError::Http { name: filename.into(), source })?
+        .bytes()
+        .await
+        .map_err(|source| DownloadError::Http { name: filename.into(), source })?
+        .to_vec();
+    use md5::Digest;
+    let got = hex::encode(md5::Md5::digest(&bytes));
+    if !want.is_empty() && got != want {
+        return Err(DownloadError::Checksum { name: filename.into(), got, want });
+    }
+    Ok(bytes)
+}
+
+fn url_path(name: &str) -> String {
+    name.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => (b as char).to_string(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
+}
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DriverDoc {
