@@ -111,6 +111,25 @@ impl Broker {
         Ok(out)
     }
 
+    /// An item's own icon as a data URL, when its driver package carries one (the broker
+    /// inlines .c4z icons as base64; .c4i drivers point at Composer's stock images instead).
+    pub async fn item_icon(&self, item: u32) -> Option<String> {
+        let v: serde_json::Value = self
+            .http
+            .get(format!("{}/api/v1/items/{item}/icons", self.base))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .ok()?
+            .json()
+            .await
+            .ok()?;
+        let first = v.as_array()?.first()?;
+        (first["smallSource"] == "c4z")
+            .then(|| first["smallImage"].as_str().map(|b| format!("data:image/png;base64,{b}")))
+            .flatten()
+    }
+
     /// Download a driver file (for complete backups).
     pub async fn download_driver(&self, name: &str) -> Result<Option<Vec<u8>>> {
         let r = self.http.get(self.url(name, "")).bearer_auth(&self.token).send().await.map_err(|e| self.http_err(e))?;

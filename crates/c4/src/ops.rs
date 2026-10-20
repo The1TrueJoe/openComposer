@@ -56,6 +56,13 @@ pub enum Op {
     },
     /// Remove a programming line (and anything nested under it).
     RemoveCode { device: u32, event: u32, id: u32 },
+    /// Send a command to a device now (Composer's device control). Changes no project data.
+    SendCommand {
+        device: u32,
+        command: String,
+        #[serde(default)]
+        params: Vec<CodeParam>,
+    },
     /// Press one of a driver's Actions (Composer's Actions tab). Changes nothing in the
     /// project, but can do anything on the device, so it is approved like a write.
     RunAction { device: u32, command: String },
@@ -152,6 +159,11 @@ impl Op {
                 format!("Set {} property “{name}” to “{shown}”", n(*device))
             }
             Op::RunAction { device, command } => format!("Run action “{command}” on {}", n(*device)),
+            Op::SendCommand { device, command, params } => {
+                let ps: Vec<String> = params.iter().map(|p| format!("{}={}", p.name, p.value)).collect();
+                let ps = if ps.is_empty() { String::new() } else { format!(" ({})", ps.join(", ")) };
+                format!("Send {command}{ps} to {}", n(*device))
+            }
             Op::AddCode { device, target, display, .. } => {
                 format!("Add to {} programming: “{}”", n(*device), display.replace("NAME", &p.name_of(*target)))
             }
@@ -315,7 +327,7 @@ impl Op {
             Op::SetProperty { device, name, value } => {
                 p.items.get_mut(device).ok_or(OpError::NoSuchItem(*device))?.properties.insert(name.clone(), value.clone());
             }
-            Op::RunAction { device, .. } => {
+            Op::RunAction { device, .. } | Op::SendCommand { device, .. } => {
                 p.item(*device).ok_or(OpError::NoSuchItem(*device))?;
             }
             Op::AddCode { device, event, parent, before, target, display, .. } => {
@@ -426,6 +438,15 @@ impl Op {
                         .str("displayname", display)
                         .xml("cmdcond", cmdcond),
                 ]
+            }
+            Op::SendCommand { device, command, params } => {
+                let e = crate::xml::escape;
+                let ps: String = params
+                    .iter()
+                    .map(|p| format!(r#"<param><name>{}</name><value type="{}"><static>{}</static></value></param>"#, e(&p.name), e(&p.r#type), e(&p.value)))
+                    .collect();
+                let cmd = format!(r#"<devicecommand owneridtype="" owneriditem="-1"><command>{}</command><params>{ps}</params></devicecommand>"#, e(command));
+                vec![Call::new("SendToDevice").num("iddevice", *device).xml("data", cmd)]
             }
             Op::RemoveCode { device, event, id } => vec![
                 Call::new("RemoveCodeItem").num("iddevice", *device).num("idevent", *event).num("idcodeitem", *id),

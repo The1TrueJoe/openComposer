@@ -229,6 +229,20 @@ impl OpenComposerMcp {
         self.run("ui_show", format!("{:?} {:?} {:?}", a.view, a.item, a.tab), async { actions::ui_show(&self.app, a) }).await
     }
 
+    #[tool(description = "A device's variables right now (power, level, input…): its live state.",
+        annotations(read_only_hint = true))]
+    async fn device_state(&self, Parameters(a): Parameters<StateArgs>) -> Result<CallToolResult, McpError> {
+        self.run("device_state", format!("#{}", a.device), actions::device_state(&self.app, a)).await
+    }
+
+    #[tool(description = "Send a command to a device now (e.g. ON, SET_LEVEL with LEVEL=50) — it acts on real \
+        equipment, so the user approves it first. Commands come from get_item → commands.",
+        annotations(read_only_hint = false, destructive_hint = true))]
+    async fn send_command(&self, Parameters(a): Parameters<CommandArgs>) -> Result<CallToolResult, McpError> {
+        let s = format!("{} → #{}", a.command, a.device);
+        self.run("send_command", s, actions::send_command(&self.app, a, self.source)).await
+    }
+
     #[tool(description = "Replace the Director's whole project with a backup from the library (Composer's Load Project). \
         Needs approval; a restore point of the current project is saved first.",
         annotations(read_only_hint = false, destructive_hint = true))]
@@ -276,6 +290,9 @@ pub struct McpStatus {
     pub url: String,
     pub lan: bool,
     pub error: Option<String>,
+    /// The port actually bound — the configured one, or a fallback when it was taken (the
+    /// in-app agent always uses this).
+    pub port: u16,
 }
 
 static RUNNING: OnceLock<Mutex<Option<tokio::task::AbortHandle>>> = OnceLock::new();
@@ -283,7 +300,7 @@ static STATUS: OnceLock<Mutex<McpStatus>> = OnceLock::new();
 
 pub fn status() -> McpStatus {
     STATUS
-        .get_or_init(|| Mutex::new(McpStatus { listening: false, url: String::new(), lan: false, error: None }))
+        .get_or_init(|| Mutex::new(McpStatus { listening: false, url: String::new(), lan: false, error: None, port: 0 }))
         .lock()
         .unwrap()
         .clone()
@@ -303,13 +320,19 @@ pub async fn restart(app: Arc<App>) {
     let ip = if cfg.lan { [0, 0, 0, 0] } else { [127, 0, 0, 1] };
     let addr = SocketAddr::from((ip, cfg.port));
     let url = format!("http://{}:{}/mcp", if cfg.lan { lan_ip().unwrap_or_else(|| "127.0.0.1".into()) } else { "127.0.0.1".into() }, cfg.port);
-    let listener = match tokio::net::TcpListener::bind(addr).await {
-        Ok(l) => l,
-        Err(e) => {
-            set_status(&app, McpStatus { listening: false, url, lan: cfg.lan, error: Some(format!("can't listen on {addr}: {e}")) });
-            return;
-        }
+    // If the port is taken (another openComposer, a test server…), still serve the in-app
+    // agent on a free loopback port, and say so: external clients need the configured one.
+    let (listener, fallback) = match tokio::net::TcpListener::bind(addr).await {
+        Ok(l) => (l, None),
+        Err(e) => match tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await {
+            Ok(l) => (l, Some(format!("port {} is in use ({e}); external MCP clients can't connect until it's free", cfg.port))),
+            Err(e2) => {
+                set_status(&app, McpStatus { listening: false, url, lan: cfg.lan, error: Some(format!("can't listen on {addr}: {e}; no fallback either: {e2}")), port: 0 });
+                return;
+            }
+        },
     };
+    let port = listener.local_addr().map(|a| a.port()).unwrap_or(cfg.port);
     let service = |source: &'static str| {
         let app = app.clone();
         StreamableHttpService::new(
@@ -329,7 +352,7 @@ pub async fn restart(app: Arc<App>) {
         .nest_service("/mcp", service("MCP client"))
         .nest_service("/agent/mcp", service("In-app agent"))
         .layer(middleware::from_fn_with_state(app.clone(), require_token));
-    set_status(&app, McpStatus { listening: true, url, lan: cfg.lan, error: None });
+    set_status(&app, McpStatus { listening: true, url, lan: cfg.lan, error: fallback, port });
     let task = tokio::spawn(async move {
         if let Err(e) = axum::serve(listener, router).await {
             tracing::error!("MCP server stopped: {e}");

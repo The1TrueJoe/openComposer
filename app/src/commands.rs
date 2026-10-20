@@ -19,7 +19,7 @@ use crate::state::{Activity, App, AppError};
 type S<'a> = State<'a, Arc<App>>;
 type R<T> = Result<T, String>;
 
-const UI_SOURCE: &str = "You (openComposer)";
+pub const UI_SOURCE: &str = "You (openComposer)";
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -274,9 +274,12 @@ pub async fn action(app: S<'_>, name: String, args: Option<Value>) -> R<Value> {
         "library_drivers" => Ok(actions::library_drivers(app)),
         "import_driver" => actions::import_driver(app, req(a)?),
         "add_driver" => actions::add_driver(app, req(a)?, UI_SOURCE).await,
+        "driver_icons" => actions::driver_icons(app, self::args(a)?).await,
+        "send_command" => actions::send_command(app, req(a)?, UI_SOURCE).await,
+        "device_state" => actions::device_state(app, req(a)?).await,
         other => return Err(format!("unknown action {other}")),
     };
-    if matches!(name.as_str(), "propose_changes" | "load_backup" | "backup_project" | "install_driver" | "add_driver" | "import_driver") {
+    if matches!(name.as_str(), "propose_changes" | "load_backup" | "backup_project" | "install_driver" | "add_driver" | "import_driver" | "send_command") {
         app.log(UI_SOURCE, &name, String::new(), r.is_ok(), t.elapsed().as_millis() as u64);
     }
     r.map_err(err)
@@ -353,13 +356,18 @@ pub async fn agent_list(app: S<'_>) -> R<Vec<ConversationInfo>> {
 }
 
 #[tauri::command]
-pub async fn agent_new(app: S<'_>, provider: Option<Provider>) -> R<ConversationInfo> {
-    Ok(app.agents.start(provider.unwrap_or(app.config().agent.provider)))
+pub async fn agent_new(app: S<'_>, provider: Option<Provider>, model: Option<String>, effort: Option<String>) -> R<ConversationInfo> {
+    Ok(app.agents.start(provider.unwrap_or(app.config().agent.provider), model, effort))
 }
 
 #[tauri::command]
-pub async fn agent_send(app: S<'_>, id: String, text: String) -> R<()> {
-    app.agents.send(&app, &id, text).await.map_err(err)
+pub async fn agent_configure(app: S<'_>, id: String, model: Option<String>, effort: Option<String>) -> R<ConversationInfo> {
+    app.agents.configure(&id, model, effort).await.map_err(err)
+}
+
+#[tauri::command]
+pub async fn agent_send(app: S<'_>, id: String, text: String, attachments: Option<Vec<String>>) -> R<()> {
+    app.agents.send(&app, &id, text, attachments.unwrap_or_default()).await.map_err(err)
 }
 
 #[tauri::command]

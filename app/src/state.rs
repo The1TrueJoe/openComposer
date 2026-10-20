@@ -44,6 +44,8 @@ pub struct Session {
     /// One batch of writes at a time per Director.
     pub write_lock: tokio::sync::Mutex<()>,
     broker: tokio::sync::Mutex<Option<(Instant, Arc<c4::broker::Broker>)>>,
+    /// Driver file → icon as a data URL (or None when it has none we can fetch).
+    pub icons: tokio::sync::Mutex<HashMap<String, Option<String>>>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -201,6 +203,7 @@ impl App {
             catalog: Default::default(),
             write_lock: Default::default(),
             broker: Default::default(),
+            icons: Default::default(),
         });
         sessions.insert(saved.id.clone(), s.clone());
         drop(sessions);

@@ -5,6 +5,7 @@
 //! path. Writes never touch the Director directly: they build [`Op`]s and hand them to
 //! [`approvals::propose`].
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -285,8 +286,19 @@ pub async fn network(app: &Arc<App>, a: DirectorArg) -> AppResult<Value> {
             "address_type": n.address_type, "address": n.address, "uuid": n.uuid,
             "search_type": n.search_type, "status": n.status }))
         .collect();
-    let bound: std::collections::HashSet<&str> = p.network_bindings.iter().map(|n| n.uuid.as_str()).collect();
-    let unidentified: Vec<_> = found.iter().filter(|d| !bound.contains(d.uuid.as_str())).collect();
+    // Identified means bound to a device in the project — by its discovered id or, since some
+    // devices report a different id to discovery than to their binding, by IP address.
+    let bound: std::collections::HashSet<&str> = p
+        .network_bindings
+        .iter()
+        .flat_map(|n| [n.uuid.as_str(), n.address.as_str()])
+        .filter(|s| !s.is_empty())
+        .collect();
+    let unidentified: Vec<_> = found
+        .iter()
+        .filter(|d| !bound.contains(d.uuid.as_str()) && !bound.contains(d.address.as_str()))
+        .filter(|d| !d.device_type.starts_with("c4:director"))
+        .collect();
     Ok(json!({ "identified": identified, "discovered": found, "discovered_not_in_project": unidentified }))
 }
 
@@ -557,4 +569,130 @@ pub fn ui_context(app: &App) -> Value {
 pub fn ui_show(app: &App, a: UiShowArgs) -> AppResult<Value> {
     app.emit("ui-command", &a);
     Ok(json!({ "ok": true, "shown": a }))
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct IconsArgs {
+    #[serde(default)]
+    pub director: Option<String>,
+    /// Driver files to get icons for; omit for every driver in the project.
+    #[serde(default)]
+    pub filenames: Option<Vec<String>>,
+}
+
+/// Driver icons as data URLs. A .c4z carries its own icon, which the controller serves from
+/// the package's www folder; .c4i drivers use Composer's stock images (not on the controller),
+/// so they get none and the UI shows a generic icon for their proxy type.
+pub async fn driver_icons(app: &Arc<App>, a: IconsArgs) -> AppResult<Value> {
+    use base64::Engine;
+    let s = app.session(a.director.as_deref()).await?;
+    let cat = s.catalog(false).await?;
+    let snap = s.snapshot(false).await?;
+    // driver file → (declared icon path, one item using it)
+    let mut wanted: std::collections::BTreeMap<String, (Option<String>, Option<u32>)> = Default::default();
+    for it in snap.project.items.values() {
+        if let Some(d) = &it.driver {
+            let declared = cat.devices.get(&it.id).and_then(|i| i.icon.clone());
+            let e = wanted.entry(d.clone()).or_insert((None, None));
+            e.0 = e.0.take().or(declared);
+            e.1.get_or_insert(it.id);
+        }
+    }
+    if let Some(list) = a.filenames {
+        let keep: std::collections::HashSet<String> = list.iter().map(|f| f.to_lowercase()).collect();
+        for f in list {
+            wanted.entry(f).or_insert((None, None));
+        }
+        wanted.retain(|k, _| keep.contains(&k.to_lowercase()));
+    }
+    let host = s.director.info.host.clone();
+    let mut cache = s.icons.lock().await;
+    let todo: Vec<_> = wanted.into_iter().filter(|(f, _)| !cache.contains_key(f)).collect();
+    let mut set = tokio::task::JoinSet::new();
+    for (file, (path, _)) in &todo {
+        if !file.to_lowercase().ends_with(".c4z") {
+            continue;
+        }
+        let stem = file.rsplit_once('.').map(|(s, _)| s.to_string()).unwrap_or_else(|| file.clone());
+        let path = path.clone().unwrap_or_else(|| "icons/device_sm.png".into());
+        let (http, host, file) = (app.http.clone(), host.clone(), file.clone());
+        set.spawn(async move {
+            let url = format!("http://{host}/c4z/{stem}/www/{}", path.trim_start_matches('/'));
+            let got = async {
+                let r = http.get(&url).timeout(std::time::Duration::from_secs(5)).send().await.ok()?;
+                if !r.status().is_success() {
+                    return None;
+                }
+                let mime = r.headers().get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("image/png").to_string();
+                let bytes = r.bytes().await.ok()?;
+                Some(format!("data:{mime};base64,{}", base64::engine::general_purpose::STANDARD.encode(&bytes)))
+            }
+            .await;
+            (file, got)
+        });
+    }
+    let mut fetched: HashMap<String, Option<String>> = HashMap::new();
+    while let Some(Ok((f, icon))) = set.join_next().await {
+        fetched.insert(f, icon);
+    }
+    // A Virtual Director has no web server for packages; ask its web API per item instead.
+    if fetched.values().any(Option::is_none) {
+        if let Ok(b) = app.broker(&s).await {
+            for (file, (_, item)) in &todo {
+                if fetched.get(file).is_some_and(Option::is_none) {
+                    if let Some(id) = item {
+                        if let Some(icon) = b.item_icon(*id).await {
+                            fetched.insert(file.clone(), Some(icon));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    for (file, _) in todo {
+        cache.insert(file.clone(), fetched.remove(&file).flatten());
+    }
+    Ok(json!({ "icons": cache.iter().filter_map(|(k, v)| v.as_ref().map(|v| (k.clone(), v.clone()))).collect::<HashMap<_, _>>() }))
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct CommandArgs {
+    #[serde(default)]
+    pub director: Option<String>,
+    /// Device or proxy to send the command to.
+    pub device: u32,
+    /// Command name as the driver declares it (get_item → commands), e.g. ON, SET_LEVEL.
+    pub command: String,
+    #[serde(default)]
+    pub params: Vec<c4::ops::CodeParam>,
+}
+
+/// Send a command to a device right now (Composer's device control). It acts on real
+/// equipment: from the app's own controls it is sent at once; from an assistant it is an
+/// approval like any other change. Refused on read-only Directors either way.
+pub async fn send_command(app: &Arc<App>, a: CommandArgs, source: &str) -> AppResult<Value> {
+    let saved = app.resolve_director(a.director.as_deref())?;
+    app.ensure_writable(&saved)?;
+    let op = Op::SendCommand { device: a.device, command: a.command, params: a.params };
+    if source == crate::commands::UI_SOURCE {
+        let s = app.session(Some(&saved.id)).await?;
+        let r = s.director.apply(&op, None).await?;
+        return Ok(json!({ "status": "sent", "reply": r.notes }));
+    }
+    let r = approvals::propose(app, Some(&saved.id), vec![op], None, source).await?;
+    Ok(outcome(&r))
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StateArgs {
+    #[serde(default)]
+    pub director: Option<String>,
+    pub device: u32,
+}
+
+/// A device's variables as they are right now (power, level, input…), for control panels.
+pub async fn device_state(app: &Arc<App>, a: StateArgs) -> AppResult<Value> {
+    let s = app.session(a.director.as_deref()).await?;
+    let v = s.director.read("GetVariablesByDevice", &[("iddevice".into(), json!(a.device))]).await?;
+    Ok(json!({ "device": a.device, "variables": v }))
 }

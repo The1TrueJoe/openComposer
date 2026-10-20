@@ -74,6 +74,7 @@ pub fn run() {
             commands::agent_list,
             commands::agent_new,
             commands::agent_send,
+            commands::agent_configure,
             commands::agent_stop,
             commands::agent_delete,
         ])

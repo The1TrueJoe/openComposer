@@ -89,6 +89,9 @@ pub struct DeviceInfo {
     pub properties: Vec<PropertyDef>,
     pub actions: Vec<(String, String)>,
     pub commands: Vec<CommandDef>,
+    /// `<small image_source="c4z">icons/device_sm.png</small>`: where the driver's own icon
+    /// lives inside its package (`www/<path>`). `None` for drivers using Composer's images.
+    pub icon: Option<String>,
 }
 
 /// Driver definitions for every item, keyed by item id.
@@ -258,6 +261,11 @@ impl Director {
                     ));
                 }
             }
+            info.icon = child(dd, "small")
+                .filter(|n| n.attribute("image_source") == Some("c4z"))
+                .and_then(|n| n.text())
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty());
             if let Some(cmds) = child(dd, "commands") {
                 for c in cmds.children().filter(|c| c.has_tag_name("command")) {
                     info.commands.push(CommandDef {

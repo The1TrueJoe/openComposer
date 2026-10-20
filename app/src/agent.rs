@@ -55,6 +55,12 @@ pub struct ConversationInfo {
     pub busy: bool,
     pub entries: Vec<Entry>,
     pub cost_usd: f64,
+    /// Model alias or id (`sonnet`, `opus`, a full id); `None` = the CLI's default.
+    pub model: Option<String>,
+    /// Claude's effort level (low … max); `None` = default.
+    pub effort: Option<String>,
+    /// openComposer tools the CLI loaded at start (`None` until it has started).
+    pub tools: Option<usize>,
 }
 
 pub struct Conversation {
@@ -68,6 +74,9 @@ pub struct Conversation {
     stdin: tokio::sync::Mutex<Option<ChildStdin>>,
     child: tokio::sync::Mutex<Option<Child>>,
     session: Mutex<Option<String>>,
+    model: Mutex<Option<String>>,
+    effort: Mutex<Option<String>>,
+    tools: Mutex<Option<usize>>,
 }
 
 #[derive(Default)]
@@ -126,6 +135,9 @@ impl Conversation {
             busy: self.busy.load(Ordering::Relaxed),
             entries: self.entries.lock().unwrap().clone(),
             cost_usd: *self.cost.lock().unwrap(),
+            model: self.model.lock().unwrap().clone(),
+            effort: self.effort.lock().unwrap().clone(),
+            tools: *self.tools.lock().unwrap(),
         }
     }
 
@@ -184,7 +196,7 @@ impl Agents {
         self.convs.lock().unwrap().get(id).map(|c| c.info())
     }
 
-    pub fn start(&self, provider: Provider) -> ConversationInfo {
+    pub fn start(&self, provider: Provider, model: Option<String>, effort: Option<String>) -> ConversationInfo {
         let c = Arc::new(Conversation {
             id: uuid::Uuid::new_v4().to_string(),
             provider,
@@ -196,6 +208,9 @@ impl Agents {
             stdin: Default::default(),
             child: Default::default(),
             session: Default::default(),
+            model: Mutex::new(model.filter(|m| !m.trim().is_empty())),
+            effort: Mutex::new(effort.filter(|m| !m.trim().is_empty())),
+            tools: Mutex::new(None),
         });
         let info = c.info();
         self.convs.lock().unwrap().insert(c.id.clone(), c);
@@ -225,7 +240,23 @@ impl Agents {
         }
     }
 
-    pub async fn send(&self, app: &Arc<App>, id: &str, text: String) -> AppResult<()> {
+    /// Change model/effort. A running CLI is stopped; the next message resumes the same
+    /// session with the new settings, so the conversation carries on.
+    pub async fn configure(&self, id: &str, model: Option<String>, effort: Option<String>) -> AppResult<ConversationInfo> {
+        let c = self.convs.lock().unwrap().get(id).cloned().ok_or_else(|| AppError::Other("no such conversation".into()))?;
+        if c.busy.load(Ordering::Relaxed) {
+            return Err(AppError::Other("wait for the current reply to finish (or stop it) before switching".into()));
+        }
+        *c.model.lock().unwrap() = model.filter(|m| !m.trim().is_empty());
+        *c.effort.lock().unwrap() = effort.filter(|m| !m.trim().is_empty());
+        *c.stdin.lock().await = None;
+        if let Some(mut ch) = c.child.lock().await.take() {
+            let _ = ch.kill().await;
+        }
+        Ok(c.info())
+    }
+
+    pub async fn send(&self, app: &Arc<App>, id: &str, text: String, attachments: Vec<String>) -> AppResult<()> {
         let c = self.convs.lock().unwrap().get(id).cloned().ok_or_else(|| AppError::Other("no such conversation".into()))?;
         if c.busy.swap(true, Ordering::Relaxed) {
             return Err(AppError::Other("still working on the previous message".into()));
@@ -238,6 +269,7 @@ impl Agents {
                 *t = asked.trim().chars().take(60).collect();
             }
         }
+        let text = attach(app, &c.id, text, &attachments)?;
         c.push(app, Entry::User { text: text.clone(), at: Utc::now() });
         let r = match c.provider {
             Provider::Claude => send_claude(app, &c, &text).await,
@@ -253,7 +285,8 @@ impl Agents {
 
 fn mcp_url(app: &App) -> (String, String) {
     let m = app.config().mcp;
-    (format!("http://127.0.0.1:{}/agent/mcp", m.port), m.token)
+    let port = Some(crate::mcp::status().port).filter(|p| *p != 0).unwrap_or(m.port);
+    (format!("http://127.0.0.1:{port}/agent/mcp"), m.token)
 }
 
 async fn send_claude(app: &Arc<App>, c: &Arc<Conversation>, text: &str) -> AppResult<()> {
@@ -269,15 +302,23 @@ async fn send_claude(app: &Arc<App>, c: &Arc<Conversation>, text: &str) -> AppRe
         crate::config::restrict(&cfg_path);
         let mut args: Vec<String> = [
             "-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose",
-            "--include-partial-messages", "--tools", "", "--strict-mcp-config",
-            "--allowedTools", "mcp__openComposer", "--append-system-prompt", SYSTEM,
+            // Only openComposer's tools, plus Read for files attached to this conversation.
+            "--include-partial-messages", "--tools", "Read", "--strict-mcp-config",
+            "--allowedTools", "mcp__openComposer", "Read(./attachments/**)", "--append-system-prompt", SYSTEM,
         ]
         .iter()
         .map(|s| s.to_string())
         .collect();
         args.extend(["--mcp-config".into(), cfg_path.display().to_string()]);
-        if let Some(m) = app.config().agent.model {
+        if let Some(m) = c.model.lock().unwrap().clone().or(app.config().agent.model) {
             args.extend(["--model".into(), m]);
+        }
+        if let Some(e) = c.effort.lock().unwrap().clone() {
+            args.extend(["--effort".into(), e]);
+        }
+        // Restarted after a model change: pick the same conversation back up.
+        if let Some(sid) = c.session.lock().unwrap().clone() {
+            args.extend(["--resume".into(), sid]);
         }
         let mut child = proc::spawn(&bin, &args, &app.paths.agent()).map_err(|e| AppError::Other(format!("could not start claude: {e}")))?;
         *stdin = child.stdin.take();
@@ -320,8 +361,21 @@ fn on_claude_event(app: &App, c: &Conversation, v: &Value) {
     match v["type"].as_str() {
         Some("system") if v["subtype"] == "init" => {
             *c.session.lock().unwrap() = v["session_id"].as_str().map(String::from);
-            let tools = v["tools"].as_array().map(|t| t.len()).unwrap_or(0);
-            c.push(app, Entry::Status { text: format!("Connected to Claude ({tools} openComposer tools).") });
+            let tools = v["tools"]
+                .as_array()
+                .map(|t| t.iter().filter(|x| x.as_str().is_some_and(|n| n.starts_with("mcp__openComposer__"))).count())
+                .unwrap_or(0);
+            *c.tools.lock().unwrap() = Some(tools);
+            if tools == 0 {
+                let st = crate::mcp::status();
+                let why = st.error.unwrap_or_else(|| if st.listening { "the agent couldn't reach it".into() } else { "it isn't running".into() });
+                c.push(app, Entry::Error {
+                    text: format!("openComposer's tools didn't load, so this chat can't see the project ({why}). Check Settings → MCP, then start a new chat."),
+                });
+            } else {
+                let model = v["model"].as_str().map(|m| format!(" · {m}")).unwrap_or_default();
+                c.push(app, Entry::Status { text: format!("Connected to Claude{model} · {tools} openComposer tools") });
+            }
         }
         Some("stream_event") => {
             let e = &v["event"];
@@ -391,7 +445,7 @@ async fn send_codex(app: &Arc<App>, c: &Arc<Conversation>, text: &str) -> AppRes
         "-c".into(),
         "mcp_servers.openComposer.args=[\"--mcp-stdio\",\"--agent\"]".into(),
     ]);
-    if let Some(m) = app.config().agent.model {
+    if let Some(m) = c.model.lock().unwrap().clone().or(app.config().agent.model) {
         args.extend(["-m".into(), m]);
     }
     let prompt = if session.is_none() { format!("{SYSTEM}\n\n{text}") } else { text.to_string() };
@@ -443,4 +497,25 @@ async fn send_codex(app: &Arc<App>, c: &Arc<Conversation>, text: &str) -> AppRes
 
 fn toml_str(s: &str) -> String {
     format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+}
+
+/// Copy attached files into the conversation's folder (the agent may read only there) and
+/// tell the agent where they are.
+fn attach(app: &App, conv: &str, text: String, files: &[String]) -> AppResult<String> {
+    if files.is_empty() {
+        return Ok(text);
+    }
+    let dir = app.paths.agent().join("attachments").join(conv);
+    std::fs::create_dir_all(&dir).map_err(|e| AppError::Other(e.to_string()))?;
+    let mut lines = Vec::new();
+    for f in files {
+        let src = std::path::Path::new(f);
+        let name: String = src
+            .file_name()
+            .map(|n| n.to_string_lossy().chars().map(|c| if c.is_alphanumeric() || ".-_ ".contains(c) { c } else { '_' }).collect())
+            .ok_or_else(|| AppError::Other(format!("{f} isn't a file")))?;
+        std::fs::copy(src, dir.join(&name)).map_err(|e| AppError::Other(format!("can't attach {name}: {e}")))?;
+        lines.push(format!("- attachments/{conv}/{name}"));
+    }
+    Ok(format!("{text}\n\nAttached files (read them with your Read tool):\n{}", lines.join("\n")))
 }
