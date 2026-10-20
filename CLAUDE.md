@@ -52,3 +52,16 @@ OPENCOMPOSER_DATA=/tmp/oc C4_CERT=… C4_KEY=… cargo run -p opencomposer --exa
   and reordering aren't done. Proxy event names (e.g. a light's PUSH) come from Control4's
   built-in proxy definitions, which `GetItems` leaves unnamed. Z-Wave edits not captured.
 - Codex agent path is unverified (no Codex on the dev machine).
+- Identify (`add_network_binding`) after `add_device` is accepted by Director but didn't bind
+  the WB-300 in a test; unverified until checked against a real discovered device.
+- Never leave the headless harness running: it takes the MCP port from the real app.
+
+## How things fit (added later)
+- MCP auth: fixed bearer token, or OAuth sign-in (`oauth.rs`) approved in the app window.
+- Driver web tabs (`webui.rs`): pages from driver packages with a shim that routes their
+  `https://<apihost>` traffic through openComposer (controllers' certs are self-signed).
+- Drivers come from, in order: the controller, the library (`library.rs`), other connected
+  Directors, then `https://drivers.control4.com/<file>` (md5 from the search index checked).
+- `.c4i` drivers are added with `c4i_name`, `.c4z` with `c4z_name`.
+- Discovery: controllers answer SDDP `*` or their exact type only; only the primary runs a
+  Director (`/api/v1/status` says `"director":"connected"`, secondaries `"disabled"`).
