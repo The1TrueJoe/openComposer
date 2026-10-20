@@ -36,9 +36,11 @@ OPENCOMPOSER_DATA=/tmp/oc C4_CERT=… C4_KEY=… cargo run -p opencomposer --exa
 ```
 
 ## Known gaps
-- `AddBinding` is accepted by Director but the binding did not appear in a test on the
-  Virtual Director; verification flagged it as predicted-but-missing. Compare with
-  Composer's own call (it sends writes with `async="True"`).
+- Director accepts `AddBinding` for a connection id the item doesn't own and silently does
+  nothing (combo drivers repeat their proxies' connection ids). `approvals::check_connections`
+  refuses those up front; views list each connection under the proxy that owns it.
+- Unsigned dev builds make macOS ask for keychain access after every rebuild. The headless
+  harness keeps the identity in memory (`App::use_identity`) to avoid that.
 - Driver files are not installed or backed up yet. The controller's REST broker issues a
   token via `POST /api/v1/localjwt` over mutual TLS; drivers then go to
   `PUT /api/v1/drivers/files/<name>`. Not yet exercised.

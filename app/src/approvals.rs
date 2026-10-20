@@ -135,7 +135,9 @@ pub async fn propose(
     let _turn = session.write_lock.lock().await;
 
     let before = session.snapshot(true).await?;
-    let names = session.names().await?;
+    let catalog = session.catalog(false).await?;
+    check_connections(&ops, &catalog, &before.project)?;
+    let names = catalog.names();
     let mut predicted = before.project.clone();
     let mut descriptions = Vec::new();
     for (i, op) in ops.iter().enumerate() {
@@ -226,6 +228,52 @@ pub async fn propose(
     });
     app.emit("project-changed", serde_json::json!({ "director": saved.id }));
     Ok(a.unwrap_or(approval))
+}
+
+/// Director accepts `AddBinding` for connections that don't exist (and silently does
+/// nothing), so check both ends against the drivers' declared connections first.
+fn check_connections(ops: &[Op], cat: &c4::Catalog, p: &c4::Project) -> AppResult<()> {
+    let declared = |dev: u32, binding: u32| cat.devices.get(&dev).and_then(|d| d.connections.iter().find(|c| c.id == binding));
+    let proxy_owner = |dev: u32, binding: u32| {
+        p.item(dev).and_then(|i| i.children.iter().copied().find(|k| declared(*k, binding).is_some()))
+    };
+    // A combo driver repeats its proxies' connection ids; only the proxy can be bound.
+    let find = |dev: u32, binding: u32| declared(dev, binding).filter(|_| proxy_owner(dev, binding).is_none());
+    let owner_hint = |dev: u32, binding: u32| -> String {
+        match proxy_owner(dev, binding) {
+            Some(k) => format!(" — it belongs to its proxy #{k} “{}”", p.name_of(k)),
+            None => String::new(),
+        }
+    };
+    for op in ops {
+        let Op::AddConnection { consumer_device, consumer_binding, provider_device, provider_binding, class, .. } = op else {
+            continue;
+        };
+        for (dev, binding, want_consumer, role) in [
+            (*consumer_device, *consumer_binding, true, "input"),
+            (*provider_device, *provider_binding, false, "output"),
+        ] {
+            let Some(c) = find(dev, binding) else {
+                return Err(AppError::Other(format!(
+                    "“{}” (#{dev}) has no connection #{binding}{}",
+                    p.name_of(dev),
+                    owner_hint(dev, binding)
+                )));
+            };
+            if c.consumer != want_consumer {
+                return Err(AppError::Other(format!("“{}” connection “{}” is not an {role}", p.name_of(dev), c.name)));
+            }
+            if !c.classes.iter().any(|k| k.eq_ignore_ascii_case(class)) {
+                return Err(AppError::Other(format!(
+                    "“{}” connection “{}” doesn't carry {class} (it carries {})",
+                    p.name_of(dev),
+                    c.name,
+                    c.classes.join(", ")
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn apply_all(session: &Session, ops: &[Op]) -> (Vec<Applied>, Option<String>) {

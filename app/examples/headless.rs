@@ -17,7 +17,7 @@ async fn main() -> anyhow::Result<()> {
     let hosts: Vec<String> = std::env::args().skip(1).collect();
     let app = state::App::new(config::Paths::resolve()?);
     let id = certs::from_pem_files(std::env::var("C4_CERT")?.as_ref(), std::env::var("C4_KEY")?.as_ref())?;
-    app.set_identity(id)?;
+    app.use_identity(id);
     app.update_config(|c| {
         c.directors.clear();
         for (i, h) in hosts.iter().enumerate() {

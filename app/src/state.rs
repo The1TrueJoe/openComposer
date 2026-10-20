@@ -130,6 +130,11 @@ impl App {
         Ok(out)
     }
 
+    /// Use an identity for this run only, without touching the keychain (tests).
+    pub fn use_identity(&self, id: StoredIdentity) {
+        *self.identity.write().unwrap() = Some(id);
+    }
+
     pub fn set_identity(&self, id: StoredIdentity) -> anyhow::Result<()> {
         certs::save(&self.paths.identity(), &id)?;
         *self.identity.write().unwrap() = Some(id);
