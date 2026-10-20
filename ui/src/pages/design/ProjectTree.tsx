@@ -2,7 +2,7 @@ import { ChevronDown, ChevronRight, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { TreeNode } from "../../api";
 import { KindIcon } from "../../components/icons";
-import { filterTree } from "../../lib/project";
+import { chain, filterTree, indexTree } from "../../lib/project";
 import { cx, toggleIn } from "../../lib/ui";
 
 type Row = { node: TreeNode; depth: number; open: boolean; hasKids: boolean };
@@ -43,9 +43,32 @@ export function ProjectTree({ root, sel, onSelect, onMenu }: {
     return out;
   }, [places, agents, flipped, filter]);
 
+  // A selection made from outside (an assistant's ui_show, a device just added) may be inside
+  // folded rows, or not in the tree yet until it refetches: open its ancestors once it is
+  // there, then bring it into view.
+  const reveal = useRef<number | null>(null);
+  const scroll = useRef(false);
+  useEffect(() => { reveal.current = sel; }, [sel]);
   useEffect(() => {
+    const id = reveal.current;
+    if (id == null) return;
+    const idx = indexTree(root);
+    if (!idx.has(id)) return;
+    reveal.current = null;
+    const next = chain(idx, id).slice(0, -1).reduce((acc, a) => (openByDefault(a) !== acc.has(a.id) ? acc : toggleIn(acc, a.id)), flipped);
+    if (next === flipped) {
+      listRef.current?.querySelector(".tw-row.sel")?.scrollIntoView({ block: "nearest" });
+    } else {
+      scroll.current = true;
+      setFlipped(next);
+    }
+    // `flipped` is read, not watched: folding a row by hand must not re-open it.
+  }, [sel, root]);
+  useEffect(() => {
+    if (!scroll.current) return;
+    scroll.current = false;
     listRef.current?.querySelector(".tw-row.sel")?.scrollIntoView({ block: "nearest" });
-  }, [sel]);
+  }, [rows]);
 
   const onKey = (e: React.KeyboardEvent) => {
     const i = rows.findIndex((r) => r.node.id === sel);

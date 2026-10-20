@@ -1,12 +1,12 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageBoundary } from "./components/PageBoundary";
 import { Toaster, toast } from "sonner";
-import { api, errText, type AppStatus, type Approval, type DirectorInfo, type Op, type Outcome } from "./api";
+import { api, errText, type AddDriverArgs, type AppStatus, type Approval, type DirectorInfo, type Op, type Outcome, type UiContext } from "./api";
 import { ApprovalsBell, ApprovalsDrawer } from "./components/ApprovalsDrawer";
 import { Dialogs } from "./components/Dialogs";
 import { ConnectScreen } from "./components/connect";
 import { DirectorPicker, Failure, Loading, Logo, StatusBar } from "./components/shell";
-import type { Shell, View } from "./lib/shell";
+import { INSPECTOR_TABS, type FocusItem, type InspectorTab, type Shell, type View } from "./lib/shell";
 import { useBackendEvent } from "./lib/ui";
 
 // One chunk per tab: only one is on screen, and the agent's markdown and the settings forms
@@ -43,6 +43,11 @@ export default function App() {
   const [entered, setEntered] = useState(false);
   // Proposals made from this window: their card opens by itself, so no toast is needed.
   const ours = useRef(new Set<string>());
+  // Design's selection lives here so an assistant's `ui-command` can move it from anywhere.
+  const [selected, setSelected] = useState<number | null>(null);
+  const [inspectorTab, setInspectorTab] = useState<InspectorTab>("properties");
+  const [focus, setFocus] = useState<FocusItem | null>(null);
+  const [chat, setChat] = useState<string | null>(null);
 
   const refreshStatus = useCallback(() => {
     api.status().then((s) => { setStatus(s); setError(null); }, (e) => setError(errText(e)));
@@ -63,8 +68,12 @@ export default function App() {
 
   useBackendEvent("config", (config) => {
     setStatus((s) => s && { ...s, config });
-    // The active Director changing means every page is now about a different project.
-    if (config.active_director !== activeId) setRev((r) => r + 1);
+    // The active Director changing means every page is now about a different project, and an
+    // id selected in the old one means nothing in the new one.
+    if (config.active_director !== activeId) {
+      setRev((r) => r + 1);
+      setSelected(null);
+    }
   });
   useBackendEvent("mcp", (mcp) => setStatus((s) => s && { ...s, mcp }));
   useBackendEvent("director", (d) => {
@@ -93,6 +102,21 @@ export default function App() {
     });
   });
 
+  // An assistant (ui_show) pointing at something. Values it gets wrong are ignored, not obeyed
+  // halfway: an unknown view or tab is skipped, the rest still applies.
+  useBackendEvent("ui-command", (c) => {
+    if (c.approvals) setDrawer(true);
+    // Nothing to show on the connect screen; the project isn't open yet.
+    if (!entered) return;
+    if (c.item != null) {
+      setSelected(c.item);
+      setView("design");
+    } else if (c.view && VIEWS.some((v) => v.id === c.view)) {
+      setView(c.view as View);
+    }
+    if (c.tab && (INSPECTOR_TABS as readonly string[]).includes(c.tab)) setInspectorTab(c.tab as InspectorTab);
+  });
+
   // Both resolve only once the card is decided; say how it ended wherever the user is now.
   const settle = useCallback(async (pending: Promise<Outcome>): Promise<Outcome | null> => {
     try {
@@ -107,7 +131,8 @@ export default function App() {
     }
   }, []);
   const propose = useCallback((ops: Op[], reason?: string) => settle(api.propose(ops, reason)), [settle]);
-  const installDriver = useCallback((filename: string, from: string, reason?: string) => settle(api.installDriver(filename, from, reason)), [settle]);
+  const addDriver = useCallback((a: AddDriverArgs) => settle(api.addDriver(a)), [settle]);
+  const openChat = useCallback((id: string) => { setChat(id); setView("agent"); }, []);
 
   const pending = approvals.filter((a) => a.status === "pending").length;
 
@@ -119,11 +144,29 @@ export default function App() {
       info: director ? info.get(director.id) ?? null : null,
       connected: !!director && status.connected.includes(director.id),
       writable: director?.mode === "approve",
-      rev, approvals, propose, installDriver, refreshStatus,
+      rev, approvals, propose, addDriver, refreshStatus,
       openApprovals: () => setDrawer(true),
       go: setView,
+      selected, select: setSelected, inspectorTab, setInspectorTab, reportFocus: setFocus, chat, openChat,
     };
-  }, [status, info, rev, approvals, propose, installDriver, refreshStatus]);
+  }, [status, info, rev, approvals, propose, addDriver, refreshStatus, selected, inspectorTab, chat, openChat]);
+
+  // Tell the backend what is on screen, so "this device" means something to an assistant.
+  // Debounced: arrowing down the tree shouldn't be a call per row.
+  const [dirId, dirName] = [shell?.director?.id, shell?.director?.name];
+  const context = useMemo<UiContext>(() => {
+    const design = entered && view === "design";
+    return {
+      view: entered ? view : "connect",
+      director: dirId && dirName ? { id: dirId, name: dirName } : null,
+      item: design ? focus : null,
+      inspector_tab: design && focus ? inspectorTab : null,
+    };
+  }, [entered, view, dirId, dirName, focus, inspectorTab]);
+  useEffect(() => {
+    const t = setTimeout(() => void api.setUiContext(context).catch(() => {}), 250);
+    return () => clearTimeout(t);
+  }, [context]);
 
   if (!shell) {
     return <div className="boot">{error ? <Failure error={error} retry={refreshStatus} /> : <Loading what="Starting" />}</div>;

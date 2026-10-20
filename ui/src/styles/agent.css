@@ -28,6 +28,9 @@
 .msg.user { align-items: flex-end; }
 .msg.user .bubble { max-width: 78%; background: var(--bubble); border: 1px solid var(--bubble-line); padding: 8px 13px; border-radius: 14px 14px 4px 14px;
   white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg-context { display: block; max-width: 78%; color: var(--subtle); font-size: 10.5px; margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; }
+.msg-context svg { vertical-align: -1.5px; margin-right: 4px; }
 .msg-time { color: var(--faint); font-size: 10.5px; margin-top: 2px; }
 .msg.assistant { padding: 2px 2px; }
 .msg.assistant.streaming .md > :last-child::after { content: ""; display: inline-block; width: 7px; height: 14px; margin-left: 2px;

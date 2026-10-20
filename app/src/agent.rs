@@ -233,7 +233,9 @@ impl Agents {
         {
             let mut t = c.title.lock().unwrap();
             if *t == "New conversation" {
-                *t = text.chars().take(60).collect();
+                // The ask bar prefixes "[Looking at: …]"; title from what was actually asked.
+                let asked = text.lines().filter(|l| !l.starts_with("[Looking at:")).collect::<Vec<_>>().join(" ");
+                *t = asked.trim().chars().take(60).collect();
             }
         }
         c.push(app, Entry::User { text: text.clone(), at: Utc::now() });

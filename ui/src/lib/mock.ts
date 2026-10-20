@@ -6,11 +6,13 @@
  *  `?fresh` in the URL starts with no certificate and no Directors, to see onboarding. */
 
 import type {
-  AccessMode, Activity, Announcement, Approval, BackupInfo, Change, CodeLineView, Config, ConnectionDef, ConversationInfo,
-  DirectorInfo, Entry, Events, ItemDetail, ItemKind, ItemRef, McpStatus, Op, Outcome, Peer, Provider, TreeNode,
+  AccessMode, Activity, Announcement, Approval, BackupInfo, Change, CodeLineView, Config, ConnectionDef, ControllerDriver, ConversationInfo,
+  DirectorInfo, Entry, Events, ItemDetail, ItemKind, ItemRef, LibraryDriver, McpStatus, Op, Outcome, Peer, Provider, TreeNode,
+  UiContext,
 } from "../api/types";
+import { splitContext } from "./agent.ts";
 import {
-  BACKUPS, DIRECTORS, DRIVERS, SDDP, ZIGBEE, agentApproval, historyApprovals, seedConversations, seedProject, showcaseApproval,
+  BACKUPS, DIRECTORS, DRIVERS, SDDP, ZIGBEE, agentApproval, historyApprovals, seedConversations, seedLibrary, seedProject, showcaseApproval,
   type MItem, type MProject,
 } from "./fixtures";
 
@@ -57,6 +59,9 @@ let seq = 0;
 let nextId = 1000;
 /** Driver files on the mock controller: everything the project uses, plus what gets installed. */
 const installed = new Set([...project.items.values()].flatMap((i) => (i.driver ? [i.driver] : [])));
+let library: LibraryDriver[] = fresh ? [] : seedLibrary();
+/** What the window last said it shows (`set_ui_context`); the mock agent reads it. */
+let uiContext: UiContext | null = null;
 
 function mcpStatus(): McpStatus {
   return { listening: true, url: `http://${config.mcp.lan ? "192.168.1.25" : "127.0.0.1"}:${config.mcp.port}/mcp`, lan: config.mcp.lan, error: null };
@@ -190,7 +195,7 @@ function describe(op: Op): string {
     case "move_item": return `Move ${n(op.id)} to ${n(op.parent)}`;
     case "add_connection": return `Connect ${n(op.provider_device)} #${op.provider_binding} → ${n(op.consumer_device)} #${op.consumer_binding} (${op.class})`;
     case "remove_connection": return `Disconnect ${n(op.consumer_device)} #${op.consumer_binding} (${op.class})`;
-    case "add_network_binding": return `Identify ${n(op.device)} as ${op.search_type} at ${op.address}`;
+    case "add_network_binding": return `Identify ${op.device === 0 ? "the new device" : n(op.device)} as ${op.search_type} at ${op.address}`;
     case "remove_network_binding": return `Remove network identity of ${n(op.device)}`;
     case "set_property": return `Set ${n(op.device)} property “${op.name}” to “${masked(op.name, op.value)}”`;
     case "install_driver": return `Install driver file ${op.filename} from ${op.source}`;
@@ -210,14 +215,16 @@ function predict(ops: Op[]): Change[] {
   const changes: Change[] = [];
   // Director assigns real ids; a preview only needs distinct ones.
   let guess = nextId;
+  // `add_driver` identifies the device it adds as device 0: the one added just before.
+  let added: ItemRef | null = null;
   for (const op of ops) {
     switch (op.op) {
       case "add_device":
       case "add_room": {
         const parent = op.op === "add_device" ? op.room : op.floor;
         const kind: ItemKind = op.op === "add_device" ? "device" : "room";
-        changes.push({ kind: "item_added", driver: op.op === "add_device" ? op.driver : "roomdevice.c4i", descendants: 0,
-          item: { id: guess++, name: op.name, item_kind: kind, location: [...ancestors(parent).map((a) => a.name), item(parent).name] } });
+        added = { id: guess++, name: op.name, item_kind: kind, location: [...ancestors(parent).map((a) => a.name), item(parent).name] };
+        changes.push({ kind: "item_added", driver: op.op === "add_device" ? op.driver : "roomdevice.c4i", descendants: 0, item: added });
         break;
       }
       case "remove_item": {
@@ -252,7 +259,7 @@ function predict(ops: Op[]): Change[] {
         break;
       }
       case "add_network_binding":
-        changes.push({ kind: "network_added", item: itemRef(op.device), binding: op.binding, address_type: op.address_type,
+        changes.push({ kind: "network_added", item: op.device === 0 && added ? added : itemRef(op.device), binding: op.binding, address_type: op.address_type,
           address: op.address, uuid: op.address, search_type: op.search_type });
         break;
       case "remove_network_binding": {
@@ -425,7 +432,13 @@ async function decide(id: string, approve: boolean, note: string | null): Promis
     a.restore_point = `${BACKUPS[0].path.replace(/[^/]*$/, "")}${file}`;
     restorePoints.unshift({ ...BACKUPS[0], file, path: a.restore_point, created: new Date().toLocaleString() });
     try {
-      a.applied = a.ops.map((op) => ({ created: apply(op), notes: [] }));
+      // Device 0 in an identify is the device this same approval just added.
+      let made: number | undefined;
+      a.applied = a.ops.map((op) => {
+        const created = apply(op.op === "add_network_binding" && op.device === 0 && made != null ? { ...op, device: made } : op);
+        made = created[0] ?? made;
+        return { created, notes: [] };
+      });
       a.status = "applied";
       const added = a.diff.changes.find((c) => c.kind === "item_added");
       a.verification = {
@@ -478,7 +491,7 @@ async function stream(c: ConversationInfo, text: string) {
 function agentFollowUp(a: Approval) {
   if (a.source !== "In-app agent") return;
   for (const c of conversations) {
-    const t = [...c.entries].reverse().find((e) => e.role === "tool" && e.name.endsWith("propose_changes") && e.output == null);
+    const t = [...c.entries].reverse().find((e) => e.role === "tool" && /(propose_changes|add_driver)$/.test(e.name) && e.output == null);
     if (!t || t.role !== "tool") continue;
     t.output = outcome(a);
     emit("agent", c);
@@ -495,9 +508,105 @@ function agentFollowUp(a: Approval) {
   }
 }
 
-async function agentTurn(c: ConversationInfo, text: string) {
+/** Run a tool call the way the transcript shows one: the call, a pause, its answer. */
+async function tool(c: ConversationInfo, name: string, input: unknown, run: () => unknown) {
+  const t: Entry = { role: "tool", id: `t-${Date.now()}-${name}`, name, input, output: null, is_error: false };
+  push(c, t);
+  await sleep(450);
+  try {
+    t.output = run();
+  } catch (e) {
+    t.output = String(e);
+    t.is_error = true;
+  }
+  emit("agent", c);
+  return t.output;
+}
+
+const TABS = ["properties", "connections", "network", "variables", "events"] as const;
+
+/** The tab a request is about, from its words. */
+function tabFor(text: string): (typeof TABS)[number] | undefined {
+  if (/connect|wired|wiring|hdmi|\bir\b|input/i.test(text)) return "connections";
+  if (/network|\bip\b|identif|address/i.test(text)) return "network";
+  if (/program|event|when /i.test(text)) return "events";
+  if (/variable/i.test(text)) return "variables";
+  if (/propert|setting/i.test(text)) return "properties";
+  return undefined;
+}
+
+/** The project item a request names, longest name first ("Living Receiver" over "Living"). */
+function mentioned(text: string): MItem | undefined {
+  const t = text.toLowerCase();
+  return [...project.items.values()]
+    .filter((i) => i.kind !== "proxy" && i.kind !== "project" && t.includes(i.name.toLowerCase()))
+    .sort((a, b) => b.name.length - a.name.length)[0];
+}
+
+/** How an item is wired, one line per connection that goes somewhere. */
+function wiring(id: number): string[] {
+  const it = item(id);
+  return [id, ...it.children].flatMap((x) => connectionsOf(x).flatMap((c) =>
+    c.connected_to.map((p) => `- **${c.name}** ${c.role === "input" ? "←" : "→"} ${p.device.name} › ${p.connection ?? `#${p.binding}`}`)));
+}
+
+/** A turn from the Design ask bar: it knows what you're looking at, can point the window at
+ *  something else (ui_show), and proposes changes to "this". */
+async function designTurn(c: ConversationInfo, text: string) {
+  const ctx = (await tool(c, "ui_context", {}, () => uiContext ?? { note: "the window hasn't reported what it shows" })) as UiContext | null;
+  if (!c.busy) return;
+  const here = ctx?.item ? project.items.get(ctx.item.id) : undefined;
+  const target = mentioned(text);
+  const tab = tabFor(text);
+  const rename = /\brename (?:this|it)?\s*(?:to|as)\s+[“"']?(.+?)[”"']?\s*$/i.exec(text);
+
+  if (rename && here && here.kind !== "project") {
+    const to = rename[1].trim();
+    await stream(c, `Renaming **${here.name}** to **${to}** — approve it below.`);
+    const ops: Op[] = [{ op: "rename_item", id: here.id, name: to }];
+    push(c, { role: "tool", id: `t-${Date.now()}`, name: "propose_changes", input: { ops, reason: "Rename as asked." }, output: null, is_error: false });
+    void propose(ops, "Rename as asked.", "In-app agent").catch((e) => push(c, { role: "error", text: String(e) }));
+    return;
+  }
+  if (target && target.id !== here?.id) {
+    const show = { item: target.id, tab, approvals: false };
+    await tool(c, "ui_show", show, () => {
+      emit("ui-command", show);
+      return { ok: true, shown: show };
+    });
+    const lines = wiring(target.id);
+    await stream(c, [
+      `I've selected **${target.name}** in ${roomOf(target.id)?.name ?? "the project"}${tab ? ` and opened its *${tab}* tab` : ""}.`,
+      "",
+      ...(lines.length ? ["It's wired like this:", ...lines] : ["It has no connections yet."]),
+    ].join("\n"));
+  } else if (here) {
+    const d = (await tool(c, "get_item", { id: here.id }, () => itemDetail(here.id))) as ItemDetail;
+    const lines = wiring(here.id);
+    await stream(c, [
+      `**${d.name}** is a ${d.kind}${d.device ? ` — ${d.device.manufacturer} ${d.device.model}, driver \`${d.driver}\`` : ""}${d.room && d.kind !== "room" ? `, in ${d.room}` : ""}.`,
+      "",
+      ...(d.kind === "room" ? [`It holds ${plural(d.children.length, "item")}: ${d.children.map((x) => x.name).join(", ") || "nothing yet"}.`]
+        : lines.length ? ["Connections:", ...lines] : ["Nothing is connected to it yet."]),
+      ...(d.network.length ? ["", `On the network at \`${d.network[0].address}\` (${d.network[0].status}).`] : []),
+      "",
+      "Try *“show me the Theater Receiver's connections”* or *“rename this to …”*.",
+    ].join("\n"));
+  } else {
+    await stream(c, "Nothing is selected, so I looked at the whole project: **Telaak House** has 4 rooms and 10 devices. Name something — *“show me the Bedroom TV”* — and I'll bring it up.");
+  }
+  c.busy = false;
+  c.cost_usd += 0.0039;
+  emit("agent", c);
+}
+
+const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
+
+async function agentTurn(c: ConversationInfo, raw: string) {
   if (!c.entries.length) push(c, { role: "status", text: `Connected to ${c.provider === "claude" ? "Claude" : "Codex"} (17 openComposer tools).` });
   await sleep(500);
+  const { context, text } = splitContext(raw);
+  if (context) return designTurn(c, text);
   const wantsChange = /\b(rename|call it|name it)\b/i.test(text);
   const t: Entry = { role: "tool", id: `t-${Date.now()}`, name: "find_items", input: { query: "Kitchen" }, output: null, is_error: false };
   push(c, t);
@@ -556,6 +665,24 @@ async function act(name: string, a: Args): Promise<unknown> {
     }
     case "list_backups":
       return { backups: backups() };
+    case "library_drivers":
+      return { drivers: library };
+    case "import_driver": {
+      await sleep(300);
+      const path = String(a.path);
+      const file = path.split(/[\\/]/).pop() ?? path;
+      if (!/\.(c4z|c4i)$/i.test(file)) throw `${file} isn't a driver file (.c4z or .c4i)`;
+      const doc = DRIVERS.find((d) => d.filename.toLowerCase() === file.toLowerCase());
+      const d: LibraryDriver = {
+        filename: file, name: doc?.name ?? file.replace(/\.c4[zi]$/i, "").replace(/[_-]+/g, " "), manufacturer: doc?.manufacturer ?? "",
+        model: doc?.model ?? "", version: doc?.version ?? 1, creator: doc?.creator ?? "", control_method: doc?.control_method ?? "",
+        search_types: doc?.search_types ?? [], proxies: doc?.proxies ?? [], network_bindings: [6001], size: 96_512,
+        path: `~/Library/Application Support/com.openComposer.openComposer/drivers/${file}`, source: "library",
+      };
+      library = [...library.filter((x) => x.filename !== file), d];
+      log("You (openComposer)", "import_driver", path);
+      return d;
+    }
   }
   ensureSession();
   switch (name) {
@@ -656,11 +783,76 @@ async function act(name: string, a: Args): Promise<unknown> {
       log("You (openComposer)", "install_driver", `${a.filename} from ${from}`);
       return propose([{ op: "install_driver", filename: String(a.filename), source }], (a.reason as string) ?? null, "You (openComposer)");
     }
+    case "controller_drivers": {
+      const d = config.directors.find((x) => x.id === config.active_director)!;
+      if (!d.web_api) throw `the web API is switched off for ${d.name} (Directors → web API); the controller's driver list needs it`;
+      await sleep(300);
+      return { drivers: controllerDrivers() };
+    }
+    case "add_driver":
+      log("You (openComposer)", "add_driver", `${a.filename} → #${a.room}`);
+      return propose(addDriverOps(a), (a.reason as string) ?? null, "You (openComposer)");
     case "load_backup":
       log("You (openComposer)", "load_backup", String(a.backup));
       return propose([{ op: "load_project", label: String(a.backup) }], (a.reason as string) ?? null, "You (openComposer)");
   }
   throw `unknown action ${name}`;
+}
+
+/** What the controller's web API would list: every installed file that isn't a proxy or the
+ *  room driver, described from the database fixture or the device using it. */
+function controllerDrivers(): ControllerDriver[] {
+  const users = new Map<string, MItem>();
+  for (const it of project.items.values()) if (it.driver && !users.has(it.driver)) users.set(it.driver, it);
+  return [...installed].flatMap((f): ControllerDriver[] => {
+    const user = users.get(f);
+    if (user && (user.kind === "proxy" || user.kind === "room")) return [];
+    const doc = DRIVERS.find((d) => d.filename === f);
+    const cat = user ? project.catalog.get(user.id) : undefined;
+    return [{
+      filename: f, name: doc?.name ?? cat?.driver_name ?? f, manufacturer: doc?.manufacturer ?? cat?.manufacturer ?? "",
+      model: doc?.model ?? cat?.model ?? "", version: doc?.version ?? cat?.version ?? null,
+      searchTypes: doc?.search_types ?? (cat?.search_type ? [cat.search_type] : []), proxies: doc?.proxies ?? cat?.proxies ?? [],
+      primaryProxy: doc?.primary_proxy ?? cat?.proxies[0] ?? "", isAgent: user?.kind === "agent", isCombo: false, md5sum: "",
+      created: "2026-03-02T10:14:00Z", modified: "2026-09-30T14:03:44Z", certified: doc?.certified ?? true,
+      category: user?.kind === "agent" ? "agent" : "device",
+    }];
+  });
+}
+
+/** `add_driver` as the backend builds it: install the file first when the controller lacks
+ *  it (from the library, else downloaded from the database fixture and kept in the library),
+ *  add the device, then identify it as "device 0" — the one just added. */
+function addDriverOps(a: Args): Op[] {
+  const file = String(a.filename);
+  const ops: Op[] = [];
+  let lib = library.find((x) => x.filename.toLowerCase() === file.toLowerCase());
+  if (!installed.has(file)) {
+    let source = lib?.source === "composer" ? "Composer's driver folder" : "the driver library";
+    if (!lib) {
+      const doc = DRIVERS.find((d) => d.filename.toLowerCase() === file.toLowerCase());
+      if (!doc) {
+        throw `${file} isn't in Control4's driver database. It isn't on this controller, in the driver library or on another `
+          + "connected Director either; import the file into the library first.";
+      }
+      lib = {
+        filename: doc.filename, name: doc.name, manufacturer: doc.manufacturer, model: doc.model, version: doc.version, creator: doc.creator,
+        control_method: doc.control_method, search_types: doc.search_types, proxies: doc.proxies, network_bindings: [6001], size: 152_064,
+        path: `~/Library/Application Support/com.openComposer.openComposer/drivers/${doc.filename}`, source: "library",
+      };
+      library = [...library, lib];
+      source = "Control4's driver database (checksum verified)";
+    }
+    ops.push({ op: "install_driver", filename: file, source });
+  }
+  const name = String(a.name ?? "").trim() || lib?.name || DRIVERS.find((d) => d.filename === file)?.name || file;
+  ops.push({ op: "add_device", room: Number(a.room), name, driver: file });
+  const id = a.identify as { address: string; search_type: string; address_type?: number; binding?: number } | undefined;
+  if (id) {
+    ops.push({ op: "add_network_binding", device: 0, binding: id.binding ?? lib?.network_bindings[0] ?? 6001,
+      address_type: id.address_type ?? 1, address: id.address, search_type: id.search_type });
+  }
+  return ops;
 }
 
 function describeSource(s: string) {
@@ -741,6 +933,9 @@ async function handle(cmd: string, a: Args): Promise<unknown> {
       ]).map((s) => ({ kind: "200 OK", primary_proxy: "", proxies: [], config_url: "", max_age: 1800, headers: {}, ...s }));
     case "action":
       return act(String(a.name), (a.args as Args | null) ?? {});
+    case "set_ui_context":
+      uiContext = a.context as UiContext;
+      return null;
     case "approvals":
       return approvals;
     case "decide_approval":

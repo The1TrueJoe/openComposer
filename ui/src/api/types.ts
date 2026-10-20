@@ -257,11 +257,64 @@ export interface BackupResult extends BackupInfo {
   note: string | null;
 }
 
-export interface DriverStatus {
+/** One driver file installed on the controller, as its web API lists it (`controller_drivers`).
+ *  The shape is the controller's own (camelCase), so every field but the file name is optional. */
+export interface ControllerDriver {
   filename: string;
-  installed: boolean;
-  /** What the controller's web API says about the file; its shape is the controller's. */
-  info: Record<string, unknown> | null;
+  name?: string;
+  manufacturer?: string;
+  model?: string;
+  version?: string | number | null;
+  searchTypes?: string[];
+  /** Proxy names; some firmware lists objects with a `name` instead of strings. */
+  proxies?: unknown[];
+  primaryProxy?: string;
+  isAgent?: boolean;
+  isCombo?: boolean;
+  md5sum?: string;
+  created?: string;
+  modified?: string;
+  certified?: boolean;
+  category?: string;
+}
+
+/** A driver file read from disk (crates/c4/src/drivers.rs `LocalDriver`). */
+export interface LocalDriver {
+  filename: string;
+  name: string;
+  manufacturer: string;
+  model: string;
+  version: number | null;
+  creator: string;
+  control_method: string;
+  search_types: string[];
+  proxies: string[];
+  /** Network connection ids (type 4): what identifying the device binds. */
+  network_bindings: number[];
+  size: number;
+}
+
+/** A file in openComposer's driver library (app/src/library.rs). */
+export interface LibraryDriver extends LocalDriver {
+  path: string;
+  /** `library`: openComposer's own folder; `composer`: Composer Pro's folders on this PC. */
+  source: "library" | "composer";
+}
+
+/** `add_driver`: install the file if needed, add the device, optionally identify it — one approval. */
+export interface AddDriverArgs {
+  room: number;
+  filename: string;
+  name?: string;
+  identify?: {
+    /** A discovered physical device's `uuid`, or SDDP's `<Type>-<Host>`. */
+    address: string;
+    /** The SDDP type, e.g. `Denon:AVR-X2100W`. */
+    search_type: string;
+    address_type?: number;
+    binding?: number;
+  };
+  reason?: string;
 }
 
 // ---- semantic diff (crates/c4/src/diff.rs) ---------------------------------------------------
@@ -425,6 +478,24 @@ export interface ProviderStatus {
   version: string | null;
 }
 
+// ---- the window and assistants (actions::ui_context / ui_show) -------------------------------
+
+/** What the window shows, reported with `set_ui_context` so assistants can resolve "this". */
+export interface UiContext {
+  view: string;
+  director: { id: string; name: string } | null;
+  item: { id: number; name: string; kind: KindLabel; path: string } | null;
+  inspector_tab: string | null;
+}
+
+/** `ui_show`: an assistant steering the window. Unknown values are ignored, not errors. */
+export interface UiCommand {
+  view?: string;
+  item?: number;
+  tab?: string;
+  approvals: boolean;
+}
+
 /** Every event the backend emits, by name. */
 export interface Events {
   approval: Approval;
@@ -436,4 +507,5 @@ export interface Events {
   director: DirectorEvent;
   "project-changed": { director: string };
   backups: BackupInfo[];
+  "ui-command": UiCommand;
 }

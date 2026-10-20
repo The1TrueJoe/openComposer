@@ -5,9 +5,10 @@ import { api, errText, type ConversationInfo, type Provider } from "../../api";
 import { Tip, useDialog } from "../../components/Dialogs";
 import { Grip, MainPane, Panes, SidePane } from "../../components/Panes";
 import { Select, Spinner } from "../../components/controls";
+import { Transcript } from "../../components/Transcript";
+import { chatTitle } from "../../lib/agent";
 import type { Shell } from "../../lib/shell";
 import { ago, cx, useBackendEvent, useLoad } from "../../lib/ui";
-import { Transcript } from "./Transcript";
 
 const NAMES: Record<Provider, string> = { claude: "Claude Code", codex: "Codex" };
 
@@ -30,9 +31,10 @@ export function AgentPage({ shell }: { shell: Shell }) {
   useEffect(() => {
     api.agentList().then((list) => {
       setConvs(list);
-      setSel((s) => s ?? list[0]?.id ?? null);
+      // "Open in Agent tab" from the ask bar names the one to show.
+      setSel((s) => s ?? (list.some((c) => c.id === shell.chat) ? shell.chat : list[0]?.id ?? null));
     }, (e) => toast.error(errText(e)));
-  }, []);
+  }, [shell.chat]);
 
   useBackendEvent("agent", (c) => setConvs((list) => {
     const i = list.findIndex((x) => x.id === c.id);
@@ -67,7 +69,7 @@ export function AgentPage({ shell }: { shell: Shell }) {
   };
 
   const remove = async (c: ConversationInfo) => {
-    if (!(await confirm({ title: `Delete “${c.title}”?`, description: c.busy ? "It's still working; it will be stopped." : undefined, confirmLabel: "Delete", danger: true }))) return;
+    if (!(await confirm({ title: `Delete “${chatTitle(c.title)}”?`, description: c.busy ? "It's still working; it will be stopped." : undefined, confirmLabel: "Delete", danger: true }))) return;
     await api.agentDelete(c.id).catch((e) => toast.error(errText(e)));
     setConvs((l) => l.filter((x) => x.id !== c.id));
     if (sel === c.id) setSel(null);
@@ -91,7 +93,7 @@ export function AgentPage({ shell }: { shell: Shell }) {
           {!convs.length && <p className="empty pad">No conversations yet.</p>}
           {convs.map((c) => (
             <div key={c.id} className={cx("chat-item", c.id === sel && "sel")} onClick={() => setSel(c.id)}>
-              <div className="chat-title">{c.busy && <Spinner />}{c.title}</div>
+              <div className="chat-title">{c.busy && <Spinner />}{chatTitle(c.title)}</div>
               <div className="chat-meta"><span>{NAMES[c.provider]}</span><span>{ago(c.created)}</span>
                 {c.cost_usd > 0 && <span>${c.cost_usd.toFixed(3)}</span>}</div>
               <Tip text="Delete">
@@ -149,7 +151,7 @@ function Chat({ conv, shell, onSend, notInstalled }: {
     <div className="chat">
       <div className="chat-head">
         <Sparkles size={14} strokeWidth={1.8} className="accent" />
-        <b>{conv?.title ?? "New conversation"}</b>
+        <b>{conv ? chatTitle(conv.title) : "New conversation"}</b>
         {conv && <span className="tag">{NAMES[conv.provider]}</span>}
         <span className="spread" />
         {conv && conv.cost_usd > 0 && <Tip text="Reported by the CLI for this conversation"><span className="dim small">${conv.cost_usd.toFixed(4)}</span></Tip>}

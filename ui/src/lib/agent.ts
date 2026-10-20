@@ -31,13 +31,47 @@ export function sameOps(input: unknown, ops: Op[]): boolean {
   });
 }
 
-/** The card a `propose_changes` call is about: by id once the call has returned, otherwise
- *  the newest agent proposal with the same ops that is still open. */
+/** Tools whose call waits on an approval card. */
+export const PROPOSING = ["propose_changes", "load_backup", "add_driver", "install_driver"] as const;
+
+export const proposes = (e: ToolEntry) => PROPOSING.some((n) => isTool(e, n));
+
+/** Whether a still-open card is the one this call made. `propose_changes` sends its ops; the
+ *  others send a file name the backend turns into ops, so match on that. */
+function madeBy(e: ToolEntry, a: Approval): boolean {
+  if (isTool(e, "propose_changes")) return sameOps(e.input, a.ops);
+  const file = args(e.input)?.filename;
+  if (isTool(e, "add_driver")) return a.ops.some((o) => o.op === "add_device" && o.driver === file);
+  if (isTool(e, "install_driver")) return a.ops.some((o) => o.op === "install_driver" && o.filename === file);
+  return isTool(e, "load_backup") && a.ops.some((o) => o.op === "load_project");
+}
+
+/** The card a proposing call is about: by id once the call has returned, otherwise the
+ *  newest open agent proposal it matches. */
 export function approvalFor(e: ToolEntry, approvals: Approval[]): Approval | null {
   const out = args(e.output);
   const id = typeof out?.approval_id === "string" ? out.approval_id : null;
   if (id) return approvals.find((a) => a.id === id) ?? null;
-  return approvals.find((a) => a.source === AGENT_SOURCE && (a.status === "pending" || a.status === "applying") && sameOps(e.input, a.ops)) ?? null;
+  return approvals.find((a) => a.source === AGENT_SOURCE && (a.status === "pending" || a.status === "applying") && madeBy(e, a)) ?? null;
+}
+
+// The ask bar opens each message with one line saying what the window shows, so the agent can
+// resolve "this" without a tool call. On screen that line is a chip, not part of the bubble.
+const CONTEXT = /^\[Looking at: (.*)\]\n/;
+
+export const withContext = (context: string | null, text: string) => (context ? `[Looking at: ${context}]\n${text}` : text);
+
+export function splitContext(text: string): { context: string | null; text: string } {
+  const m = CONTEXT.exec(text);
+  return m ? { context: m[1], text: text.slice(m[0].length) } : { context: null, text };
+}
+
+/** A conversation's title without that line. The backend titles a conversation with the first
+ *  60 characters of its first message, which for an ask-bar one is mostly the context line. */
+export function chatTitle(title: string): string {
+  if (!title.startsWith("[Looking at:")) return title;
+  const end = title.indexOf("]\n");
+  return end >= 0 && title.slice(end + 2).trim() ? title.slice(end + 2) : "Design assistant";
 }
 
 /** One line saying what a tool call was asked, for its folded card. */

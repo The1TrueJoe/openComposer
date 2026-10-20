@@ -3,7 +3,7 @@
  *  the backend's own model so the mock can derive every view from it the same way. */
 
 import type {
-  Approval, BackupInfo, SavedDirector, CodeLineView, ConversationInfo, DriverDoc, ItemKind, ItemRef, KindLabel, NetworkBinding, Variable,
+  Approval, BackupInfo, SavedDirector, CodeLineView, ConversationInfo, DriverDoc, ItemKind, ItemRef, KindLabel, LibraryDriver, NetworkBinding, Variable,
 } from "../api/types";
 
 export interface MItem {
@@ -296,7 +296,24 @@ export const DRIVERS: DriverDoc[] = [
     certified: false, primary_proxy: "light_v2", proxies: ["light_v2"], search_types: ["c4:lutron:caseta"] }),
   doc({ filename: "control4_dimmer_gen3.c4i", name: "Dimmer (Gen 3)", manufacturer: "Control4", model: "C4-DIM-Gen3", control_method: "ZigBee",
     primary_proxy: "light_v2", proxies: ["light_v2"] }),
+  doc({ filename: "ds2_door_station.c4z", name: "DS2 Door Station", manufacturer: "Control4", model: "C4-DS2", primary_proxy: "intercom",
+    proxies: ["intercom", "camera"], search_types: ["c4:intercom:ds2"] }),
 ];
+
+/** Driver files in the library on "this computer": two imported, one from Composer's folder. */
+export function seedLibrary(): LibraryDriver[] {
+  const from = (filename: string, source: LibraryDriver["source"]): LibraryDriver => {
+    const d = DRIVERS.find((x) => x.filename === filename)!;
+    return {
+      filename, name: d.name, manufacturer: d.manufacturer, model: d.model, version: d.version, creator: d.creator,
+      control_method: d.control_method, search_types: d.search_types, proxies: d.proxies, network_bindings: [6001], size: 184_320,
+      path: source === "composer" ? `C:\\Users\\you\\Documents\\Control4\\Drivers\\${filename}`
+        : `~/Library/Application Support/com.openComposer.openComposer/drivers/${filename}`,
+      source,
+    };
+  };
+  return [from("sonos_amp.c4z", "library"), from("lutron_caseta.c4z", "library"), from("ds2_door_station.c4z", "composer")];
+}
 
 /** What an SDDP scan of this LAN finds. */
 export const SDDP = [
@@ -304,6 +321,8 @@ export const SDDP = [
   { host: "denon-avr-x3800h-0005cd", address: "192.168.1.42", device_type: "c4:av_gen:denon:avr-x3800h", manufacturer: "Denon", model: "AVR-X3800H", driver: "" },
   { host: "lg-webos-c3-77", address: "192.168.1.53", device_type: "c4:television:lg", manufacturer: "LG Electronics", model: "OLED65C3PUA", driver: "lg_webos_tv.c4z" },
   { host: "sonos-amp-living", address: "192.168.1.70", device_type: "c4:av_gen:sonos", manufacturer: "Sonos", model: "Amp", driver: "" },
+  { host: "samsung-qn90-den", address: "192.168.1.81", device_type: "c4:television:samsung", manufacturer: "Samsung", model: "QN65QN90C", driver: "samsung_tizen_tv.c4z" },
+  { host: "yamaha-rx-a6a-5c1e", address: "192.168.1.90", device_type: "c4:av_gen:yamaha:rx-a6a", manufacturer: "Yamaha", model: "RX-A6A", driver: "" },
   { host: "c4-ea5-000fff112233", address: "192.168.1.10", device_type: "c4:control4_ea5:C4-EA5", manufacturer: "Control4", model: "EA-5", driver: "" },
 ];
 

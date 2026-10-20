@@ -5,6 +5,7 @@ import { api, errText, type Announcement, type DriverDoc } from "../../api";
 import { Tip, useDialog } from "../../components/Dialogs";
 import { Select, Spinner, Tabs } from "../../components/controls";
 import { Failure, Loading } from "../../components/shell";
+import { identityFor } from "../../lib/network";
 import { indexTree, ofKind } from "../../lib/project";
 import type { Shell } from "../../lib/shell";
 import { cx, useLoad } from "../../lib/ui";
@@ -81,8 +82,6 @@ function Scan({ shell }: { shell: Shell }) {
   const [found, setFound] = useState<Announcement[] | null>(null);
   const [scanning, setScanning] = useState(false);
   const [open, setOpen] = useState<string | null>(null);
-  // Devices added from a scan row, waiting to be identified as it.
-  const [added, setAdded] = useState<Record<string, { id: number; name: string }>>({});
   const net = useLoad(() => api.network(), [shell.rev, shell.director?.id]);
   const tree = useLoad(() => api.tree(), [shell.rev, shell.director?.id]);
   const known = useMemo(() => new Map((net.data?.identified ?? []).map((x) => [x.uuid, x.device.name])), [net.data]);
@@ -105,15 +104,9 @@ function Scan({ shell }: { shell: Shell }) {
     const item = await api.item(device.id).catch(() => null);
     const binding = item?.network_connections?.[0]?.id
       ?? item?.connections.find((c) => c.id >= 6000 && c.id < 7000)?.id ?? DEFAULT_BINDING;
-    const o = await shell.propose([{ op: "add_network_binding", device: device.id, binding, address_type: 1, address: a.host, search_type: a.device_type }],
+    const id = identityFor(a, net.data?.discovered ?? []);
+    await shell.propose([{ op: "add_network_binding", device: device.id, binding, address_type: 1, address: id.address, search_type: id.search_type }],
       `Identify ${device.name} as the ${a.manufacturer} ${a.model} at ${a.address}.`);
-    if (o?.status === "applied") {
-      setAdded((m) => {
-        const next = { ...m };
-        delete next[a.host];
-        return next;
-      });
-    }
   };
 
   const addAndIdentify = async (a: Announcement, d: DriverDoc) => {
@@ -121,13 +114,9 @@ function Scan({ shell }: { shell: Shell }) {
     if (!room) return;
     const name = await ask({ title: "Name the new device", initial: a.model ? `${a.manufacturer} ${a.model}` : d.name, confirmLabel: "Propose" });
     if (!name) return;
-    // Two proposals, not one: identifying needs the id Director gives the new device.
-    const o = await shell.propose([{ op: "add_device", room: Number(room), name, driver: d.filename }],
-      `Add the ${a.manufacturer} ${a.model} found at ${a.address}.`);
-    const id = o?.status === "applied" ? o.created_item_ids[0] : undefined;
-    if (id == null) return;
-    setAdded((m) => ({ ...m, [a.host]: { id, name } }));
-    toast.success(`${name} added`, { description: "Identify it as this device to finish.", action: { label: "Identify now", onClick: () => void identify(a, { id, name }) } });
+    // One approval: install the file if the controller lacks it, add, and identify.
+    await shell.addDriver({ room: Number(room), filename: d.filename, name, identify: identityFor(a, net.data?.discovered ?? []),
+      reason: `Add the ${a.manufacturer} ${a.model} found at ${a.address}.` });
   };
 
   const identifyExisting = async (a: Announcement) => {
@@ -152,8 +141,7 @@ function Scan({ shell }: { shell: Shell }) {
           <thead><tr><th>Type</th><th>IP</th><th>Manufacturer</th><th>Model</th><th>Driver</th><th>Status</th><th /></tr></thead>
           <tbody>
             {found.map((a) => {
-              const inProject = known.get(a.host);
-              const pending = added[a.host];
+              const inProject = known.get(a.host) ?? known.get(identityFor(a, net.data?.discovered ?? []).address);
               return [
                 <tr key={a.host} className={cx(open === a.host && "on")}>
                   <td className="mono">{a.device_type}</td>
@@ -163,8 +151,7 @@ function Scan({ shell }: { shell: Shell }) {
                   <td className="mono">{a.driver || <span className="dim">—</span>}</td>
                   <td>{inProject ? <span className="tag on">{inProject}</span> : <span className="tag warn">not in project</span>}</td>
                   <td className="right nowrap">
-                    {pending && <button className="act small primary" onClick={() => identify(a, pending)}><Fingerprint size={13} strokeWidth={1.8} />Identify {pending.name}</button>}
-                    {!inProject && !pending && <>
+                    {!inProject && <>
                       <button className="act small" onClick={() => setOpen(open === a.host ? null : a.host)}><PackageSearch size={13} strokeWidth={1.8} />Find driver</button>
                       <Tip text={shell.writable ? "Identify a device already in the project as this one" : "This Director is read-only"}>
                         <span><button className="act small" disabled={!shell.writable} onClick={() => identifyExisting(a)}><Fingerprint size={13} strokeWidth={1.8} />Identify…</button></span>
@@ -187,7 +174,7 @@ function Scan({ shell }: { shell: Shell }) {
 function Drivers({ a, writable, onAdd }: { a: Announcement; writable: boolean; onAdd: (d: DriverDoc) => void }) {
   const res = useLoad(() => api.searchDrivers({ search_type: a.device_type, rows: 20 }), [a.device_type]);
   if (!res.data) return res.error ? <p className="err">{res.error}</p> : <Loading what="Searching the driver database" />;
-  if (!res.data.drivers.length) return <p className="empty">No driver in the database declares <code>{a.device_type}</code>. Try a text search in Design › Drivers.</p>;
+  if (!res.data.drivers.length) return <p className="empty">No driver in the database declares <code>{a.device_type}</code>. Try a text search in Design › Add devices › Drivers.</p>;
   return (
     <div className="drv-matches">
       {res.data.drivers.map((d) => (
@@ -196,7 +183,7 @@ function Drivers({ a, writable, onAdd }: { a: Announcement; writable: boolean; o
             <b>{d.name}</b> <span className="dim">{d.manufacturer} · {d.model}</span>
             <div className="mono dim small">{d.filename} · {d.control_method}{d.certified ? " · certified" : ""}{a.driver === d.filename ? " · announced by the device" : ""}</div>
           </div>
-          <Tip text={writable ? "Add a device with this driver, then identify it as this one" : "This Director is read-only"}>
+          <Tip text={writable ? "Add a device with this driver and identify it as this one — one approval, installing the file first if needed" : "This Director is read-only"}>
             <span><button className="act small" disabled={!writable} onClick={() => onAdd(d)}><Plus size={13} strokeWidth={1.8} />Add + identify</button></span>
           </Tip>
         </div>

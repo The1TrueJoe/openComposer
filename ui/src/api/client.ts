@@ -1,7 +1,8 @@
 import type {
   Activity, Announcement, AppStatus, Approval, BackupInfo, ConnectionRow, ConversationInfo, Diff,
   DirectorInfo, DriverDoc, Events, ItemDetail, McpStatus, NetworkView, Op, Outcome, Overview,
-  ProgrammingEvent, Provider, ProviderStatus, SavedDirector, AccessMode, TreeNode, ZigbeeQuery, BackupResult, DriverStatus,
+  ProgrammingEvent, Provider, ProviderStatus, SavedDirector, AccessMode, TreeNode, ZigbeeQuery, BackupResult,
+  AddDriverArgs, ControllerDriver, LibraryDriver, UiContext,
 } from "./types";
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -94,8 +95,16 @@ export const api = {
   /** Resolves only once the change was approved and applied, declined, or expired. */
   propose: (ops: Op[], reason?: string) => action<Outcome>("propose_changes", { ops, reason }),
   loadBackup: (backup: string, reason?: string) => action<Outcome>("load_backup", { backup, reason }),
-  driverStatus: (filename: string) => action<DriverStatus>("driver_status", { filename }),
-  /** `from`: `path:<absolute path>`, `backup:<library file>` or `director:<another Director>`.
-   *  Like `propose`, resolves once the approval is decided. */
-  installDriver: (filename: string, from: string, reason?: string) => action<Outcome>("install_driver", { filename, from, reason }),
+  /** Driver files installed on the controller (needs its web API). */
+  controllerDrivers: () => action<{ drivers: ControllerDriver[] }>("controller_drivers"),
+  /** Driver files in openComposer's library on this computer. */
+  libraryDrivers: () => action<{ drivers: LibraryDriver[] }>("library_drivers"),
+  /** Copy a .c4z/.c4i into the library. */
+  importDriver: (path: string) => action<LibraryDriver>("import_driver", { path }),
+  /** Install-if-needed, add and optionally identify, as one approval. Like `propose`, resolves
+   *  once it is decided; fails up front when the file is nowhere openComposer can get it. */
+  addDriver: (a: AddDriverArgs) => action<Outcome>("add_driver", { ...a }),
+
+  /** Tell the backend what the window shows (for the agent's `ui_context`). */
+  setUiContext: (context: UiContext) => call<void>("set_ui_context", { context }),
 };

@@ -1,37 +1,50 @@
 import { Copy, FolderInput, MousePointerClick, Pencil, Plus, RefreshCw, Trash2 } from "lucide-react";
-import { useCallback, useMemo, useState } from "react";
-import { toast } from "sonner";
-import { api, type DriverDoc, type TreeNode } from "../../api";
+import { useEffect, useMemo, useState } from "react";
+import { api, type TreeNode } from "../../api";
 import { ContextMenu, useContextMenu, type MenuItem } from "../../components/ContextMenu";
 import { Tip, useDialog } from "../../components/Dialogs";
 import { Grip, MainPane, Panes, SidePane } from "../../components/Panes";
 import { Failure, Loading } from "../../components/shell";
 import { chain, indexTree, ofKind, parentKindFor } from "../../lib/project";
 import type { Shell } from "../../lib/shell";
-import { baseName, pickFiles } from "../../lib/files";
 import { copy, plural, useLoad } from "../../lib/ui";
-import { DriverCatalog, type AddDriver } from "./DriverCatalog";
+import { AddDevices } from "./AddDevices";
+import { AskBar } from "./AskBar";
 import { Inspector, type ItemActions } from "./Inspector";
 import { ProjectTree } from "./ProjectTree";
 
-/** Composer's System Design: the project tree, the selected item, and the driver catalog.
- *  Every change made here is a proposal — it shows as an approval card before it happens. */
+/** Composer's System Design: the project tree, the selected item, and adding devices — plus
+ *  the ask bar, which talks to the agent about whatever is selected. Every change made here
+ *  is a proposal: it shows as an approval card before it happens. */
 export function DesignPage({ shell }: { shell: Shell }) {
   const tree = useLoad(() => api.tree(), [shell.rev, shell.director?.id]);
-  const [sel, setSel] = useState<number | null>(null);
-  // Bumped to put the cursor in the catalog search ("Add device" on a room).
+  // The app holds the selection, so an assistant can move it and it outlives this page.
+  const { selected: sel, select: setSel } = shell;
+  // Bumped to put the cursor in the driver search ("Add device" on a room).
   const [findDriver, setFindDriver] = useState(0);
   const menu = useContextMenu<TreeNode>();
   const { ask, confirm, choose } = useDialog();
   const idx = useMemo(() => indexTree(tree.data?.tree ?? null), [tree.data]);
 
   const selected = sel != null ? idx.get(sel)?.node ?? null : null;
-  // The room the selection is in, for "Add to <room>" in the catalog.
+  // The room the selection is in: where "Add to room…" goes unless you pick another.
   const room = useMemo(() => {
     if (sel == null) return null;
     const r = chain(idx, sel).reverse().find((n) => n.kind === "room");
     return r ? { id: r.id, name: r.name } : null;
   }, [idx, sel]);
+  const rooms = useMemo(() => ofKind(idx, "room").map((r) => ({ id: r.node.id, name: r.node.name, location: r.location })), [idx]);
+
+  // What the selection is, for the context the app reports and the ask bar sends.
+  const focus = useMemo(() => {
+    if (!selected) return null;
+    const path = chain(idx, selected.id).slice(1).map((n) => n.name).join(" › ");
+    return { id: selected.id, name: selected.name, kind: selected.kind, path };
+  }, [idx, selected]);
+  const { reportFocus } = shell;
+  const focusKey = focus && `${focus.id}|${focus.name}|${focus.kind}|${focus.path}`;
+  // Keyed on the text, not the object: a refetched tree with the same item isn't news.
+  useEffect(() => reportFocus(focus), [focusKey, reportFocus]);
 
   const actions: ItemActions = useMemo(() => ({
     rename: async (id, name) => {
@@ -66,60 +79,7 @@ export function DesignPage({ shell }: { shell: Shell }) {
       setSel(r);
       setFindDriver((n) => n + 1);
     },
-  }), [ask, confirm, choose, idx, shell]);
-
-  /** Put a driver file on the controller: from a file here, or copied from another Director. */
-  const install = useCallback(async (driver: DriverDoc): Promise<boolean> => {
-    const others = shell.status.config.directors.filter((x) => x.id !== shell.director?.id);
-    let from: string | null = "file";
-    if (others.length) {
-      from = await choose({
-        title: `Install ${driver.filename}`,
-        description: "It isn't on this controller yet. Where should the file come from?",
-        options: [
-          { id: "file", label: "A file on this computer…", detail: "The .c4z or .c4i, e.g. from the manufacturer or the driver database" },
-          ...others.map((o) => ({ id: `director:${o.id}`, label: `Copy it from ${o.name}`, detail: o.host })),
-        ],
-      });
-    }
-    if (!from) return false;
-    if (from === "file") {
-      const [path] = await pickFiles({ title: `Choose ${driver.filename}`, extensions: ["c4z", "c4i"], expect: driver.filename });
-      if (!path) return false;
-      if (baseName(path) !== driver.filename && !(await confirm({
-        title: `Install ${baseName(path)} as ${driver.filename}?`,
-        description: "The file you picked is named differently from the driver you chose. Devices will refer to it by the driver's name.",
-        confirmLabel: "Install anyway",
-      }))) return false;
-      from = `path:${path}`;
-    }
-    const o = await shell.installDriver(driver.filename, from, `Needed for the ${driver.manufacturer} ${driver.model}.`);
-    return o?.status === "applied";
-  }, [choose, confirm, shell]);
-
-  const addDriver: AddDriver = useCallback(async (driver, target, installed) => {
-    // Director refuses a device whose driver it doesn't have, with a sentence that doesn't
-    // say why; offer the install first instead.
-    if (installed === false) {
-      const ok = await confirm({ title: `${driver.filename} isn't on this controller`, description: "Install the driver file first, then add the device.", confirmLabel: "Install…" });
-      if (!ok || !(await install(driver))) return;
-      toast.message(`${driver.filename} is installed — now choose where the device goes.`);
-    }
-    let roomId = target;
-    if (roomId == null) {
-      const picked = await choose({
-        title: `Add ${driver.name} to…`,
-        options: ofKind(idx, "room").map((r) => ({ id: String(r.node.id), label: r.node.name, detail: r.location })),
-      });
-      if (!picked) return;
-      roomId = Number(picked);
-    }
-    const name = await ask({ title: `Name the new ${driver.name}`, initial: driver.name, confirmLabel: "Propose" });
-    if (!name) return;
-    const o = await shell.propose([{ op: "add_device", room: roomId, name, driver: driver.filename }],
-      `Add ${driver.manufacturer} ${driver.model} to ${idx.get(roomId)?.node.name}.`);
-    if (o?.status === "applied" && o.created_item_ids[0] != null) setSel(o.created_item_ids[0]);
-  }, [ask, choose, confirm, idx, install, shell]);
+  }), [ask, confirm, choose, idx, shell, setSel]);
 
   const menuItems = (n: TreeNode): MenuItem[] => {
     const w = shell.writable;
@@ -151,13 +111,16 @@ export function DesignPage({ shell }: { shell: Shell }) {
         </SidePane>
         <Grip />
         <MainPane id="inspector">
-          {selected
-            ? <Inspector id={selected.id} shell={shell} onSelect={setSel} actions={actions} />
-            : <div className="placeholder"><MousePointerClick size={22} strokeWidth={1.5} /><p>Select a room, device or agent to see its properties, connections and programming.</p></div>}
+          <div className="design-main">
+            {selected
+              ? <Inspector id={selected.id} shell={shell} onSelect={setSel} actions={actions} />
+              : <div className="placeholder"><MousePointerClick size={22} strokeWidth={1.5} /><p>Select a room, device or agent to see its properties, connections and programming.</p></div>}
+            <AskBar shell={shell} focus={focus} project={tree.data?.project ?? "This project"} />
+          </div>
         </MainPane>
         <Grip />
-        <SidePane id="catalog" side="right" title="Drivers" defaultSize={300}>
-          <DriverCatalog room={room} writable={shell.writable} rev={shell.rev} onAdd={addDriver} onInstall={(d) => void install(d)} focus={findDriver} />
+        <SidePane id="catalog" side="right" title="Add devices" defaultSize={320}>
+          <AddDevices shell={shell} room={room} rooms={rooms} focus={findDriver} onAdded={setSel} />
         </SidePane>
       </Panes>
       {menu.open && <ContextMenu x={menu.open.x} y={menu.open.y} items={menuItems(menu.open.target)} onClose={menu.close} />}

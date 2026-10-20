@@ -1,5 +1,6 @@
-/* Design: Composer's System Design shape — the project tree, the item inspector and the driver
-   catalog — plus the Programming page, which reuses the tree rows and event blocks. */
+/* Design: Composer's System Design shape — the project tree, the item inspector and the Add
+   devices pane — the ask bar floating over the inspector, and the Programming page, which
+   reuses the tree rows and event blocks. */
 
 /* The project tree */
 .tw { user-select: none; padding: 4px 0 24px; outline: none; }
@@ -46,7 +47,29 @@
 .prog-group { scroll-margin-top: 8px; }
 .prog-group .event { margin-bottom: 8px; }
 
-/* The driver catalog */
+/* Add devices: discovered devices and driver search (also the drop target for driver files) */
+.add-pane { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
+.add-pane .detail-tabs { padding: 0 8px 0 4px; }
+.add-pane .filters { padding: 7px 10px; gap: 8px; }
+.add-pane.drop-over::after { content: ""; position: absolute; inset: 4px; border: 2px dashed var(--accent); border-radius: 10px; pointer-events: none;
+  background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.drop-hint { position: absolute; left: 16px; right: 16px; top: 45%; display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center;
+  color: var(--accent-text); font-weight: 600; pointer-events: none; z-index: 1; }
+.disc { padding: 8px 12px 9px; border-bottom: 1px solid var(--divider); display: flex; flex-direction: column; gap: 2px; }
+.disc:hover { background: var(--hover-soft); }
+.disc-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.disc-top b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.disc-sub { color: var(--dim); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.disc-acts { margin-top: 4px; gap: 6px; }
+.tag.avail { text-transform: none; letter-spacing: 0; font-size: 10.5px; }
+.type-chip { flex: none; max-width: 55%; overflow: hidden; text-overflow: ellipsis; }
+.flush-p { margin: 0; line-height: 1.45; }
+.add-form { display: flex; flex-direction: column; gap: 4px; margin-top: 14px; }
+.add-form .label { margin: 6px 0 2px; }
+.add-form .dlg-input { margin-top: 0; }
+.add-form .select-trigger { width: 100%; padding: 6px 10px; background: var(--bg); }
+
+/* Driver rows */
 .drv { display: flex; flex-direction: column; gap: 1px; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--divider);
   background: none; color: var(--text); font: inherit; padding: 7px 12px; cursor: pointer; }
 .drv:hover { background: var(--hover); }
@@ -71,3 +94,29 @@
 .pe { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .pe-input { min-width: 200px; flex: 1; max-width: 360px; padding: 3px 8px; }
 .drv-status { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+
+/* The ask bar: a pill floating over the inspector, with the latest reply above it. The
+   inspector scrolls far enough to clear it. */
+.design-main { position: relative; height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.design-main > .panel { flex: 1; }
+.design-main > .panel > .panel-body { padding-bottom: 72px; }
+.ask { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); width: min(720px, calc(100% - 32px)); z-index: 20;
+  display: flex; flex-direction: column; gap: 8px; }
+.ask-panel { display: flex; flex-direction: column; min-height: 0; max-height: min(58vh, 520px); background: var(--side); border: 1px solid var(--line);
+  border-radius: 14px; box-shadow: 0 14px 44px var(--shadow-mid); overflow: hidden; animation: ask-in .14s ease-out; }
+@keyframes ask-in { from { opacity: 0; transform: translateY(6px); } }
+.ask-head { flex: none; display: flex; align-items: center; gap: 8px; padding: 5px 8px 5px 12px; border-bottom: 1px solid var(--line); background: var(--bar);
+  font-size: 12px; }
+.ask-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: 10px 14px 12px; display: flex; flex-direction: column; gap: 8px; }
+.ask-scroll .msg.user .bubble { max-width: 90%; }
+.ask-bar { display: flex; align-items: flex-end; gap: 6px; background: var(--side); border: 1px solid var(--line); border-radius: 22px;
+  padding: 5px 5px 5px 7px; box-shadow: 0 8px 28px var(--shadow-soft), 0 1px 3px var(--shadow-soft); }
+.ask-bar:focus-within { border-color: color-mix(in srgb, var(--accent) 53.3%, transparent); }
+.ask-bar textarea { flex: 1; min-width: 0; resize: none; border: 0; background: transparent; padding: 5px 4px; line-height: 1.45; max-height: 140px; }
+.ask-bar .send { width: 28px; height: 28px; }
+.ask-bar .icon-btn { width: 28px; height: 28px; border-radius: 50%; }
+.ask-show.on { color: var(--warn); }
+.ask-chip { flex: none; display: inline-flex; align-items: center; gap: 5px; max-width: 42%; margin-bottom: 3px; padding: 1px 9px 1px 7px;
+  border-radius: 99px; border: 1px solid var(--line); background: var(--fill-faint); color: var(--dim); font-size: 11.5px; line-height: 20px; cursor: default; }
+.ask-chip svg { flex: none; }
+.ask-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

@@ -8,7 +8,7 @@ import { Select, Tabs } from "../../components/controls";
 import { KindIcon } from "../../components/icons";
 import { Failure, Loading } from "../../components/shell";
 import { candidates, connectOp, disconnectOp } from "../../lib/connections";
-import type { Shell } from "../../lib/shell";
+import type { InspectorTab, Shell } from "../../lib/shell";
 import { cx, useLoad } from "../../lib/ui";
 
 export interface ItemActions {
@@ -19,20 +19,19 @@ export interface ItemActions {
   addDevice: (room: number) => void;
 }
 
-type Tab = "properties" | "connections" | "network" | "variables" | "events";
-
 /** Everything about one item, the way Composer's properties pane shows it. */
 export function Inspector({ id, shell, onSelect, actions }: {
   id: number; shell: Shell; onSelect: (id: number) => void; actions: ItemActions;
 }) {
   const item = useLoad(() => api.item(id), [id, shell.rev]);
-  const [tab, setTab] = useState<Tab>("properties");
+  // The app holds the tab: an assistant can switch it, and it says which one you're looking at.
+  const { inspectorTab: tab, setInspectorTab: setTab } = shell;
   const d = item.data?.id === id ? item.data : undefined;
 
   if (!d) return item.error ? <Failure error={item.error} retry={item.reload} /> : <Loading what="Reading the item" />;
 
   const conns = d.connections.length + d.children.reduce((n, c) => n + c.connections.length, 0);
-  const tabs: { id: Tab; label: React.ReactNode }[] = [
+  const tabs: { id: InspectorTab; label: React.ReactNode }[] = [
     { id: "properties", label: <>Properties <span className="n">{d.properties.length}</span></> },
     { id: "connections", label: <>Connections <span className="n">{conns}</span></> },
     { id: "network", label: <>Network <span className="n">{d.network.length}</span></> },
