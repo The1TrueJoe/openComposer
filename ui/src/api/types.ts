@@ -184,6 +184,8 @@ export interface ItemDetail {
   actions: { name: string; command: string }[] | null;
   connections: ConnectionDef[];
   network: NetworkBinding[];
+  /** The driver's network connections (type 4, ids 6000-6999): what identify binds. */
+  network_connections: { id: number; name: string; classes: string[] }[];
   variables: Variable[];
   events: { id: number; name: string; programming: CodeLineView[] }[];
   children: { id: number; name: string; kind: KindLabel; driver: string | null; connections: ConnectionDef[] }[];

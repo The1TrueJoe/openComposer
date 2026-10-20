@@ -103,7 +103,8 @@ function Scan({ shell }: { shell: Shell }) {
   const identify = async (a: Announcement, device: { id: number; name: string }) => {
     // Use the driver's own network connection if it shows one; most IP drivers declare 6001.
     const item = await api.item(device.id).catch(() => null);
-    const binding = item?.connections.find((c) => c.id >= 6000 && c.id < 7000)?.id ?? DEFAULT_BINDING;
+    const binding = item?.network_connections?.[0]?.id
+      ?? item?.connections.find((c) => c.id >= 6000 && c.id < 7000)?.id ?? DEFAULT_BINDING;
     const o = await shell.propose([{ op: "add_network_binding", device: device.id, binding, address_type: 1, address: a.host, search_type: a.device_type }],
       `Identify ${device.name} as the ${a.manufacturer} ${a.model} at ${a.address}.`);
     if (o?.status === "applied") {

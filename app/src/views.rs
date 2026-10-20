@@ -106,6 +106,9 @@ fn connections_of(p: &Project, cat: &Catalog, id: u32) -> Vec<Value> {
     info.connections
         .iter()
         .filter(|c| !proxy_owned.contains(&c.id))
+        // Type 4 (ids 6000-6999) is how the device is reached on the network — what
+        // `add_network_binding` identifies, not something to wire. See `network_connections`.
+        .filter(|c| c.conn_type != 4)
         .map(|c| {
             let peers: Vec<Value> = p
                 .bindings
@@ -177,6 +180,8 @@ pub fn item(p: &Project, cat: &Catalog, id: u32) -> Option<Value> {
         "actions": info.map(|d| d.actions.iter().map(|(n, c)| json!({ "name": n, "command": c })).collect::<Vec<_>>()),
         "connections": connections_of(p, cat, id),
         "network": p.network_bindings.iter().filter(|n| n.device == id).collect::<Vec<_>>(),
+        "network_connections": info.map(|d| d.connections.iter().filter(|c| c.conn_type == 4)
+            .map(|c| json!({ "id": c.id, "name": c.name, "classes": c.classes })).collect::<Vec<_>>()).unwrap_or_default(),
         "variables": p.variables.iter().filter(|v| v.device == id).collect::<Vec<_>>(),
         "events": events,
         "children": children,

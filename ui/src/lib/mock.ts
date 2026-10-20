@@ -170,6 +170,7 @@ function itemDetail(id: number): ItemDetail {
     actions: dev ? dev.actions.map(([name, command]) => ({ name, command })) : null,
     connections: connectionsOf(id),
     network: project.network.filter((n) => n.device === id),
+    network_connections: project.network.some((n) => n.device === id) ? [{ id: 6001, name: "IP Connection", classes: ["TCP"] }] : [],
     variables: project.variables.filter((v) => v.device === id),
     events: dev ? Object.entries(dev.events).map(([eid, name]) => ({ id: Number(eid), name, programming: project.programming.get(`${id}:${eid}`) ?? [] })) : [],
     children: it.children.map((c) => ({ ...short(c), kind: item(c).kind, driver: item(c).driver, connections: connectionsOf(c) })),
