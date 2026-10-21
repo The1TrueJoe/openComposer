@@ -17,6 +17,13 @@ use crate::certs::{self, StoredIdentity};
 use crate::config::{AccessMode, Config, Paths, SavedDirector};
 
 type Emitter = Box<dyn Fn(&str, serde_json::Value) + Send + Sync>;
+type SharedEmitter = Arc<dyn Fn(&str, serde_json::Value) + Send + Sync>;
+
+/// How often a session in use re-reads its project in the background, to notice changes made
+/// elsewhere (Composer, a touchscreen, another openComposer).
+const WATCH_EVERY: std::time::Duration = std::time::Duration::from_secs(30);
+/// A session nobody has read from for this long isn't watched: no Uploads while idle.
+const WATCH_IDLE: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
 pub struct App {
     pub paths: Paths,
@@ -34,15 +41,21 @@ pub struct App {
     activity: Mutex<VecDeque<Activity>>,
     activity_seq: AtomicU64,
     pub http: reqwest::Client,
-    emitter: OnceLock<Emitter>,
+    emitter: OnceLock<SharedEmitter>,
 }
 
 /// One connected Director plus the cached views of its project.
 pub struct Session {
     pub id: String,
     pub director: Director,
+    /// The project as last read, kept in memory: reads are served from it at once, and the
+    /// watcher (`Session::watch`) replaces it when the Director's copy changes.
     snapshot: tokio::sync::RwLock<Option<(Instant, Arc<Snapshot>)>>,
     catalog: tokio::sync::RwLock<Option<Arc<Catalog>>>,
+    /// When something last read the project; the watcher sleeps while this is old.
+    last_read: Mutex<Instant>,
+    /// One Upload at a time: a read that finds one running waits for it instead of starting another.
+    fetching: tokio::sync::Mutex<()>,
     /// One batch of writes at a time per Director.
     pub write_lock: tokio::sync::Mutex<()>,
     broker: tokio::sync::Mutex<Option<(Instant, Arc<c4::broker::Broker>)>>,
@@ -143,7 +156,7 @@ impl App {
     }
 
     pub fn set_emitter(&self, f: Emitter) {
-        let _ = self.emitter.set(f);
+        let _ = self.emitter.set(Arc::from(f));
     }
 
     /// Push an event to the UI (no-op before the window exists, e.g. in stdio mode).
@@ -227,10 +240,13 @@ impl App {
             director,
             snapshot: Default::default(),
             catalog: Default::default(),
+            last_read: Mutex::new(Instant::now()),
+            fetching: Default::default(),
             write_lock: Default::default(),
             broker: Default::default(),
             icons: Default::default(),
         });
+        tokio::spawn(Session::watch(Arc::downgrade(&s), self.emitter.get().cloned()));
         sessions.insert(saved.id.clone(), s.clone());
         drop(sessions);
         self.emit("director", serde_json::json!({ "id": saved.id, "connected": true, "info": s.director.info }));
@@ -320,18 +336,65 @@ impl App {
 }
 
 impl Session {
-    /// Snapshots are reused for a few seconds so a burst of reads costs one Upload.
+    /// The project. Served from memory when there is a copy (the watcher keeps it current);
+    /// `refresh` reads it from the Director now — before and after a write, where only the
+    /// Director's own copy will do.
     pub async fn snapshot(&self, refresh: bool) -> AppResult<Arc<Snapshot>> {
+        *self.last_read.lock().unwrap() = Instant::now();
         if !refresh {
-            if let Some((at, s)) = self.snapshot.read().await.as_ref() {
-                if at.elapsed().as_secs() < 5 {
-                    return Ok(s.clone());
-                }
+            if let Some((_, s)) = self.snapshot.read().await.as_ref() {
+                return Ok(s.clone());
+            }
+        }
+        let started = Instant::now();
+        let _one = self.fetching.lock().await;
+        // Someone else's Upload finished while this one waited: theirs is as fresh as ours.
+        if let Some((at, s)) = self.snapshot.read().await.as_ref() {
+            if *at >= started {
+                return Ok(s.clone());
             }
         }
         let s = Arc::new(self.director.snapshot().await?);
         *self.snapshot.write().await = Some((Instant::now(), s.clone()));
         Ok(s)
+    }
+
+    /// Re-reads the project every `WATCH_EVERY` while the session is in use and, when the
+    /// Director's copy differs from ours, swaps it in and tells the UI (`project-changed`), so
+    /// changes made elsewhere show up without every click waiting on an Upload.
+    async fn watch(me: std::sync::Weak<Session>, emit: Option<SharedEmitter>) {
+        loop {
+            tokio::time::sleep(WATCH_EVERY).await;
+            let Some(s) = me.upgrade() else { return };
+            if s.director.conn.is_closed() {
+                return;
+            }
+            let have = s.snapshot.read().await.as_ref().map(|(_, x)| x.clone());
+            let Some(old) = have else { continue };
+            if s.last_read.lock().unwrap().elapsed() > WATCH_IDLE {
+                continue;
+            }
+            let started = Instant::now();
+            let _one = s.fetching.lock().await;
+            if s.snapshot.read().await.as_ref().is_some_and(|(at, _)| *at >= started) {
+                continue;
+            }
+            let Ok(new) = s.director.snapshot().await else { continue };
+            let changed = without_ciphertext(&new.xml) != without_ciphertext(&old.xml);
+            let items_changed = changed && new.project.items.keys().ne(old.project.items.keys());
+            *s.snapshot.write().await = Some((Instant::now(), Arc::new(new)));
+            drop(_one);
+            if items_changed {
+                // New or removed items need their driver definitions: re-read on next use.
+                *s.catalog.write().await = None;
+            }
+            if changed {
+                tracing::info!("project on {} changed outside openComposer; reloaded", s.id);
+                if let Some(f) = &emit {
+                    f("project-changed", serde_json::json!({ "director": s.id, "source": "watch" }));
+                }
+            }
+        }
     }
 
     /// Driver definitions change only when drivers are added or updated. The exception is
@@ -363,5 +426,42 @@ impl Session {
     pub async fn invalidate(&self) {
         *self.snapshot.write().await = None;
         *self.catalog.write().await = None;
+    }
+}
+
+/// The project XML without encrypted property values: Director re-encrypts them (driver
+/// passwords) with fresh randomness on every Upload, so two reads of an unchanged project never
+/// match byte for byte. Their values sit in `<value encrypted="true">…</value>`, escaped inside
+/// an item's `<state>`.
+fn without_ciphertext(xml: &str) -> String {
+    let mut text = xml.to_string();
+    for (open, close) in [(r#"encrypted="true"&gt;"#, "&lt;/value&gt;"), (r#"encrypted="true">"#, "</value>")] {
+        let mut out = String::with_capacity(text.len());
+        let mut rest = text.as_str();
+        while let Some(a) = rest.find(open) {
+            let start = a + open.len();
+            out.push_str(&rest[..start]);
+            rest = &rest[start..];
+            if let Some(z) = rest.find(close) {
+                rest = &rest[z..];
+            }
+        }
+        out.push_str(rest);
+        text = out;
+    }
+    text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::without_ciphertext;
+
+    #[test]
+    fn ignores_reencrypted_values() {
+        let a = r#"<state>&lt;value encrypted="true"&gt;AAA&lt;/value&gt;&lt;x&gt;1</state><value encrypted="true">Q</value>"#;
+        let b = r#"<state>&lt;value encrypted="true"&gt;BBBB&lt;/value&gt;&lt;x&gt;1</state><value encrypted="true">R</value>"#;
+        assert_eq!(without_ciphertext(a), without_ciphertext(b));
+        let c = r#"<state>&lt;value encrypted="true"&gt;AAA&lt;/value&gt;&lt;x&gt;2</state><value encrypted="true">Q</value>"#;
+        assert_ne!(without_ciphertext(a), without_ciphertext(c));
     }
 }

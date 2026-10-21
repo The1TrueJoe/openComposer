@@ -2,6 +2,30 @@
    can't reach other panes. */
 
 .ag { padding: 10px 14px 24px; display: flex; flex-direction: column; gap: 8px; container-type: inline-size; }
+.ag.ag-scroll { flex: 1; min-height: 0; overflow-y: auto; }
+
+/* Every agent tab: a bar, the records' table, the picked record under it (common.tsx AgentSplit). */
+.ag.ag-split { flex: 1; min-height: 0; padding: 0; gap: 0; }
+.ag-split > .ag-bar { flex: none; padding: 7px 12px; border-bottom: 1px solid var(--line); background: var(--bar); min-height: 40px; }
+.ag-detail { height: 100%; min-height: 0; display: flex; flex-direction: column; background: var(--side); }
+.ag-detail-head { flex: none; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 7px 12px; border-bottom: 1px solid var(--line); background: var(--bar); }
+.ag-detail-head .spread { flex: 1; }
+.ag-detail-head > svg { color: var(--dim); flex: none; }
+.ag-detail-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ag-detail-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; padding-bottom: 10px; }
+.ag-detail-body.fill { overflow: hidden; padding-bottom: 0; gap: 0; }
+.ag-detail-body > .ag-dl { border-top: 0; padding-top: 10px; }
+.ag-detail-body .ag-parts { padding-top: 4px; }
+.ag-detail-body .ag-code { margin: 0 12px; border-radius: 7px; border: 1px solid var(--divider); }
+.ag-pad { padding: 0 12px; margin: 0; }
+.ag-pre { white-space: pre-wrap; }
+/* An editor fills the pane it opens in rather than floating in it as a card. */
+.ag-split .ag-editor, .ag-detail .ag-editor { border: 0; border-radius: 0; box-shadow: none; height: 100%; display: flex; flex-direction: column; min-height: 0; }
+.ag-split .ag-editor .ag-form, .ag-detail .ag-editor .ag-form { flex: 1; min-height: 0; overflow-y: auto; align-content: start; }
+.ag-split .ag-editor-foot, .ag-detail .ag-editor-foot { flex: none; background: var(--bar); }
+.ag-detail-body.fill > .ag-pick { flex: none; border-top: 0; border-bottom: 1px solid var(--line); }
+.ag-steps-ro .ag-detail-head { background: none; }
+.ag-split .dt tr.dimmed td { opacity: .6; }
 /* base.css styles every <label> as a small-caps field label; switches and checkboxes aren't. */
 .ag .ag-switch, .ag .ag-check { text-transform: none; letter-spacing: normal; font-weight: normal; margin: 0; }
 .ag-form > label { margin: 0; }
@@ -116,3 +140,4 @@ input.narrow.wide { width: 120px; }
   .ag-form { grid-template-columns: 1fr; gap: 4px 0; }
   .ag-form > label { margin-top: 6px; }
 }
+.pane-cell > .ag-detail-body { height: 100%; }

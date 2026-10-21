@@ -50,11 +50,38 @@
 .rc-body, .rc-light, .rc-matrix { user-select: none; -webkit-user-select: none; }
 .rc-note { padding: 0 2px; }
 
+/* The remote fits the dialog: the body is a size container, the remote's column takes its
+   height (100cqh is the body's content box), and Fit (DeviceControl.tsx) scales the remote into it. The side column scrolls on its
+   own; in one column (narrow windows) it follows the remote and the body scrolls to it. */
+.control-body.stage { container-type: size; }
+.rc-stage.fit { grid-template-columns: minmax(0, 1fr) minmax(250px, 330px); }
+.rc-stage.fit .rc-main { height: 100cqh; min-height: 0; }
+.rc-stage.fit .rc-side { max-height: 100cqh; overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; }
+@media (max-width: 780px) {
+  .rc-stage.fit { grid-template-columns: minmax(0, 1fr); }
+  .rc-stage.fit .rc-side { max-height: none; overflow: visible; }
+}
+.rc-fit { flex: 1; min-height: 0; width: 100%; display: flex; justify-content: center; align-items: flex-start; overflow: hidden; }
+.rc-fit-box { flex: none; position: relative; }
+.rc-fit-inner { width: max-content; transform-origin: top left; }
+.rc-unlisted { width: min(460px, 100%); }
+/* A short window: less chrome around the remote, so it shrinks less. */
+@media (max-height: 760px) {
+  .dlg.control { height: calc(100vh - 24px); }
+  .dlg.control .control-head { padding: 8px 14px; }
+  .dlg.control .control-body.stage { padding-top: 10px; padding-bottom: 10px; }
+  .dlg.control .control-foot { padding: 6px 14px; }
+}
+.rc-none { text-align: center; margin: 0; }
+
 /* ---- the remote body and its keys ---------------------------------------------------------- */
 
-.rc-body { width: 296px; max-width: 100%; display: flex; flex-direction: column; gap: 18px; padding: 22px 20px 14px;
+.rc-body { width: 296px; display: flex; flex-direction: column; gap: 18px; padding: 22px 20px 14px;
   border-radius: 42px 42px 52px 52px; background: var(--rc-body); border: 1px solid var(--line);
   box-shadow: inset 0 1px 0 var(--rc-hi), 0 26px 50px -26px var(--shadow-mid), 0 4px 12px -6px var(--shadow-soft); }
+/* Two columns for a short, wide stage: navigation and volume left, playback and keypads right. */
+.rc-body.two { width: 620px; flex-direction: row; align-items: flex-start; gap: 30px; border-radius: 42px; }
+.rc-col { flex: 1 1 0; min-width: 0; display: flex; flex-direction: column; gap: 18px; }
 .rc-row { display: flex; align-items: center; gap: 8px; }
 .rc-row.rc-center { justify-content: center; }
 .rc-wrap { flex-wrap: wrap; }
@@ -176,7 +203,7 @@ input[type="range"].rc-slider:focus-visible { outline: 2px solid var(--accent); 
 
 /* ---- lights -------------------------------------------------------------------------------- */
 
-.rc-light { width: 430px; max-width: 100%; display: flex; flex-direction: column; gap: 20px; padding: 20px 22px 22px; border-radius: 24px;
+.rc-light { width: 430px; display: flex; flex-direction: column; gap: 20px; padding: 20px 22px 22px; border-radius: 24px;
   background: var(--rc-body); border: 1px solid var(--line);
   box-shadow: inset 0 1px 0 var(--rc-hi), 0 26px 50px -28px var(--shadow-mid), 0 4px 12px -6px var(--shadow-soft); }
 .rc-light-head { display: flex; align-items: center; gap: 14px; }
@@ -211,6 +238,23 @@ input[type="range"].rc-slider:focus-visible { outline: 2px solid var(--accent); 
 .rc-swatch:active:not(:disabled) { transform: scale(.94); }
 .rc-swatch:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .rc-swatch:disabled { opacity: .5; cursor: not-allowed; }
+
+/* ---- rooms --------------------------------------------------------------------------------- */
+
+.rc-room { width: 560px; display: flex; flex-direction: column; gap: 18px; padding: 18px 20px 20px; border-radius: 24px; user-select: none;
+  -webkit-user-select: none; background: var(--rc-body); border: 1px solid var(--line);
+  box-shadow: inset 0 1px 0 var(--rc-hi), 0 26px 50px -28px var(--shadow-mid), 0 4px 12px -6px var(--shadow-soft); }
+.rc-room-head { display: flex; align-items: center; gap: 12px; }
+.rc-room-title { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.rc-room-title b { font-size: 18px; font-weight: 650; }
+.rc-room-head .rc-pill.power.on { color: var(--dim); }
+.rc-sources { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 6px; }
+.rc-source { width: 100%; }
+.rc-source-name { display: inline-flex; align-items: center; gap: 6px; }
+.rc-source-name svg, .rc-source-name img { flex: none; }
+.rc-room-vol { display: flex; align-items: center; gap: 10px; }
+.rc-room-vol .rc-level { flex: 1; }
+.rc-room-steps { flex: 1; text-align: center; }
 
 /* ---- matrix -------------------------------------------------------------------------------- */
 

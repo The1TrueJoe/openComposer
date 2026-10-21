@@ -8,7 +8,7 @@ import {
   api, errText, type CodeLineView, type CommandDef, type CommandParam, type ConditionalView, type ItemDetail, type LineRole,
   type Logic, type TreeNode, type VariableRow,
 } from "../../api";
-import { humanize, standardFor, type Available } from "../../lib/control";
+import { commandsOf, humanize, type Available } from "../../lib/control";
 
 /** A place for a new (or moved) line: `before` under `parent`, the `add_code` op's own terms
  *  (`before` 0 = the end of `parent`'s block, `parent` 0 = top level). `index` is the flat row
@@ -328,10 +328,10 @@ export interface Testable {
   def: ConditionalView;
 }
 
-/** Everything a device can be sent: its own commands and its proxies', and Control4's
- *  standard commands for a proxy that lists none (Director keeps the built-in proxies' commands
- *  to itself). The same rule as the control panel (pages/design/DeviceControl.tsx). Also what
- *  it can be tested for (its conditionals and its proxies'). */
+/** Everything a device can be sent: its own commands and its proxies' (a built-in proxy's
+ *  named from its templates), and for a proxy that names none, what its capabilities show it
+ *  takes — the control panel's rule (`commandsOf` in lib/control.ts). Also what it can be
+ *  tested for (its conditionals and its proxies'). */
 export function useCommands(id: number | null, rev: number) {
   const [state, setState] = useState<{ id: number | null; items: ItemDetail[] | null; error: string | null }>({ id: null, items: null, error: null });
   useEffect(() => {
@@ -352,12 +352,9 @@ export function useCommands(id: number | null, rev: number) {
 
   const items = id != null && state.id === id ? state.items : null;
   const roleFor = (x: ItemDetail, i: number) => (i === 0 && x.kind !== "proxy" ? "device" : (x.driver ?? "proxy").replace(/\.c4[iz]$/i, ""));
-  const available: Available[] = (items ?? []).flatMap((x, i) => {
-    const role = roleFor(x, i);
-    const own = (x.commands ?? []).map((def) => ({ target: x.id, targetName: x.name, role, def, standard: false }));
-    if (own.length || (i === 0 && x.kind !== "proxy")) return own;
-    return standardFor(x.driver).map((def) => ({ target: x.id, targetName: x.name, role, def, standard: true }));
-  });
+  // Programming may send what a device declares even when it can't do it; only commands known
+  // from nothing at all (no live variables are read here) are missing.
+  const available: Available[] = commandsOf(items ?? []);
   const testable: Testable[] = (items ?? []).flatMap((x, i) =>
     (x.conditionals ?? []).map((def) => ({ target: x.id, targetName: x.name, role: roleFor(x, i), def })));
   return { items, available, testable, error: id != null && state.id === id ? state.error : null, loading: id != null && !items && !state.error };

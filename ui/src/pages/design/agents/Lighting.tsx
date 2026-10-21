@@ -1,15 +1,19 @@
-/** The Advanced Lighting agent's own tab, in place of Composer's scene editor: scenes with
- *  the lights in them and what each light does, step by step. Scenes are made, renamed and
- *  removed, and lights added, set and removed, as approvals (*_lighting_scene, set/remove_scene_light). */
+/** The Advanced Lighting agent's own tab, in place of Composer's scene editor: a table of
+ *  scenes; the picked scene's lights in a second table, with what each does step by step; the
+ *  picked light's steps in an editor under that. Scenes are made, renamed and removed, and
+ *  lights added, set and removed, as approvals (*_lighting_scene, set/remove_scene_light). */
 
-import { Lightbulb, Pencil, Plus, Trash2, Type } from "lucide-react";
-import { useState } from "react";
+import { createColumnHelper } from "@tanstack/react-table";
+import { Lightbulb, Plus, Trash2, Type } from "lucide-react";
+import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import type { LightColor, LightStep, LightingData, LightingSceneView, NamedRef, Op } from "../../../api";
+import { DataTable } from "../../../components/DataTable";
 import { Tip, useDialog } from "../../../components/Dialogs";
+import { WithDetail } from "../../../components/Panes";
 import type { Shell } from "../../../lib/shell";
 import { cx, plural } from "../../../lib/ui";
-import { EditorCard, MultiPick, Ref, ms, useWrites } from "./common";
+import { AgentSplit, DetailPane, EditorCard, IconAct, MultiPick, ProgramLink, Ref, RemoveIcon, ms, useWrites } from "./common";
 
 /** A rough sRGB for a light's colour, for swatches only. */
 export function colorCss(c: LightColor): string {
@@ -26,14 +30,23 @@ export function colorCss(c: LightColor): string {
 
 const DEFAULT_STEP: LightStep = { delay_ms: 0, level: 100, rate_ms: 1000, color: null };
 
+type Member = LightingSceneView["members"][number];
+const sceneCol = createColumnHelper<LightingSceneView>();
+const lightCol = createColumnHelper<Member>();
+
+/** A scene's events are numbered from its id: activates, deactivates, is invoked. */
+const SCENE_EVENTS: [number, string][] = [[0, "Activates"], [1, "Deactivates"], [4, "Is invoked"]];
+
 export function LightingView({ agent, data, shell, onSelect, reload }: {
   agent: { id: number; name: string }; data: LightingData; shell: Shell; onSelect: (id: number) => void; reload: () => void;
 }) {
   const dialog = useDialog();
   const w = useWrites(shell, reload);
-  const [editing, setEditing] = useState<{ scene: number; light: number } | null>(null);
-  const [adding, setAdding] = useState<number | null>(null);
+  const [picked, setPicked] = useState<number | null>(null);
+  const [light, setLight] = useState<number | null>(null);
+  const [adding, setAdding] = useState(false);
   const names = data.scenes.map((s) => s.name.trim().toLowerCase());
+  const scene = data.scenes.find((s) => s.id === picked) ?? null;
 
   const askName = async (title: string, initial = "", own?: string) => {
     const name = await dialog.ask({ title, initial, placeholder: "e.g. Evening", confirmLabel: own ? "Rename" : "Create" });
@@ -59,80 +72,126 @@ export function LightingView({ agent, data, shell, onSelect, reload }: {
         s.toggle && `Its toggle scene “${s.toggle.name}” stays.`].filter(Boolean).join(" ") || undefined,
       confirmLabel: "Remove", danger: true,
     });
-    if (ok) await w.propose([{ op: "remove_lighting_scene", agent: agent.id, scene: s.id }], `Remove the lighting scene “${s.name}”.`);
+    if (ok && await w.propose([{ op: "remove_lighting_scene", agent: agent.id, scene: s.id }], `Remove the lighting scene “${s.name}”.`)) setPicked(null);
+  };
+
+  const columns = useMemo(() => [
+    sceneCol.accessor("name", {
+      header: "Scene",
+      cell: (c) => (
+        <span className="row nowrap ellip">
+          <span className="ellip">{c.getValue()}</span>
+          {c.row.original.active && <span className="tag on">active</span>}
+        </span>
+      ),
+    }),
+    sceneCol.accessor((s) => s.members.length, { id: "lights", header: "Lights", meta: { width: 62, align: "right" } }),
+    sceneCol.accessor((s) => s.toggle?.name ?? "", {
+      id: "toggle", header: "Toggles with", meta: { width: "30%", hideBelow: 520 },
+      cell: (c) => (c.getValue() ? <span className="ellip dim">{c.getValue()}</span> : <span className="dim">—</span>),
+    }),
+    sceneCol.accessor("programmed", { header: "Lines", meta: { width: 58, align: "right" }, cell: (c) => c.getValue() || <span className="dim">—</span> }),
+  ], []);
+
+  const pick = (id: number | null) => {
+    if (id !== picked) { setLight(null); setAdding(false); }
+    setPicked(id);
   };
 
   return (
-    <div className="ag">
-      <div className="ag-bar">
-        <span className="dim small">{plural(data.scenes.length, "scene")}</span>
-        <span className="spread" />
-        <Tip text={w.why ?? "Add a scene"}>
-          <span><button className="act small primary" disabled={!w.can} onClick={create}><Plus size={13} strokeWidth={2} />New scene</button></span>
-        </Tip>
-      </div>
-      {!data.scenes.length && <p className="empty pad">No Advanced Lighting scenes yet.</p>}
-      {data.scenes.map((s) => (
-        <div key={s.id} className="ag-card">
-          <div className="ag-card-head">
-            <Lightbulb size={14} strokeWidth={1.8} />
-            <b>{s.name}</b>
-            <span className="dim mono small">#{s.id}</span>
-            {s.active && <span className="tag on">active</span>}
-            {s.toggle && <span className="tag" title="Its toggle scene">toggles with {s.toggle.name}</span>}
-            {!!s.programmed && <span className="tag accent">{plural(s.programmed, "programming line")}</span>}
-            <span className="spread" />
-            <span className="dim small">{plural(s.members.length, "light")}</span>
-            <Tip text={w.why ?? "Add lights"}>
-              <span><button className="icon-btn" aria-label="Add lights" disabled={!w.can} onClick={() => setAdding(adding === s.id ? null : s.id)}><Plus size={13} strokeWidth={1.8} /></button></span>
-            </Tip>
-            <Tip text={w.why ?? "Rename"}>
-              <span><button className="icon-btn" aria-label="Rename" disabled={!w.can} onClick={() => rename(s)}><Type size={13} strokeWidth={1.8} /></button></span>
-            </Tip>
-            <Tip text={w.why ?? "Remove the scene"}>
-              <span><button className="icon-btn danger" aria-label="Remove" disabled={!w.can} onClick={() => remove(s)}><Trash2 size={13} strokeWidth={1.8} /></button></span>
-            </Tip>
-          </div>
-          {adding === s.id && (
-            <AddLights scene={s} lights={data.lights} busy={w.busy} onCancel={() => setAdding(null)}
-              onAdd={async (ids) => {
-                const ops: Op[] = ids.map((light) => ({ op: "set_scene_light", agent: agent.id, scene: s.id, light, steps: [DEFAULT_STEP] }));
-                if (await w.propose(ops, `Add ${plural(ids.length, "light")} to the lighting scene “${s.name}”.`)) setAdding(null);
-              }} />
-          )}
-          {!!s.members.length && (
-            <table className="ag-table">
-              <tbody>
-                {s.members.map((m) => editing?.scene === s.id && editing.light === m.device.id ? (
-                  <tr key={m.device.id}><td colSpan={3} className="ag-cell-edit">
-                    <StepsEditor light={m.device} steps={m.steps} busy={w.busy} onCancel={() => setEditing(null)}
-                      onSave={async (steps) => {
-                        if (await w.propose([{ op: "set_scene_light", agent: agent.id, scene: s.id, light: m.device.id, steps }],
-                          `Change what “${m.device.name}” does in the lighting scene “${s.name}”.`)) setEditing(null);
-                      }} />
-                  </td></tr>
-                ) : (
-                  <tr key={m.device.id}>
-                    <td><Ref r={m.device} onSelect={onSelect} /></td>
-                    <td>{m.steps.map((st, i) => <StepText key={i} step={st} />)}</td>
-                    <td className="ag-acts"><div>
-                      <Tip text={w.why ?? "Change its steps"}>
-                        <span><button className="icon-btn" aria-label="Edit" disabled={!w.can} onClick={() => setEditing({ scene: s.id, light: m.device.id })}><Pencil size={13} strokeWidth={1.8} /></button></span>
-                      </Tip>
-                      <Tip text={w.why ?? "Take it out of the scene"}>
-                        <span><button className="icon-btn danger" aria-label="Remove from scene" disabled={!w.can}
-                          onClick={() => w.propose([{ op: "remove_scene_light", agent: agent.id, scene: s.id, light: m.device.id }],
-                            `Take “${m.device.name}” out of the lighting scene “${s.name}”.`)}><Trash2 size={13} strokeWidth={1.8} /></button></span>
-                      </Tip>
-                    </div></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+    <AgentSplit id="lighting" defaultSize="70%" bar={<>
+      <span className="dim small">{plural(data.scenes.length, "scene")}</span>
+      <span className="spread" />
+      <Tip text={w.why ?? "Add a scene"}>
+        <span><button className="act small primary" disabled={!w.can} onClick={create}><Plus size={13} strokeWidth={2} />New scene</button></span>
+      </Tip>
+    </>} detail={scene && (
+      <SceneDetail key={scene.id} agent={agent.id} scene={scene} data={data} w={w} shell={shell} onSelect={onSelect}
+        light={light} onLight={setLight} adding={adding} onAdding={setAdding} onRename={() => rename(scene)} onRemove={() => remove(scene)} />
+    )}>
+      <DataTable data={data.scenes} columns={columns} rowId={(s) => String(s.id)} label="Lighting scenes" sort={[{ id: "name", desc: false }]}
+        selected={scene ? String(scene.id) : null} onSelect={(s) => pick(s.id)}
+        onActivate={(s) => shell.program({ device: agent.id, event: s.id * 5 })}
+        empty={<p className="empty">No Advanced Lighting scenes yet.</p>} />
+    </AgentSplit>
+  );
+}
+
+/** One scene: its lights in a second table, and the picked light's steps under that. */
+function SceneDetail({ agent, scene: s, data, w, shell, onSelect, light, onLight, adding, onAdding, onRename, onRemove }: {
+  agent: number; scene: LightingSceneView; data: LightingData; w: ReturnType<typeof useWrites>; shell: Shell; onSelect: (id: number) => void;
+  light: number | null; onLight: (id: number | null) => void; adding: boolean; onAdding: (on: boolean) => void; onRename: () => void; onRemove: () => void;
+}) {
+  const member = s.members.find((m) => m.device.id === light) ?? null;
+  const columns = useMemo(() => [
+    lightCol.accessor((m) => m.device.name, {
+      id: "light", header: "Light",
+      cell: (c) => <span className="ellip">{c.getValue()}{c.row.original.device.room && c.row.original.device.room !== c.getValue() && <span className="dim"> · {c.row.original.device.room}</span>}</span>,
+    }),
+    lightCol.accessor((m) => m.steps[0]?.level ?? -1, {
+      id: "level", header: "Level", meta: { width: 64, align: "right" },
+      cell: (c) => { const v = c.row.original.steps[0]?.level; return v == null ? <span className="dim">—</span> : v === 0 ? "off" : `${v}%`; },
+    }),
+    lightCol.display({
+      id: "color", header: "Colour", meta: { width: 96, hideBelow: 420 },
+      cell: (c) => { const col = c.row.original.steps[0]?.color; return col ? <span className="row nowrap"><span className="ag-swatch" style={{ background: colorCss(col) }} /><span className="dim">{"kelvin" in col ? `${col.kelvin} K` : `${col.hue}°`}</span></span> : <span className="dim">—</span>; },
+    }),
+    lightCol.accessor((m) => m.steps[0]?.rate_ms ?? 0, { id: "ramp", header: "Ramp", meta: { width: 70, align: "right", hideBelow: 360 }, cell: (c) => ms(c.getValue()) }),
+    lightCol.accessor((m) => m.steps.length, { id: "steps", header: "Steps", meta: { width: 56, align: "right" } }),
+  ], []);
+
+  return (
+    <DetailPane fill icon={<Lightbulb size={14} strokeWidth={1.8} />} title={s.name}
+      tags={<>
+        <span className="dim mono small">#{s.id}</span>
+        {s.active && <span className="tag on">active</span>}
+        {s.toggle && <span className="tag" title="Its toggle scene">toggles with {s.toggle.name}</span>}
+        {!!s.programmed && <span className="tag accent" title="Under its activates, deactivates and is-invoked events">{plural(s.programmed, "programming line")}</span>}
+      </>}
+      actions={<>
+        {SCENE_EVENTS.map(([n, label]) => (
+          <ProgramLink key={n} lines={0} label={label} onClick={() => shell.program({ device: agent, event: s.id * 5 + n })} />
+        ))}
+        <IconAct label="Add lights" why={w.why} disabled={w.busy} onClick={() => onAdding(!adding)}><Plus size={13} strokeWidth={1.8} /></IconAct>
+        <IconAct label="Rename" why={w.why} disabled={w.busy} onClick={onRename}><Type size={13} strokeWidth={1.8} /></IconAct>
+        <IconAct label="Remove the scene" why={w.why} disabled={w.busy} danger onClick={onRemove}><RemoveIcon /></IconAct>
+      </>}>
+      {adding && (
+        <AddLights scene={s} lights={data.lights} busy={w.busy} onCancel={() => onAdding(false)}
+          onAdd={async (ids) => {
+            const ops: Op[] = ids.map((id) => ({ op: "set_scene_light", agent, scene: s.id, light: id, steps: [DEFAULT_STEP] }));
+            if (await w.propose(ops, `Add ${plural(ids.length, "light")} to the lighting scene “${s.name}”.`)) onAdding(false);
+          }} />
+      )}
+      <WithDetail id="lighting-scene" defaultSize="64%" minSize={120} detail={member && (
+        <div className="ag-detail-body">
+          {w.why ? (
+            <div className="ag-steps-ro">
+              <div className="ag-detail-head"><Ref r={member.device} onSelect={onSelect} /></div>
+              <div className="ag-pad">{member.steps.map((st, i) => <div key={i}><StepText step={st} /></div>)}</div>
+            </div>
+          ) : (
+            <StepsEditor key={`${s.id}:${member.device.id}`} light={member.device} steps={member.steps} busy={w.busy} onCancel={() => onLight(null)}
+              aside={<>
+                <Tip text="Show it in the project"><button type="button" className="act small quiet" onClick={() => onSelect(member.device.id)}>Go to light</button></Tip>
+                <Tip text="Take it out of the scene">
+                  <span><button type="button" className="icon-btn danger" aria-label="Remove from scene" disabled={w.busy}
+                    onClick={async () => {
+                      if (await w.propose([{ op: "remove_scene_light", agent, scene: s.id, light: member.device.id }],
+                        `Take “${member.device.name}” out of the lighting scene “${s.name}”.`)) onLight(null);
+                    }}><Trash2 size={13} strokeWidth={1.8} /></button></span>
+                </Tip>
+              </>}
+              onSave={(steps) => w.propose([{ op: "set_scene_light", agent, scene: s.id, light: member.device.id, steps }],
+                `Change what “${member.device.name}” does in the lighting scene “${s.name}”.`)} />
           )}
         </div>
-      ))}
-    </div>
+      )}>
+        <DataTable data={s.members} columns={columns} rowId={(m) => String(m.device.id)} label={`Lights in ${s.name}`} sort={[{ id: "light", desc: false }]}
+          selected={member ? String(member.device.id) : null} onSelect={(m) => onLight(m.device.id)} onActivate={(m) => onSelect(m.device.id)}
+          empty={<p className="empty">No lights in this scene yet{w.why ? "." : " — add some with +."}</p>} />
+      </WithDetail>
+    </DetailPane>
   );
 }
 
@@ -173,8 +232,8 @@ const secs = (msv: number) => +(msv / 1000).toFixed(2);
 
 /** Composer's scene editor for one light: its steps (elements), each with a delay, level,
  *  colour and ramp. */
-function StepsEditor({ light, steps: initial, busy, onCancel, onSave }: {
-  light: NamedRef; steps: LightStep[]; busy: boolean; onCancel: () => void; onSave: (s: LightStep[]) => void;
+function StepsEditor({ light, steps: initial, busy, onCancel, onSave, aside }: {
+  light: NamedRef; steps: LightStep[]; busy: boolean; onCancel: () => void; onSave: (s: LightStep[]) => void; aside?: React.ReactNode;
 }) {
   const [steps, setSteps] = useState<LightStep[]>(() => initial.map(({ delay_ms, level, rate_ms, color }) => ({ delay_ms, level, rate_ms, color })));
   const set = (i: number, patch: Partial<LightStep>) => setSteps((s) => s.map((x, j) => (j === i ? { ...x, ...patch } : x)));
@@ -190,7 +249,7 @@ function StepsEditor({ light, steps: initial, busy, onCancel, onSave }: {
   })();
   return (
     <EditorCard icon={<Lightbulb size={15} strokeWidth={1.8} />} title={light.name} problem={problem} busy={busy} saveLabel="Save"
-      onCancel={onCancel} onSave={() => onSave(steps)}>
+      onCancel={onCancel} onSave={() => onSave(steps)} aside={aside}>
       {steps.map((s, i) => (
         <StepRow key={i} i={i} n={steps.length} s={s} set={(p) => set(i, p)} remove={() => setSteps((x) => x.filter((_, j) => j !== i))} />
       ))}

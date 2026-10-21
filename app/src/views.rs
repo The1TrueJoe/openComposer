@@ -103,10 +103,18 @@ fn connections_of(p: &Project, cat: &Catalog, id: u32) -> Vec<Value> {
     let Some(info) = cat.devices.get(&id) else { return vec![] };
     let names = cat.names();
     // A combo driver and its proxies declare the same connection ids; the binding
-    // belongs to the proxy, so list each connection only under its owner.
+    // belongs to the proxy, so list each connection only under its owner. Only proxies: a
+    // room's children are devices whose ids (1, 2…) collide with the room's own end-points.
     let proxy_owned: std::collections::HashSet<u32> = p
         .item(id)
-        .map(|it| it.children.iter().filter_map(|c| cat.devices.get(c)).flat_map(|d| d.connections.iter().map(|c| c.id)).collect())
+        .map(|it| {
+            it.children
+                .iter()
+                .filter(|c| p.item(**c).is_some_and(|x| x.kind == ItemKind::Proxy))
+                .filter_map(|c| cat.devices.get(c))
+                .flat_map(|d| d.connections.iter().map(|c| c.id))
+                .collect()
+        })
         .unwrap_or_default();
     info.connections
         .iter()

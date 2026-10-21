@@ -77,7 +77,7 @@ export function Inspector({ id, shell, onSelect, actions }: {
 
   const w = shell.writable;
   const why = w ? undefined : `${shell.director?.name ?? "This Director"} is read-only`;
-  const controllable = d.kind === "device" || d.kind === "proxy";
+  const controllable = d.kind === "device" || d.kind === "proxy" || d.kind === "room";
   // Only the tabs that mean something for this item: a driver with no connections (or that
   // isn't on the network) has nothing to show there.
   const has: Record<InspectorTab, boolean> = {
@@ -107,7 +107,7 @@ export function Inspector({ id, shell, onSelect, actions }: {
         </div>
         <div className="insp-acts">
           {controllable && (
-            <Tip text={w ? "Live state and commands (or double-click it in the tree)" : `${why}: you can watch its state, not send commands`}>
+            <Tip text={w ? (d.kind === "room" ? "What to watch and listen to, volume and room off (or double-click the room in the tree)" : "Live state and commands (or double-click it in the tree)") : `${why}: you can watch its state, not send commands`}>
               <span><button className="act small" onClick={() => actions.control(d.id)}><Gamepad2 size={14} strokeWidth={1.8} />Control</button></span>
             </Tip>
           )}
@@ -139,7 +139,8 @@ export function Inspector({ id, shell, onSelect, actions }: {
                 setTab(t as InspectorTab);
               }
             }} />
-      <div className={cx("panel-body", (webTab || shown === "connections") && !(agentOn && hasNative) && "fill")}>
+      {/* An agent's own tab lays out its table and detail itself, like a web tab or Connections. */}
+      <div className={cx("panel-body", ((agentOn && hasNative) || webTab || shown === "connections") && "fill")}>
         {agentOn && nv && <AgentPanel v={nv} shell={shell} onSelect={onSelect} reload={native.reload} />}
         {agentOn && !nv && nativeError && <Failure error={nativeError} retry={native.reload} />}
         {!webTab && !(agentOn && hasNative) && shown === "properties" && <Properties d={d} shell={shell} />}

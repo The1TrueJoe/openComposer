@@ -1,11 +1,70 @@
-/** Pieces the built-in agents' tabs share: links to items, the approval round-trip, an
- *  inline editor card, and the pickers editors are made of. */
+/** Pieces the built-in agents' tabs share: the table-and-detail layout every tab uses, links to
+ *  items, the approval round-trip, an inline editor card, and the pickers editors are made of. */
 
-import { Check, X } from "lucide-react";
+import { Check, Pencil, SquareCode, Trash2, X } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { NamedRef, Op } from "../../../api";
+import { Tip } from "../../../components/Dialogs";
+import { WithDetail } from "../../../components/Panes";
 import type { Shell } from "../../../lib/shell";
-import { cx } from "../../../lib/ui";
+import { cx, plural } from "../../../lib/ui";
+
+/** Every agent tab's layout: a bar (counts, switches, Add), a table of its records (Scheduler
+ *  events, scenes…), and the picked one — or the editor — in a resizable pane under it. */
+export function AgentSplit({ id, bar, detail, defaultSize = "58%", children }: {
+  id: string; bar: ReactNode; detail: ReactNode; defaultSize?: string; children: ReactNode;
+}) {
+  return (
+    <div className="ag ag-split">
+      <div className="ag-bar">{bar}</div>
+      <WithDetail id={`agent-${id}`} detail={detail} defaultSize={defaultSize} minSize={140}>{children}</WithDetail>
+    </div>
+  );
+}
+
+/** The picked record: its name and actions, then what it holds (scrolling), or with `fill`
+ *  a body that lays itself out (a second table). */
+export function DetailPane({ icon, title, tags, actions, fill, children }: {
+  icon: ReactNode; title: ReactNode; tags?: ReactNode; actions?: ReactNode; fill?: boolean; children: ReactNode;
+}) {
+  return (
+    <div className="ag-detail">
+      <div className="ag-detail-head">
+        {icon}
+        <b className="ag-detail-title">{title}</b>
+        {tags}
+        <span className="spread" />
+        {actions}
+      </div>
+      <div className={cx("ag-detail-body", fill && "fill")}>{children}</div>
+    </div>
+  );
+}
+
+/** An icon button with its reason (or why it's off) as the tip. */
+export function IconAct({ label, why, danger, disabled, onClick, children }: {
+  label: string; why?: string; danger?: boolean; disabled?: boolean; onClick: () => void; children: ReactNode;
+}) {
+  return (
+    <Tip text={why ?? label}>
+      <span><button className={cx("icon-btn", danger && "danger")} aria-label={label} disabled={disabled || !!why} onClick={onClick}>{children}</button></span>
+    </Tip>
+  );
+}
+
+export const EditIcon = () => <Pencil size={13} strokeWidth={1.8} />;
+export const RemoveIcon = () => <Trash2 size={13} strokeWidth={1.8} />;
+
+/** "3 lines" — opens the event in Programming; "Program" when it has none yet. */
+export function ProgramLink({ lines, label, onClick }: { lines: number; label?: string; onClick: () => void }) {
+  return (
+    <Tip text={lines ? "Open its programming" : "Program what happens"}>
+      <button type="button" className={cx("ag-prog", !!lines && "has")} onClick={onClick}>
+        <SquareCode size={13} strokeWidth={1.8} />{label ?? (lines ? plural(lines, "line") : "Program")}
+      </button>
+    </Tip>
+  );
+}
 
 export const Ref = ({ r, onSelect }: { r: NamedRef; onSelect: (id: number) => void }) =>
   r.id === 0 ? <span>{r.name}</span> : (

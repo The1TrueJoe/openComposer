@@ -89,7 +89,9 @@ export function DesignPage({ shell }: { shell: Shell }) {
   const menuItems = (n: TreeNode): MenuItem[] => {
     const w = shell.writable;
     const items: MenuItem[] = [];
-    if (n.kind === "device" || n.kind === "proxy") items.push({ label: "Control…", icon: <Gamepad2 size={14} strokeWidth={1.8} />, onSelect: () => setControl(n.id) }, { divider: true });
+    if (n.kind === "device" || n.kind === "proxy" || n.kind === "room") {
+      items.push({ label: n.kind === "room" ? "Room controls…" : "Control…", icon: <Gamepad2 size={14} strokeWidth={1.8} />, onSelect: () => setControl(n.id) }, { divider: true });
+    }
     if (n.kind === "floor") items.push({ label: "Add room…", icon: <Plus size={14} strokeWidth={1.8} />, disabled: !w, onSelect: () => actions.addRoom(n.id) });
     if (n.kind === "room") items.push({ label: "Add device…", icon: <Plus size={14} strokeWidth={1.8} />, disabled: !w, onSelect: () => actions.addDevice(n.id) });
     if (n.kind !== "project") {
@@ -130,7 +132,7 @@ export function DesignPage({ shell }: { shell: Shell }) {
             </nav>
             {selected
               ? <Inspector id={selected.id} shell={shell} onSelect={setSel} actions={actions} />
-              : <div className="placeholder"><MousePointerClick size={22} strokeWidth={1.5} /><p>Select a room, device or agent to see its properties, connections and programming. Double-click a device to control it.</p></div>}
+              : <div className="placeholder"><MousePointerClick size={22} strokeWidth={1.5} /><p>Select a room, device or agent to see its properties, connections and programming. Double-click a device or room to control it.</p></div>}
             <AskBar shell={shell} focus={focus} project={tree.data?.project ?? "This project"} />
           </div>
         </MainPane>

@@ -1,15 +1,19 @@
 /** The Scheduler agent's own tab, in place of Composer's Scheduler plugin: every scheduled
- *  event with its time, repeat and next run, and the programming it starts. Events are added,
- *  edited and removed as approvals (add/modify/remove_schedule_entry). */
+ *  event in a table (time, repeat, next run), the picked one below it with the programming it
+ *  starts, one click from Programming. Events are added, edited and removed as approvals
+ *  (add/modify/remove_schedule_entry). */
 
-import { CalendarClock, Clock, Lock, Moon, Pencil, Plus, SquareCode, Sun, Sunrise, Sunset, Trash2 } from "lucide-react";
+import { createColumnHelper } from "@tanstack/react-table";
+import { CalendarClock, Clock, Lock, Moon, Plus, Sun, Sunrise, Sunset } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { Frequency, Nth, Op, ScheduleRow, ScheduleSpec, TimeBase, Weekday } from "../../../api";
+import { DataTable } from "../../../components/DataTable";
 import { CodeRow } from "../../../components/DiffView";
 import { Tip, useDialog } from "../../../components/Dialogs";
 import { Select, Switch } from "../../../components/controls";
 import type { Shell } from "../../../lib/shell";
 import { cx, plural } from "../../../lib/ui";
+import { AgentSplit, DetailPane, EditIcon, IconAct, ProgramLink, RemoveIcon } from "./common";
 
 type Data = { sun: { sunrise: string; sunset: string; timezone: string } | null; entries: ScheduleRow[] };
 
@@ -47,11 +51,16 @@ function TimeIcon({ base }: { base: TimeBase }) {
   return base === "sunrise" ? <Sunrise {...p} /> : base === "sunset" ? <Sunset {...p} /> : <Clock {...p} />;
 }
 
+const col = createColumnHelper<ScheduleRow>();
+/** Minutes into the day for sorting by time; sunrise and sunset events after clock times. */
+const timeKey = (e: ScheduleRow) => (e.spec.time_base === "clock" ? e.spec.minutes : (e.spec.time_base === "sunrise" ? 2000 : 3000) + e.spec.minutes);
+
 export function SchedulerView({ agent, data, shell, reload }: {
   agent: { id: number; name: string }; data: Data; shell: Shell; reload: () => void;
 }) {
   const dialog = useDialog();
   const [system, setSystem] = useState(false);
+  const [picked, setPicked] = useState<number | null>(null);
   const [editing, setEditing] = useState<ScheduleRow | "new" | null>(null);
   const [busy, setBusy] = useState(false);
   const w = shell.writable;
@@ -60,11 +69,10 @@ export function SchedulerView({ agent, data, shell, reload }: {
   // Composer hides other agents' bookkeeping (Update Manager's nightly checks…) from nobody,
   // but people rarely care: keep them behind a switch.
   const systemCount = data.entries.filter((e) => e.creator || e.hidden).length;
-  const shown = data.entries.filter((e) => system || (!e.creator && !e.hidden));
-  const { upcoming, idle } = useMemo(() => {
-    const up = shown.filter((e) => e.next).sort((a, b) => a.next!.at.localeCompare(b.next!.at));
-    return { upcoming: up, idle: shown.filter((e) => !e.next) };
-  }, [shown]);
+  const shown = useMemo(() => data.entries.filter((e) => system || (!e.creator && !e.hidden)), [data.entries, system]);
+  const sel = shown.find((e) => e.id === picked) ?? null;
+  const canEdit = (e: ScheduleRow) => !why && !e.locked && !busy;
+  const program = (e: ScheduleRow) => shell.program({ device: agent.id, event: e.id });
 
   const propose = async (ops: Op[], reason: string) => {
     setBusy(true);
@@ -89,98 +97,119 @@ export function SchedulerView({ agent, data, shell, reload }: {
     if (ok) await propose([{ op: "remove_schedule_entry", agent: agent.id, id: e.id }], `Remove the scheduled event “${e.name}”.`);
   };
 
-  return (
-    <div className="ag ag-sched">
-      <div className="ag-bar">
-        {data.sun && (
-          <span className="ag-sun" title={`Today at the controller (${data.sun.timezone})`}>
-            <Sun size={13} strokeWidth={1.8} /> Sunrise <b>{hhmm12(data.sun.sunrise)}</b>
-            <Moon size={13} strokeWidth={1.8} /> Sunset <b>{hhmm12(data.sun.sunset)}</b>
-            {data.sun.timezone && <span className="dim">{data.sun.timezone}</span>}
+  const columns = useMemo(() => [
+    col.accessor(timeKey, {
+      id: "time", header: "Time", meta: { width: 168 },
+      cell: (c) => <span className={cx("ag-time", c.row.original.spec.time_base)}><TimeIcon base={c.row.original.spec.time_base} />{c.row.original.time}</span>,
+    }),
+    col.accessor("name", {
+      header: "Event",
+      cell: (c) => {
+        const e = c.row.original;
+        return (
+          <span className="row nowrap ellip">
+            <span className="ellip">{e.name}</span>
+            {!e.enabled && <span className="tag">off</span>}
+            {e.locked && <Lock size={11} strokeWidth={2} className="dim" aria-label="locked" />}
+            {e.creator && <span className="tag accent" title="Made by another agent">{e.creator.name}</span>}
           </span>
-        )}
-        <span className="spread" />
-        {systemCount > 0 && (
-          <label className="ag-switch">
-            <Switch checked={system} onCheckedChange={setSystem} label="Show other agents' events" />
-            <span>Agents' events <span className="dim">({systemCount})</span></span>
-          </label>
-        )}
-        <Tip text={why ?? "Add a scheduled event"}>
-          <span><button className="act small primary" disabled={!w || busy} onClick={() => setEditing("new")}><Plus size={13} strokeWidth={2} />Add event</button></span>
-        </Tip>
-      </div>
+        );
+      },
+    }),
+    col.accessor("repeat", { header: "Repeats", meta: { width: "24%", hideBelow: 560 }, cell: (c) => <span className="ellip dim">{c.getValue()}</span> }),
+    col.accessor((e) => e.next?.at ?? "~", {
+      id: "next", header: "Next run", meta: { width: 150, hideBelow: 380 },
+      cell: (c) => {
+        const e = c.row.original;
+        const n = e.next ? nextText(e.next.at) : null;
+        return n ? <span><span className={cx("ag-next-day", n.soon && "soon")}>{n.day}</span> <span className="dim">{n.time}</span></span>
+          : <span className="dim">{e.enabled ? "won't run again" : "off"}</span>;
+      },
+    }),
+    col.accessor((e) => e.programming.length, {
+      id: "lines", header: "Lines", meta: { width: 58, align: "right" },
+      cell: (c) => (c.getValue() ? c.getValue() : <span className="dim">—</span>),
+    }),
+  ], []);
 
-      {editing && (
-        <EntryEditor
-          key={editing === "new" ? "new" : editing.id}
-          entry={editing === "new" ? null : editing}
-          sun={data.sun}
-          busy={busy}
-          taken={data.entries.filter((e) => editing === "new" || e.id !== editing.id).map((e) => e.name.trim().toLowerCase())}
-          onCancel={() => setEditing(null)}
-          onSave={(spec) => editing === "new"
-            ? propose([{ op: "add_schedule_entry", agent: agent.id, entry: spec }], `Add the scheduled event “${spec.name}”.`)
-            : propose([{ op: "modify_schedule_entry", agent: agent.id, id: editing.id, entry: spec, creator: editing.creator?.id ?? 0, category: editing.category }],
-                `Change the scheduled event “${editing.name}”.`)}
-        />
+  const detail = editing ? (
+    <EntryEditor
+      key={editing === "new" ? "new" : editing.id}
+      entry={editing === "new" ? null : editing}
+      sun={data.sun}
+      busy={busy}
+      taken={data.entries.filter((e) => editing === "new" || e.id !== editing.id).map((e) => e.name.trim().toLowerCase())}
+      onCancel={() => setEditing(null)}
+      onSave={(spec) => editing === "new"
+        ? propose([{ op: "add_schedule_entry", agent: agent.id, entry: spec }], `Add the scheduled event “${spec.name}”.`)
+        : propose([{ op: "modify_schedule_entry", agent: agent.id, id: editing.id, entry: spec, creator: editing.creator?.id ?? 0, category: editing.category }],
+            `Change the scheduled event “${editing.name}”.`)}
+    />
+  ) : sel && (
+    <EntryDetail e={sel} why={why ?? (sel.locked ? "Locked: Composer doesn't allow changing it either" : undefined)} busy={busy}
+      onProgram={() => program(sel)} onEdit={() => setEditing(sel)} onRemove={() => remove(sel)} />
+  );
+
+  return (
+    <AgentSplit id="scheduler" detail={detail} bar={<>
+      {data.sun && (
+        <span className="ag-sun" title={`Today at the controller (${data.sun.timezone})`}>
+          <Sun size={13} strokeWidth={1.8} /> Sunrise <b>{hhmm12(data.sun.sunrise)}</b>
+          <Moon size={13} strokeWidth={1.8} /> Sunset <b>{hhmm12(data.sun.sunset)}</b>
+          {data.sun.timezone && <span className="dim">{data.sun.timezone}</span>}
+        </span>
       )}
-
-      {!shown.length && !editing && <p className="empty pad">No scheduled events{systemCount ? " of your own" : ""} yet.</p>}
-      {!!upcoming.length && <h4 className="ag-h">Coming up</h4>}
-      {upcoming.map((e) => <EntryRow key={e.id} e={e} agent={agent.id} shell={shell} why={why} busy={busy} onEdit={() => setEditing(e)} onRemove={() => remove(e)} />)}
-      {!!idle.length && <h4 className="ag-h">Disabled or finished</h4>}
-      {idle.map((e) => <EntryRow key={e.id} e={e} agent={agent.id} shell={shell} why={why} busy={busy} onEdit={() => setEditing(e)} onRemove={() => remove(e)} />)}
-    </div>
+      <span className="spread" />
+      {systemCount > 0 && (
+        <label className="ag-switch">
+          <Switch checked={system} onCheckedChange={setSystem} label="Show other agents' events" />
+          <span>Agents' events <span className="dim">({systemCount})</span></span>
+        </label>
+      )}
+      <Tip text={why ?? "Add a scheduled event"}>
+        <span><button className="act small primary" disabled={!w || busy} onClick={() => { setPicked(null); setEditing("new"); }}><Plus size={13} strokeWidth={2} />Add event</button></span>
+      </Tip>
+    </>}>
+      <DataTable data={shown} columns={columns} rowId={(e) => String(e.id)} label="Scheduled events" sort={[{ id: "next", desc: false }]}
+        selected={sel ? String(sel.id) : null} onSelect={(e) => { setPicked(e.id); if (editing !== "new" && editing?.id !== e.id) setEditing(null); }}
+        onActivate={(e) => (canEdit(e) ? setEditing(e) : program(e))} rowClass={(e) => !e.enabled && "dimmed"}
+        empty={<p className="empty">No scheduled events{systemCount ? " of your own" : ""} yet.</p>} />
+    </AgentSplit>
   );
 }
 
-function EntryRow({ e, agent, shell, why, busy, onEdit, onRemove }: {
-  e: ScheduleRow; agent: number; shell: Shell; why?: string; busy: boolean; onEdit: () => void; onRemove: () => void;
+/** One event: when it runs, and the programming it starts. */
+function EntryDetail({ e, why, busy, onProgram, onEdit, onRemove }: {
+  e: ScheduleRow; why?: string; busy: boolean; onProgram: () => void; onEdit: () => void; onRemove: () => void;
 }) {
   const next = e.next ? nextText(e.next.at) : null;
-  const program = () => shell.program({ device: agent, event: e.id });
-  const canEdit = !why && !e.locked && !busy;
   return (
-    <div className={cx("ag-card ag-entry", !e.enabled && "off")}>
-      <div className="ag-entry-main">
-        <span className={cx("ag-time", e.spec.time_base)}><TimeIcon base={e.spec.time_base} />{e.time}</span>
-        <div className="ag-entry-what">
-          <div className="ag-entry-name">
-            <b>{e.name}</b>
-            {!e.enabled && <span className="tag">disabled</span>}
-            {e.locked && <Tip text="Locked: Composer doesn't allow changing it either"><span className="tag"><Lock size={10} strokeWidth={2} />locked</span></Tip>}
-            {e.creator && <span className="tag accent" title="Made by another agent">by {e.creator.name}</span>}
-          </div>
-          <div className="dim small">
-            {e.repeat} · from {e.start}{e.end && <> · until {e.end}</>}
-          </div>
-        </div>
-        <div className="ag-entry-next">
-          {next ? <><span className={cx("ag-next-day", next.soon && "soon")}>{next.day}</span><span className="dim small">{next.time}</span></>
-            : <span className="dim small">{e.enabled ? "won't run again" : "off"}</span>}
-        </div>
-        <div className="ag-entry-acts">
-          <Tip text={e.programming.length ? "Open its programming" : "Program what happens when it runs"}>
-            <button className={cx("ag-prog", !!e.programming.length && "has")} onClick={program}>
-              <SquareCode size={13} strokeWidth={1.8} />{e.programming.length ? plural(e.programming.length, "line") : "Program"}
-            </button>
-          </Tip>
-          <Tip text={why ?? (e.locked ? "Locked" : "Edit")}>
-            <span><button className="icon-btn" aria-label="Edit" disabled={!canEdit} onClick={onEdit}><Pencil size={13} strokeWidth={1.8} /></button></span>
-          </Tip>
-          <Tip text={why ?? (e.locked ? "Locked" : "Remove")}>
-            <span><button className="icon-btn danger" aria-label="Remove" disabled={!canEdit} onClick={onRemove}><Trash2 size={13} strokeWidth={1.8} /></button></span>
-          </Tip>
-        </div>
-      </div>
-      {!!e.programming.length && (
-        <div className="code ag-code" role="button" tabIndex={0} title="Open in Programming" onClick={program}
-             onKeyDown={(k) => { if (k.key === "Enter") program(); }}>
+    <DetailPane icon={<TimeIcon base={e.spec.time_base} />} title={e.name}
+      tags={<>
+        {!e.enabled && <span className="tag">disabled</span>}
+        {e.locked && <span className="tag"><Lock size={10} strokeWidth={2} />locked</span>}
+        {e.creator && <span className="tag accent" title="Made by another agent">by {e.creator.name}</span>}
+      </>}
+      actions={<>
+        <ProgramLink lines={e.programming.length} onClick={onProgram} />
+        <IconAct label="Edit" why={why} disabled={busy} onClick={onEdit}><EditIcon /></IconAct>
+        <IconAct label="Remove" why={why} disabled={busy} danger onClick={onRemove}><RemoveIcon /></IconAct>
+      </>}>
+      <dl className="ag-dl">
+        <dt>Time</dt><dd>{e.time}{e.spec.randomize_minutes > 0 && <span className="dim"> · up to {e.spec.randomize_minutes} min later at random</span>}</dd>
+        <dt>Repeats</dt><dd>{e.repeat}</dd>
+        <dt>Starts</dt><dd>{e.start}</dd>
+        {e.end && <><dt>Ends</dt><dd>{e.end}</dd></>}
+        <dt>Next run</dt><dd>{next ? <><span className={cx("ag-next-day", next.soon && "soon")}>{next.day}</span> {next.time}</> : <span className="dim">{e.enabled ? "won't run again" : "off"}</span>}</dd>
+      </dl>
+      <h4 className="ag-h ag-pad">Programming</h4>
+      {e.programming.length ? (
+        <div className="code ag-code" role="button" tabIndex={0} title="Open in Programming" onClick={onProgram}
+             onKeyDown={(k) => { if (k.key === "Enter") onProgram(); }}>
           {e.programming.map((l) => <CodeRow key={l.id} line={l} />)}
         </div>
-      )}
-    </div>
+      ) : <p className="dim small ag-pad">Nothing happens when it runs yet. <button className="link" onClick={onProgram}>Program it</button></p>}
+    </DetailPane>
   );
 }
 

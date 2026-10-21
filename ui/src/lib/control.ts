@@ -3,7 +3,7 @@
  *  (light colours, matrix routes). No components here (pages/design/DeviceControl.tsx draws
  *  the panel). */
 
-import type { CommandDef, CommandParam, ConnectionDef, ParamDef } from "../api/types.ts";
+import type { CommandDef, CommandParam, ConnectionDef, ConnectionRow, ItemDetail, ParamDef, ShortItem, TreeNode } from "../api/types.ts";
 
 export interface LiveVar {
   /** The item the variable belongs to (a device or one of its proxies). */
@@ -56,33 +56,7 @@ export function familyOf(proxies: (string | null | undefined)[]): Family {
 const p = (name: string, prop_type: string, extra: Partial<ParamDef> = {}): ParamDef =>
   ({ name, prop_type, default: null, readonly: false, items: [], minimum: null, maximum: null, ...extra });
 const c = (name: string, description: string, ...params: ParamDef[]): CommandDef => ({ name, description, params });
-const plain = (...names: string[]) => names.map((n) => c(n, `${humanize(n)} on NAME`));
 const LEVEL = p("LEVEL", "RANGED_INTEGER", { minimum: "0", maximum: "100" });
-const POWER = [c("ON", "Turn on NAME"), c("OFF", "Turn off NAME")];
-const INPUT = c("SET_INPUT", "Select input INPUT on NAME", p("INPUT", "INTEGER"));
-const VOLUME = [...plain("PULSE_VOL_UP", "PULSE_VOL_DOWN"), c("MUTE_TOGGLE", "Toggle mute on NAME")];
-const NAV = plain("UP", "DOWN", "LEFT", "RIGHT", "ENTER", "CANCEL", "MENU", "INFO");
-const DIGITS = plain(...Array.from({ length: 10 }, (_, i) => `NUMBER_${i}`));
-const CHANNEL = plain("PULSE_CH_UP", "PULSE_CH_DOWN");
-const TRANSPORT = plain("PLAY", "PAUSE", "STOP", "SCAN_REV", "SCAN_FWD", "SKIP_REV", "SKIP_FWD");
-
-/** Control4's standard proxy commands, for a proxy whose definition lists none (Director keeps
- *  the built-in proxies' commands to itself). ponytail: a fixed list per proxy type, not the
- *  proxy definitions; the upgrade is Control4's public DriverWorks proxy documentation. */
-export function standardFor(proxy: string | null | undefined): CommandDef[] {
-  const x = proxy ? proxyName(proxy) : "";
-  if (/^light|dimmer/.test(x)) return [...POWER, c("TOGGLE", "Toggle NAME"), c("SET_LEVEL", "Set NAME level to LEVEL", LEVEL)];
-  if (/avswitch/.test(x)) return [c("SET_INPUT", "Route input INPUT to output OUTPUT on NAME", p("INPUT", "INTEGER"), p("OUTPUT", "INTEGER"))];
-  if (/receiver|amplifier/.test(x)) return [...POWER, INPUT, c("SET_VOLUME_LEVEL", "Set NAME volume to LEVEL", LEVEL), ...VOLUME];
-  if (/^tv$|television|projector/.test(x)) return [...POWER, INPUT, ...VOLUME, ...CHANNEL, ...NAV, ...plain("GUIDE"), ...DIGITS];
-  if (/satellite|cable|dvr/.test(x)) {
-    return [...POWER, ...CHANNEL, ...NAV, ...plain("GUIDE", "PAGE_UP", "PAGE_DOWN", "RECALL"), ...DIGITS, ...TRANSPORT, ...plain("RECORD")];
-  }
-  if (/dvd|bluray|blu_ray|disc/.test(x)) return [...POWER, ...NAV, ...TRANSPORT, ...plain("EJECT")];
-  if (/tuner/.test(x)) return [...POWER, ...CHANNEL];
-  if (/media/.test(x)) return [...POWER, ...NAV, ...TRANSPORT];
-  return [];
-}
 
 /** A command and where it goes: the device itself or one of its proxies. */
 export interface Available {
@@ -91,17 +65,196 @@ export interface Available {
   /** "device", or the proxy type ("light_v2"). */
   role: string;
   def: CommandDef;
-  /** From the standard list, not the driver's own declaration. */
-  standard: boolean;
+  /** null when the driver (or its proxy) declares the command. Otherwise what shows the device
+   *  takes it although nothing declares it by name: "capability has_discrete_volume_control",
+   *  "variable POWER_STATE", "programming"… */
+  evidence: string | null;
+  /** Declared, but the device's own capabilities or variables say it doesn't do it (a TV whose
+   *  proxy lists bass controls it hasn't got). Kept for All commands; no button on the remote. */
+  unsupported?: string;
 }
 
 /** Command names as drivers spell them: `Volume Up`, `volume-up` and `VOLUME_UP` are one name. */
 export const normName = (n: string) => n.trim().toUpperCase().replace(/[\s-]+/g, "_");
 
-/** The first of `names` that something declares — the device's own driver before a standard one. */
+/** Capabilities as declared, keys lower-cased; older backends don't send them at all. */
+export function capsOf(x: ItemDetail): Record<string, string> {
+  const own = (x as { capabilities?: Record<string, string> | null }).capabilities;
+  const all = { ...(x.device?.capabilities ?? {}), ...(own ?? {}) };
+  return Object.fromEntries(Object.entries(all).map(([k, v]) => [k.toLowerCase(), String(v)]));
+}
+
+export const truthy = (v: string | null | undefined) => v != null && /^(true|1|yes)$/i.test(v.trim());
+
+/** Control4's built-in proxies (tv.c4i…) list their commands by template only: `GetItems`
+ *  gives "Turn on the NAME" with no name. These are the ones whose name is Control4's proxy
+ *  command of that wording; anything else stays unnamed and is left out (it can't be sent). */
+const TEMPLATE_NAMES: [RegExp, string][] = [
+  [/^turn on\b/i, "ON"], [/^turn off\b/i, "OFF"],
+  [/^push the (menu|up|down|left|right|enter|cancel|info|recall|dash|star|pound|guide|exit|home|back)\b/i, "$1"],
+  [/^push the tvvideo\b/i, "TV_VIDEO"],
+  [/^enter '(\d)'/i, "NUMBER_$1"],
+  [/^(pulse|start|stop) the (volume|channel|bass|treble|balance) (up|down)\b/i, "$1_$2_$3"],
+  [/^turn mute (on|off|toggle)\b/i, "MUTE_$1"],
+  [/^set volume to\b/i, "SET_VOLUME_LEVEL"], [/^set channel to\b/i, "SET_CHANNEL"], [/^set input to\b/i, "SET_INPUT"],
+  [/^set (bass|treble|balance) to\b/i, "SET_$1_LEVEL"],
+  [/^pulse the input\b/i, "PULSE_INPUT"],
+];
+const SHORT: Record<string, string> = { VOLUME: "VOL", CHANNEL: "CH" };
+/** Parameters the templated "Set … to INTEGER" commands take (the template says INTEGER, the
+ *  proxy definition gives no name). */
+const TEMPLATE_PARAMS: Record<string, ParamDef[]> = {
+  SET_VOLUME_LEVEL: [LEVEL], SET_CHANNEL: [p("CHANNEL", "INTEGER")], SET_INPUT: [p("INPUT", "INTEGER")],
+  SET_BASS_LEVEL: [p("LEVEL", "INTEGER")], SET_TREBLE_LEVEL: [p("LEVEL", "INTEGER")], SET_BALANCE_LEVEL: [p("LEVEL", "INTEGER")],
+};
+
+function nameFromTemplate(def: CommandDef): CommandDef | null {
+  if (def.name.trim()) return def;
+  const t = def.description.trim();
+  for (const [re, to] of TEMPLATE_NAMES) {
+    const m = re.exec(t);
+    if (!m) continue;
+    const name = to.replace(/\$(\d)/g, (_, i) => { const w = m[Number(i)].toUpperCase(); return SHORT[w] ?? w; });
+    return { ...def, name, params: def.params.length ? def.params : TEMPLATE_PARAMS[name] ?? [] };
+  }
+  return null;
+}
+
+/** Which capability a kind of command needs (any of the keys will do), for the AV proxies that
+ *  describe themselves with `has_…` capabilities. Navigation and power have none. */
+const GATES: [RegExp, string[]][] = [
+  [/^(PULSE|START|STOP)_VOL_(UP|DOWN)$/, ["has_up_down_volume_control"]],
+  [/^SET_VOLUME_LEVEL$/, ["has_discrete_volume_control"]],
+  [/^MUTE_TOGGLE$/, ["has_toggle_mute_control"]],
+  [/^MUTE_(ON|OFF)$/, ["has_discrete_mute_control"]],
+  [/^(PULSE|START|STOP)_CH_(UP|DOWN)$/, ["has_channel_up_down", "has_tune_up_down"]],
+  [/^SET_CHANNEL$/, ["has_discrete_channel_select"]],
+  [/^(PULSE_INPUT|INPUT_TOGGLE)$/, ["has_toad_input_select"]],
+  [/^(PULSE|START|STOP)_BASS_(UP|DOWN)$/, ["has_up_down_bass_control"]], [/^SET_BASS_LEVEL$/, ["has_discrete_bass_control"]],
+  [/^(PULSE|START|STOP)_TREBLE_(UP|DOWN)$/, ["has_up_down_treble_control"]], [/^SET_TREBLE_LEVEL$/, ["has_discrete_treble_control"]],
+  [/^(PULSE|START|STOP)_BALANCE_(UP|DOWN)$/, ["has_up_down_balance_control"]], [/^SET_BALANCE_LEVEL$/, ["has_discrete_balance_control"]],
+];
+/** Proxies whose capabilities speak that vocabulary (a media player's don't). */
+const GATED_PROXY = /^(tv|receiver|avswitch|amplifier|projector|tuner)/;
+const CHANNEL_PROXY = /^(tv|tuner|satellite|cable|dvr)/;
+const AUDIO_PROXY = /^(tv|receiver|amplifier|projector)/;
+const INPUT_PROXY = /^(tv|receiver|amplifier|projector)/;
+const LIGHT_PROXY = /^light|dimmer/;
+const DIGIT_KEYS = /^(NUMBER_\d|DASH|STAR|POUND)$/;
+const DPAD_KEYS = /^(UP|DOWN|LEFT|RIGHT|ENTER)$/;
+const TRANSPORT = new Set(["PLAY", "PAUSE", "STOP", "SCAN_FWD", "SCAN_REV", "SKIP_FWD", "SKIP_REV", "RECORD"]);
+/** Keys Navigator shows only when TRANSPORTS_BUTTONS lists them. */
+const MENU_KEYS = new Set(["MENU", "INFO", "GUIDE", "CANCEL", "HOME", "BACK", "EXIT", "CC", "SETTINGS"]);
+/** TRANSPORTS_SUPPORTED's groups of keys, and the commands each stands for. */
+const GROUP_COMMANDS: Record<string, string[]> = {
+  PG_UP: ["PAGE_UP"], PG_DOWN: ["PAGE_DOWN"], PRG_BTNS: ["PROGRAM_A", "PROGRAM_B", "PROGRAM_C", "PROGRAM_D"],
+};
+
+/** What a media device's TRANSPORTS_* variables say it has — what Navigator draws its remote
+ *  from: transport keys, and key groups (DPAD, KEYPAD, CH_UP_DN, PG_UP, PRG_BTNS) in
+ *  TRANSPORTS_SUPPORTED; extra keys (HOME, BACK, MENU, INFO…) in TRANSPORTS_BUTTONS. Null when
+ *  the device doesn't say. */
+function navigatorOf(vars: LiveVar[], owner: number): { supported: Set<string> | null; buttons: Set<string> | null } {
+  const mine = vars.filter((v) => v.owner === owner);
+  const list = (...names: string[]) => {
+    const found = names.map((n) => mine.find((v) => v.name.toUpperCase() === n)).filter((v): v is LiveVar => !!v);
+    if (!found.length) return null;
+    return new Set(found.flatMap((v) => v.value.split(/[,;\s]+/)).map(normName).filter(Boolean)
+      .flatMap((x) => (x === "SCAN" ? ["SCAN_FWD", "SCAN_REV"] : x === "SKIP" ? ["SKIP_FWD", "SKIP_REV"] : [x])));
+  };
+  const supported = list("TRANSPORTS_SUPPORTED", "TRANSPORTS_DASHBOARD_SMALL", "TRANSPORTS_DASHBOARD_LARGE");
+  return { supported: supported?.size ? supported : null, buttons: list("TRANSPORTS_BUTTONS") };
+}
+
+/** Why the device doesn't take a command it (or its proxy type) declares, if it doesn't. */
+function ruledOut(n: string, role: string, caps: Record<string, string>, nav: ReturnType<typeof navigatorOf>): string | undefined {
+  const gate = GATED_PROXY.test(role) && Object.keys(caps).some((k) => k.startsWith("has_")) ? GATES.find(([re]) => re.test(n)) : undefined;
+  if (gate && !gate[1].some((k) => truthy(caps[k]))) return `${gate[1][0]} is ${caps[gate[1][0]] ?? "not declared"}`;
+  const s = nav.supported;
+  if (s) {
+    if (TRANSPORT.has(n) && !s.has(n)) return "not in its TRANSPORTS_SUPPORTED";
+    if (DPAD_KEYS.test(n) && !s.has("DPAD")) return "no DPAD in its TRANSPORTS_SUPPORTED";
+    if (DIGIT_KEYS.test(n) && !s.has("KEYPAD")) return "no KEYPAD in its TRANSPORTS_SUPPORTED";
+    if (/^(PULSE|START|STOP)_CH_(UP|DOWN)$/.test(n) && !s.has("CH_UP_DN")) return "no CH_UP_DN in its TRANSPORTS_SUPPORTED";
+    for (const [group, cmds] of Object.entries(GROUP_COMMANDS)) if (cmds.includes(n) && !s.has(group)) return `no ${group} in its TRANSPORTS_SUPPORTED`;
+  } else if (DIGIT_KEYS.test(n) && CHANNEL_PROXY.test(role) && GATED_PROXY.test(role) && Object.keys(caps).some((k) => k.startsWith("has_"))
+    && !truthy(caps.has_discrete_channel_select)) {
+    return "has_discrete_channel_select is not declared";
+  }
+  if (nav.buttons && MENU_KEYS.has(n) && !nav.buttons.has(n)) return "not in its TRANSPORTS_BUTTONS";
+  return undefined;
+}
+
+/** A command programming already sends to the item: proof it takes it, with its parameters. */
+export interface ProgrammedCommand { target: number; command: string; params: { name: string; type: string; value: string }[] }
+
+/** Commands a proxy that names none still shows it takes. Each is something the device says
+ *  about itself; nothing is assumed from its proxy type alone. Capabilities are the device's,
+ *  shared by all its proxies, so each kind is only read for the proxies it is about. */
+function evidenced(x: ItemDetail, role: string, caps: Record<string, string>, vars: LiveVar[]): [CommandDef, string][] {
+  const out: [CommandDef, string][] = [];
+  const cap = (k: string, ...defs: CommandDef[]) => { if (truthy(caps[k])) defs.forEach((d) => out.push([d, `capability ${k}`])); };
+  if (/^avswitch/.test(role)) cap("can_switch", c("SET_INPUT", "Route input INPUT to output OUTPUT on NAME", p("INPUT", "INTEGER"), p("OUTPUT", "INTEGER")));
+  if (INPUT_PROXY.test(role)) cap("has_discrete_input_select", c("SET_INPUT", "Select input INPUT on NAME", p("INPUT", "INTEGER")));
+  if (AUDIO_PROXY.test(role)) {
+    cap("has_up_down_volume_control", c("PULSE_VOL_UP", "Volume up on NAME"), c("PULSE_VOL_DOWN", "Volume down on NAME"));
+    cap("has_discrete_volume_control", c("SET_VOLUME_LEVEL", "Set NAME volume to LEVEL", LEVEL));
+    cap("has_toggle_mute_control", c("MUTE_TOGGLE", "Toggle mute on NAME"));
+    cap("has_discrete_mute_control", c("MUTE_ON", "Mute NAME"), c("MUTE_OFF", "Unmute NAME"));
+  }
+  if (CHANNEL_PROXY.test(role)) {
+    cap("has_channel_up_down", c("PULSE_CH_UP", "Channel up on NAME"), c("PULSE_CH_DOWN", "Channel down on NAME"));
+    cap("has_discrete_channel_select", c("SET_CHANNEL", "Set NAME channel to CHANNEL", p("CHANNEL", "INTEGER")));
+  }
+  if (LIGHT_PROXY.test(role)) {
+    cap("on_off", c("ON", "Turn on NAME"), c("OFF", "Turn off NAME"));
+    if (truthy(caps.dimmer) || truthy(caps.set_level)) out.push([c("SET_LEVEL", "Set NAME level to LEVEL", LEVEL), `capability ${truthy(caps.set_level) ? "set_level" : "dimmer"}`]);
+  }
+  // A proxy that reports its power takes power commands.
+  const power = vars.find((v) => v.owner === x.id && /^(POWER_STATE|LIGHT_STATE)$/i.test(v.name));
+  if (power) out.push([c("ON", "Turn on NAME"), `variable ${power.name}`], [c("OFF", "Turn off NAME"), `variable ${power.name}`]);
+  return out;
+}
+
+/** Everything the device and its proxies can be sent, and which of it the remote may draw:
+ *  commands declared by name (or by a built-in proxy's template), less those its capabilities
+ *  or TRANSPORTS_* variables rule out; for a proxy that declares none, only what the device
+ *  shows about itself — capabilities, variables, programming that already sends it. Shared by
+ *  the control panel and Programming's command list. */
+export function commandsOf(items: ItemDetail[], vars: LiveVar[] = [], programmed: ProgrammedCommand[] = []): Available[] {
+  return items.flatMap((x, i) => {
+    const role = i === 0 && x.kind !== "proxy" ? "device" : (x.driver ?? "proxy").toLowerCase().replace(/\.c4[iz]$/, "");
+    const caps = capsOf(x);
+    const nav = navigatorOf(vars, x.id);
+    const out: Available[] = [];
+    const seen = new Set<string>();
+    const push = (def: CommandDef, evidence: string | null) => {
+      const n = normName(def.name);
+      if (!n || seen.has(n)) return;
+      seen.add(n);
+      out.push({ target: x.id, targetName: x.name, role, def, evidence, unsupported: ruledOut(n, role, caps, nav) });
+    };
+    const own = (x.commands ?? []).map(nameFromTemplate).filter((d): d is CommandDef => !!d);
+    own.forEach((d) => push(d, null));
+    // What the device says Navigator should show, whatever its proxy declares.
+    for (const t of nav.supported ?? []) {
+      if (TRANSPORT.has(t)) push(c(t, `${humanize(t)} on NAME`), "variable TRANSPORTS_SUPPORTED");
+      for (const cmd of GROUP_COMMANDS[t] ?? []) push(c(cmd, `${humanize(cmd)} on NAME`), "variable TRANSPORTS_SUPPORTED");
+    }
+    for (const b of nav.buttons ?? []) push(c(b, `${humanize(b)} on NAME`), "variable TRANSPORTS_BUTTONS");
+    if (!own.length && (i > 0 || x.kind === "proxy")) evidenced(x, role, caps, vars).forEach(([d, why]) => push(d, why));
+    for (const l of programmed.filter((l) => l.target === x.id && l.command)) {
+      push(c(l.command, `${humanize(l.command)} on NAME`, ...l.params.map((q) => p(q.name, q.type || "STRING", { default: q.value }))), "programming");
+    }
+    return out;
+  });
+}
+
+/** The first of `names` the device takes — one it declares before one only evidenced. */
 export function findCommand(list: Available[], ...names: string[]): Available | undefined {
+  const ok = list.filter((a) => !a.unsupported);
   for (const n of names) {
-    const hit = list.find((a) => normName(a.def.name) === n && !a.standard) ?? list.find((a) => normName(a.def.name) === n);
+    const hit = ok.find((a) => normName(a.def.name) === n && !a.evidence) ?? ok.find((a) => normName(a.def.name) === n);
     if (hit) return hit;
   }
   return undefined;
@@ -155,8 +308,9 @@ export function humanize(name: string): string {
 }
 
 /** The parameters to send with a command: each declared one filled by the first rule whose
- *  pattern matches its name, else its default. A command declaring none (a standard one, or a
- *  driver that leaves them out) gets `fallback`, which is what Control4's proxies expect. */
+ *  pattern matches its name, else its default. A command declaring none (one known only from
+ *  the device's capabilities, or a driver that leaves them out) gets `fallback`, which is what
+ *  Control4's proxies expect. */
 export function fillParams(def: CommandDef, rules: [RegExp, (p: ParamDef) => string][], fallback: CommandParam[] = []): CommandParam[] {
   if (!def.params.length) return fallback;
   return def.params.map((x) => {
@@ -310,7 +464,7 @@ export function routeCommand(list: Available[]): { a: Available; input: ParamDef
   });
   const named = findCommand(list, "SET_INPUT", "ROUTE", "SET_ROUTE", "SWITCH", "SET_OUTPUT_INPUT");
   if (named && (io(named).output || !named.def.params.length)) return { a: named, ...io(named) };
-  const any = list.find((a) => !a.standard && io(a).input && io(a).output);
+  const any = list.find((a) => !a.unsupported && !a.evidence && io(a).input && io(a).output);
   return any ? { a: any, ...io(any) } : null;
 }
 
@@ -331,4 +485,145 @@ export function routesFrom(vars: LiveVar[], inputs: Port[], outputs: Port[]): Ma
     if (i) out.set(o.key, i.key);
   }
   return out;
+}
+
+// ---- rooms ---------------------------------------------------------------------------------------
+
+/** What a room (Director's roomdevice) is sent: picking what to watch or listen to, room off and
+ *  the room's volume, which Director passes to whichever device is playing. The room driver
+ *  declares none of them (`GetItems` lists no commands for a room), so they are listed here.
+ *  ponytail: a fixed list — each one sent to the Virtual Director's Living Room and accepted;
+ *  SELECT_*, ROOM_OFF and MUTE_ON/OFF were seen changing the room's variables. Others Director
+ *  takes (transport, navigation for the selected source) are left out until checked the same way. */
+export const ROOM_COMMANDS: CommandDef[] = [
+  c("ROOM_OFF", "Turn off NAME"),
+  c("SELECT_VIDEO_DEVICE", "Watch a source in NAME", p("deviceid", "INTEGER")),
+  c("SELECT_AUDIO_DEVICE", "Listen to a source in NAME", p("deviceid", "INTEGER")),
+  c("SET_VOLUME_LEVEL", "Set NAME volume to LEVEL", LEVEL),
+  c("PULSE_VOL_UP", "Volume up in NAME"), c("PULSE_VOL_DOWN", "Volume down in NAME"),
+  c("MUTE_TOGGLE", "Toggle mute in NAME"), c("MUTE_ON", "Mute NAME"), c("MUTE_OFF", "Unmute NAME"),
+];
+
+/** A room's commands: its own, Director's room commands, and any programming already sends it. */
+export function roomCommands(room: ItemDetail, programmed: ProgrammedCommand[] = []): Available[] {
+  // What the room driver declares wins; then Director's list; then anything else programming sends it.
+  const own = commandsOf([room], [], programmed).map((a) => ({ ...a, role: "room" }));
+  const declared = new Set(own.filter((a) => !a.evidence).map((a) => normName(a.def.name)));
+  const known = new Set(ROOM_COMMANDS.map((d) => d.name));
+  return [
+    ...own.filter((a) => !a.evidence),
+    ...ROOM_COMMANDS.filter((d) => !declared.has(d.name)).map((def) => ({ target: room.id, targetName: room.name, role: "room", def, evidence: "Director's room commands" })),
+    ...own.filter((a) => a.evidence && !known.has(normName(a.def.name))),
+  ];
+}
+
+export interface RoomSource {
+  id: number;
+  name: string;
+  driver: string | null;
+  /** The devices between it and the room, nearest the source first ("Leaf 8x8 HDMI Matrix"). */
+  via: string[];
+}
+
+const VIDEO_CLASS = /HDMI|VIDEO|COMPONENT|COMPOSITE|DVI|HDBASET|SDI/;
+const AUDIO_CLASS = /STEREO|DIGITAL|COAX|OPTICAL|SPDIF|AUDIO/;
+const NOT_MEDIA = /_SELECTION|_VOLUME|IR_|RS_?232|CONTROL|TEMPERATURE|SECURITY/;
+/** Proxies that pass a picture or sound on rather than make it: walked through, not offered. */
+const PASS_THROUGH = /^(avswitch|receiver|amplifier|tv|projector|display|audio_?matrix)/;
+
+/** What a room can watch and listen to, as Director works it out: from the room's video and
+ *  audio end-points (its VIDEO_SELECTION / AUDIO_SELECTION connections), back along the AV
+ *  bindings through switches and receivers to the devices that make the picture or sound.
+ *  `rows` is every connection in the project (list_connections); `tree` the project tree, for
+ *  drivers whose AV connections sit on the device rather than on its proxy. */
+export function roomSources(room: ItemDetail, rows: ConnectionRow[], tree?: TreeNode | null): {
+  watch: RoomSource[]; listen: RoomSource[]; endpoints: { watch: ShortItem[]; listen: ShortItem[] };
+} {
+  const info = new Map<number, ShortItem>();
+  const parent = new Map<number, number>();
+  const proxies = new Map<number, TreeNode[]>();
+  const index = (n: TreeNode) => {
+    info.set(n.id, { id: n.id, name: n.name, kind: n.kind, driver: n.driver });
+    // A device's only proxy is folded into it in the tree; its driver comes from the rows.
+    if (n.proxy) {
+      parent.set(n.proxy, n.id);
+      proxies.set(n.id, [{ id: n.proxy, name: n.name, kind: "proxy", driver: null, children: [] }]);
+    }
+    for (const ch of n.children) {
+      if (ch.kind === "proxy") {
+        parent.set(ch.id, n.id);
+        proxies.set(n.id, [...(proxies.get(n.id) ?? []), ch]);
+      }
+      index(ch);
+    }
+  };
+  if (tree) index(tree);
+  const inputs = new Map<number, { from: number; classes: string[] }[]>();
+  for (const r of rows) {
+    if (!info.has(r.device.id)) info.set(r.device.id, { id: r.device.id, name: r.device.name });
+    for (const peer of r.connection.connected_to) {
+      info.set(peer.device.id, { ...info.get(peer.device.id), ...peer.device });
+      const classes = peer.classes.length ? peer.classes : r.connection.classes;
+      if (r.connection.role !== "input" || classes.every((k) => NOT_MEDIA.test(k))) continue;
+      const list = inputs.get(r.device.id) ?? [];
+      // One edge per pair, with every class between them (a player wired by stereo and HDMI).
+      const had = list.find((e) => e.from === peer.device.id);
+      if (had) had.classes = [...new Set([...had.classes, ...classes])];
+      else list.push({ from: peer.device.id, classes });
+      inputs.set(r.device.id, list);
+    }
+  }
+  const proxyType = (driver: string | null | undefined) => (driver ?? "").toLowerCase().replace(/\.c4[iz]$/, "");
+  // A device and its proxies are one box: its inputs may be declared on either.
+  const inputsOf = (id: number) => {
+    const p = parent.get(id);
+    return [...(inputs.get(id) ?? []), ...(p != null ? inputs.get(p) ?? [] : []), ...(proxies.get(id) ?? []).flatMap((x) => inputs.get(x.id) ?? [])];
+  };
+  /** What to select for a device that is a source: its first proxy that makes media. */
+  const selectable = (id: number): ShortItem | null => {
+    const it = info.get(id) ?? { id, name: `#${id}` };
+    if (it.kind === "room") return null;
+    const kids = proxies.get(id);
+    if (it.kind === "device" && kids?.length) {
+      const own = kids.map((k) => info.get(k.id) ?? k).find((k) => !PASS_THROUGH.test(proxyType(k.driver)));
+      return own ? { id: own.id, name: own.name, kind: "proxy", driver: own.driver ?? null } : null;
+    }
+    return PASS_THROUGH.test(proxyType(it.driver)) ? null : it;
+  };
+
+  // The room's end-points, from its own connections and from the other side's (a backend that
+  // hides some of the room's connections still lists the devices bound to it).
+  const ends = (selection: string, skip?: RegExp) => [...new Map([
+    ...room.connections
+      .filter((x) => x.classes.includes(selection) && !(skip && skip.test(x.name)))
+      .flatMap((x) => x.connected_to.map((peer) => [peer.device.id, peer.device] as const)),
+    ...rows.flatMap((r) => r.connection.connected_to
+      .filter((peer) => peer.device.id === room.id && peer.classes.includes(selection) && !(skip && skip.test(peer.connection ?? "")))
+      .map(() => [r.device.id, info.get(r.device.id) ?? { id: r.device.id, name: r.device.name }] as const)),
+  ]).values()];
+  const walk = (from: ShortItem[], media: RegExp): RoomSource[] => {
+    const found = new Map<number, RoomSource>();
+    const seen = new Set<number>(from.flatMap((e) => [e.id, parent.get(e.id) ?? e.id]));
+    const queue: { id: number; via: string[] }[] = from.map((e) => ({ id: e.id, via: [] }));
+    while (queue.length) {
+      const at = queue.shift()!;
+      for (const e of inputsOf(at.id)) {
+        if (seen.has(e.from) || !e.classes.some((k) => media.test(k) && !NOT_MEDIA.test(k))) continue;
+        seen.add(e.from);
+        const it = info.get(e.from) ?? { id: e.from, name: `#${e.from}` };
+        const pick = selectable(e.from);
+        if (pick && !found.has(pick.id)) found.set(pick.id, { id: pick.id, name: pick.name, driver: pick.driver ?? null, via: at.via });
+        queue.push({ id: e.from, via: [it.name, ...at.via] });
+      }
+    }
+    return [...found.values()].sort((a, b) => a.via.length - b.via.length || a.name.localeCompare(b.name));
+  };
+  const watchEnds = ends("VIDEO_SELECTION");
+  // "Video's Audio End-Point" is where a picture's sound plays, not something to listen to.
+  const listenEnds = ends("AUDIO_SELECTION", /video/i);
+  return {
+    watch: walk(watchEnds, VIDEO_CLASS),
+    listen: walk(listenEnds, new RegExp(`${AUDIO_CLASS.source}|${VIDEO_CLASS.source}`)),
+    endpoints: { watch: watchEnds, listen: listenEnds },
+  };
 }

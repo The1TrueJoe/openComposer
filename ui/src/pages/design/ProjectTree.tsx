@@ -7,6 +7,8 @@ import { cx, toggleIn } from "../../lib/ui";
 
 type Row = { node: TreeNode; depth: number; open: boolean; hasKids: boolean };
 
+const controllable = (n: TreeNode) => n.kind === "device" || n.kind === "proxy" || n.kind === "room";
+
 /** Everything down to rooms opens by default; a device's proxies stay folded, because in a
  *  real house they double the length of the tree and are rarely what you're looking for. */
 const openByDefault = (n: TreeNode) => n.kind !== "device" && n.kind !== "proxy";
@@ -17,7 +19,7 @@ export function ProjectTree({ root, sel, onSelect, onMenu, onControl }: {
   sel: number | null;
   onSelect: (id: number) => void;
   onMenu: (e: React.MouseEvent, n: TreeNode) => void;
-  /** Double-click (or Enter) on a device or proxy: its control panel. */
+  /** Double-click (or Enter) on a device, proxy or room: its control panel. */
   onControl: (id: number) => void;
 }) {
   const [filter, setFilter] = useState("");
@@ -79,7 +81,7 @@ export function ProjectTree({ root, sel, onSelect, onMenu, onControl }: {
       e.preventDefault();
       const next = rows[Math.max(0, Math.min(rows.length - 1, i + (e.key === "ArrowDown" ? 1 : -1)))];
       if (next) onSelect(next.node.id);
-    } else if (r && e.key === "Enter" && (r.node.kind === "device" || r.node.kind === "proxy")) {
+    } else if (r && e.key === "Enter" && controllable(r.node)) {
       e.preventDefault();
       onControl(r.node.id);
     } else if (r && (e.key === "ArrowRight" || e.key === "ArrowLeft")) {
@@ -104,7 +106,8 @@ export function ProjectTree({ root, sel, onSelect, onMenu, onControl }: {
                  aria-expanded={r.hasKids ? r.open : undefined}
                  onClick={() => onSelect(r.node.id)} onContextMenu={(e) => { onSelect(r.node.id); onMenu(e, r.node); }}
                  onDoubleClick={() => {
-                   if (r.node.kind === "device" || r.node.kind === "proxy") onControl(r.node.id);
+                   // A room's chevron (or ←/→) folds it; a double-click is its controls, as for a device.
+                   if (controllable(r.node)) onControl(r.node.id);
                    else if (r.hasKids) setFlipped(toggleIn(flipped, r.node.id));
                  }}>
               <span className={cx("tw-tw", r.hasKids && "hit")}

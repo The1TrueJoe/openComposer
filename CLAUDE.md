@@ -99,3 +99,7 @@ OPENCOMPOSER_DATA=/tmp/oc C4_CERT=… C4_KEY=… cargo run -p opencomposer --exa
   announcement audio file list (SMB only), notification variable encoding (`[Device:Var]`).
 - The light colour wheel sends `SET_COLOR_TARGET` with light_v2's `LIGHT_COLOR_TARGET_*`
   params; not yet sent to a real light.
+- The project lives in memory per session (`Session::snapshot`): reads never wait on an Upload
+  once there's a copy. Writes re-read it (`snapshot(true)`). `Session::watch` re-reads every 30 s
+  while the session was used in the last 5 min and emits `project-changed` when it differs,
+  ignoring encrypted values (Director re-encrypts driver passwords on every Upload).

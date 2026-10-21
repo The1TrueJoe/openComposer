@@ -7,14 +7,17 @@
  *
  *  Commands from here are the user's own presses, so they are sent at once — no approval card —
  *  and each one is logged with Director's reply. Read-only Directors can be looked at, not
- *  controlled. Buttons appear only for commands the device declares (or, for a proxy that
- *  declares none, Control4's standard ones for its type — see `standardFor`). */
+ *  controlled. Buttons appear only for what the device takes: commands it or its proxies
+ *  declare, less what its capabilities and TRANSPORTS_* variables rule out, and for a proxy
+ *  that declares none, what the device shows about itself (`commandsOf` in lib/control.ts).
+ *  The remote scales to fit the dialog. A room gets its own panel: what to watch and listen
+ *  to, its volume and room off. */
 
 import * as Dialog from "@radix-ui/react-dialog";
 import {
-  AlertTriangle, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Circle, Dot, FastForward, Gauge, Grid3x3, House, Info, LayoutList,
-  Lightbulb, ListTree, LogIn, Menu, Minus, Palette, Pause, Play, Plus, Power, RefreshCw, Rewind, Search, Send, SkipBack, SkipForward, Square,
-  Sun, SunDim, Thermometer, Tv, Undo2, Volume2, VolumeX, X,
+  AlertTriangle, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Circle, DoorOpen, Dot, FastForward, Gauge, Grid3x3, Headphones, House, Info,
+  LayoutList, Lightbulb, ListTree, LogIn, Menu, Minus, MonitorPlay, Palette, Pause, Play, Plus, Power, RefreshCw, Rewind, Search, Send, SkipBack,
+  SkipForward, Square, Sun, SunDim, Thermometer, Tv, Undo2, Volume2, VolumeX, X,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, errText, type CommandDef, type CommandParam, type ConnectionDef, type ItemDetail, type ParamDef } from "../../api";
@@ -23,9 +26,9 @@ import { Select, Spinner, Switch, Tabs } from "../../components/controls";
 import { DriverIcon } from "../../components/icons";
 import { ReadOnlyLock } from "../../components/shell";
 import {
-  cssRgb, familyOf, fillParams, findCommand, humanize, hsvToRgb, initialValue, isOn, kelvinToXy, lightStateOf, matrixPorts, normName,
-  numberOf, paramProblem, paramType, parseVariables, rgbToXy, routeCommand, routesFrom, standardFor, stateOf, xyToRgb,
-  type Available, type Family, type LiveVar, type Port, type Rgb,
+  capsOf, commandsOf, cssRgb, familyOf, fillParams, findCommand, humanize, hsvToRgb, initialValue, isOn, kelvinToXy, lightStateOf, matrixPorts,
+  normName, numberOf, paramProblem, paramType, parseVariables, rgbToXy, ROOM_COMMANDS, roomCommands, roomSources, routeCommand, routesFrom, stateOf, truthy, xyToRgb,
+  type Available, type Family, type LiveVar, type Port, type ProgrammedCommand, type Rgb, type RoomSource,
 } from "../../lib/control";
 import type { Shell } from "../../lib/shell";
 import { cx, time } from "../../lib/ui";
@@ -51,12 +54,13 @@ interface Sent {
 }
 
 type Send = (a: Available, params?: CommandParam[]) => Promise<void>;
-type Layout = "light" | "remote" | "switch" | "generic";
+type Layout = "light" | "remote" | "switch" | "generic" | "room";
 
 /** Everything a remote needs to draw itself and send. */
 interface Ctl {
   d: ItemDetail;
   items: ItemDetail[];
+  /** What the device takes (nothing its capabilities rule out). */
   available: Available[];
   vars: LiveVar[];
   send: Send;
@@ -67,6 +71,9 @@ interface Ctl {
   /** `<capabilities>` of the device and its proxies, keys lower-cased. */
   caps: Record<string, string>;
 }
+
+/** For a button's tooltip: why it is there when no command list names it. */
+const whyThere = (a: Available | undefined) => (a?.evidence ? ` (from its ${a.evidence})` : "");
 
 export function DeviceControl({ id, shell, onClose }: { id: number | null; shell: Shell; onClose: () => void }) {
   return (
@@ -79,13 +86,6 @@ export function DeviceControl({ id, shell, onClose }: { id: number | null; shell
       </Dialog.Portal>
     </Dialog.Root>
   );
-}
-
-/** Capabilities as declared, read defensively: older backends don't send them at all. */
-function capsOf(x: ItemDetail): Record<string, string> {
-  const own = (x as { capabilities?: Record<string, string> | null }).capabilities;
-  const all = { ...(x.device?.capabilities ?? {}), ...(own ?? {}) };
-  return Object.fromEntries(Object.entries(all).map(([k, v]) => [k.toLowerCase(), String(v)]));
 }
 
 function Panel({ id, shell, onClose }: { id: number; shell: Shell; onClose: () => void }) {
@@ -107,8 +107,11 @@ function Panel({ id, shell, onClose }: { id: number; shell: Shell; onClose: () =
     (async () => {
       try {
         const d = await api.item(id);
-        const proxies = await Promise.all(d.children.filter((c) => c.kind === "proxy").map((c) => api.item(c.id)));
-        if (!gone) setItems([d, ...proxies]);
+        // A room's children are its devices, not parts of it.
+        const proxies = d.kind === "room" ? [] : await Promise.all(d.children.filter((c) => c.kind === "proxy").map((c) => api.item(c.id)));
+        // The device's main proxy first: a receiver's power is the receiver's, not its tuner's.
+        const rank = (x: ItemDetail) => { const i = (d.device?.proxies ?? []).indexOf((x.driver ?? "").replace(/\.c4[iz]$/i, "")); return i < 0 ? 99 : i; };
+        if (!gone) setItems([d, ...proxies.sort((a, b) => rank(a) - rank(b))]);
       } catch (e) {
         if (!gone) setLoadError(errText(e));
       }
@@ -117,7 +120,21 @@ function Panel({ id, shell, onClose }: { id: number; shell: Shell; onClose: () =
   }, [id]);
 
   const d = items?.[0];
+  const isRoom = d?.kind === "room";
   const ids = useMemo(() => items?.map((x) => x.id) ?? [], [items]);
+
+  // What programming already sends the device: proof of commands its proxy doesn't name.
+  const [programmed, setProgrammed] = useState<ProgrammedCommand[]>([]);
+  useEffect(() => {
+    if (!ids.length) return;
+    let gone = false;
+    api.programming().then((r) => {
+      if (gone) return;
+      const lines = r.events.flatMap((e) => e.lines).filter((l) => l.target != null && ids.includes(l.target) && l.command);
+      setProgrammed(lines.map((l) => ({ target: l.target!, command: l.command!, params: l.params ?? [] })));
+    }, () => { /* only a hint; the panel works without it */ });
+    return () => { gone = true; };
+  }, [ids]);
 
   // Live state: every item's variables, re-read every few seconds while the panel is open.
   const prev = useRef(new Map<string, string>());
@@ -157,19 +174,21 @@ function Panel({ id, shell, onClose }: { id: number; shell: Shell; onClose: () =
     return familyOf([...(d.device?.proxies ?? []), ...(items ?? []).slice(1).map((x) => x.driver), d.kind === "proxy" ? d.driver : null]);
   }, [d, items]);
 
-  // Every command, by where it goes. A proxy that declares nothing gets its type's standard
-  // commands, which Director understands for its built-in proxies.
-  const available: Available[] = useMemo(() => (items ?? []).flatMap((x, i) => {
-    const role = i === 0 && x.kind !== "proxy" ? "device" : (x.driver ?? "proxy").replace(/\.c4[iz]$/i, "");
-    const own = (x.commands ?? []).map((def) => ({ target: x.id, targetName: x.name, role, def, standard: false }));
-    if (own.length || (i === 0 && x.kind !== "proxy")) return own;
-    return standardFor(x.driver).map((def) => ({ target: x.id, targetName: x.name, role, def, standard: true }));
-  }), [items]);
+  // Every command, by where it goes, and which the device really takes. The variables that
+  // decide it (TRANSPORTS_*, POWER_STATE) rarely change; the rest of the state doesn't count.
+  const evidenceKey = vars.filter((v) => /^(TRANSPORTS_|POWER_STATE$|LIGHT_STATE$)/i.test(v.name)).map((v) => `${v.owner}:${v.name}=${v.value}`).join("|");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const evidenceVars = useMemo(() => vars, [evidenceKey]);
+  const all: Available[] = useMemo(() => {
+    if (!items) return [];
+    return isRoom ? roomCommands(items[0], programmed) : commandsOf(items, evidenceVars, programmed);
+  }, [items, isRoom, evidenceVars, programmed]);
+  const available = useMemo(() => all.filter((a) => !a.unsupported), [all]);
 
   const connections = useMemo(() => (items ?? []).flatMap((x) => x.connections), [items]);
   const caps = useMemo(() => Object.assign({}, ...(items ?? []).map(capsOf)) as Record<string, string>, [items]);
   const route = useMemo(() => routeCommand(available), [available]);
-  const layout = useMemo(() => layoutOf(family, available, connections, route), [family, available, connections, route]);
+  const layout = useMemo(() => (isRoom ? "room" : layoutOf(family, available, connections, route)), [isRoom, family, available, connections, route]);
 
   // Devices report back a moment later: read soon after a command and once more after that.
   // A held key or a dragged slider sends often, so the reads are pushed back, not piled up.
@@ -207,6 +226,7 @@ function Panel({ id, shell, onClose }: { id: number; shell: Shell; onClose: () =
 
   const ctl: Ctl = { d, items, available, vars, send, disabled: !writable, why, connections, caps };
   const LAYOUT_TAB: Record<Layout, [string, React.ReactNode]> = {
+    room: ["Room", <DoorOpen key="i" size={13} strokeWidth={1.8} />],
     light: ["Light", <Lightbulb key="i" size={13} strokeWidth={1.8} />],
     remote: ["Remote", <Tv key="i" size={13} strokeWidth={1.8} />],
     switch: ["Matrix", <Grid3x3 key="i" size={13} strokeWidth={1.8} />],
@@ -240,17 +260,19 @@ function Panel({ id, shell, onClose }: { id: number; shell: Shell; onClose: () =
 
       <Tabs className="detail-tabs control-tabs" value={tab} onChange={setTab} tabs={[
         { id: "remote", label: <>{LAYOUT_TAB[layout][1]}{LAYOUT_TAB[layout][0]}</> },
-        { id: "commands", label: <><ListTree size={13} strokeWidth={1.8} />All commands<span className="rc-count">{available.length}</span></> },
+        { id: "commands", label: <><ListTree size={13} strokeWidth={1.8} />All commands<span className="rc-count">{all.length}</span></> },
       ]} />
 
-      <div className="control-body">
+      <div className={cx("control-body", tab === "remote" && "stage")}>
         {tab === "remote" ? (
-          <div className={cx("rc-stage", layout === "switch" && "wide")}>
+          <div className={cx("rc-stage", layout === "switch" && "wide", (layout === "remote" || layout === "light" || layout === "room") && "fit")}>
             <div className="rc-main">
-              {layout === "light" && <LightRemote ctl={ctl} />}
-              {layout === "remote" && <Remote ctl={ctl} family={family} />}
+              {!isRoom && !available.length && <Unlisted d={d} onAll={() => setTab("commands")} />}
+              {layout === "light" && <Fit>{() => <LightRemote ctl={ctl} />}</Fit>}
+              {layout === "remote" && <RemoteFit ctl={ctl} family={family} />}
+              {layout === "room" && <Fit>{() => <RoomRemote ctl={ctl} />}</Fit>}
               {layout === "switch" && route && <Matrix ctl={ctl} route={route} />}
-              {layout === "generic" && (
+              {layout === "generic" && !!available.length && (
                 <section className="control-card rc-panel">
                   <div className="control-card-head"><Gauge size={13} strokeWidth={1.8} />Controls</div>
                   <Quick family={family} available={available} vars={vars} send={send} disabled={!writable} why={why} d={d} />
@@ -259,7 +281,7 @@ function Panel({ id, shell, onClose }: { id: number; shell: Shell; onClose: () =
               {(layout === "generic" || layout === "switch") && <Extras ctl={ctl} layout={layout} />}
             </div>
             <aside className="rc-side">
-              {(layout === "remote" || layout === "light") && <Extras ctl={ctl} layout={layout} />}
+              {(layout === "remote" || layout === "light" || layout === "room") && <Extras ctl={ctl} layout={layout} />}
               <section className="control-card">
                 <div className="control-card-head">
                   <span>Live state</span>
@@ -279,15 +301,17 @@ function Panel({ id, shell, onClose }: { id: number; shell: Shell; onClose: () =
                 )}
               </section>
               {sentLog}
-              {available.some((a) => a.standard) && (
-                <p className="dim small flush-p rc-note">Some buttons use Control4's standard commands for this proxy type; the proxy didn't list its own.</p>
+              {available.some((a) => a.evidence) && (
+                <p className="dim small flush-p rc-note">
+                  {isRoom ? "Room commands are Director's own; the room driver lists none." : "Some buttons come from what the device reports about itself (its capabilities, TRANSPORTS_* variables or programming), not from a command list. Hover a button to see why it's there."}
+                </p>
               )}
             </aside>
           </div>
         ) : (
           <>
             {sentLog}
-            <Commands available={available} name={d.name} send={send} disabled={!writable} why={why} />
+            <Commands available={all} name={d.name} send={send} disabled={!writable} why={why} />
           </>
         )}
       </div>
@@ -316,6 +340,169 @@ function SentLog({ log, clear }: { log: Sent[]; clear: () => void }) {
         </div>
       ))}
     </section>
+  );
+}
+
+/** Why a remote has no keys: which proxy lists nothing and shows nothing to go by. */
+function silentNote(ctl: Ctl) {
+  const silent = ctl.items.slice(1).filter((x) => !ctl.available.some((a) => a.target === x.id));
+  const who = silent.length
+    ? silent.map((x) => `${x.name}'s ${(x.driver ?? "proxy").replace(/\.c4[iz]$/i, "")} proxy`).join(" and ")
+    : "This driver";
+  return `${who} doesn't list its commands or report what it can do, so there are no remote keys rather than keys it may not answer. What the driver itself declares is beside this and under All commands.`;
+}
+
+/** For a device whose driver names nothing it takes and shows nothing about itself. */
+function Unlisted({ d, onAll }: { d: ItemDetail; onAll: () => void }) {
+  return (
+    <section className="control-card rc-unlisted">
+      <div className="control-card-head"><Info size={13} strokeWidth={1.8} />No remote for this driver</div>
+      <p className="small flush-p">
+        {d.name}'s driver doesn't list its commands, and its proxy reports no capabilities, transports or power state to go by — so there are
+        no buttons to show rather than buttons it may not answer. Whatever its driver declares itself is under All commands.
+      </p>
+      <div><button className="act small" onClick={onAll}><ListTree size={13} strokeWidth={1.8} />All commands</button></div>
+    </section>
+  );
+}
+
+// ---- fitting the remote to the dialog -----------------------------------------------------------
+
+/** Smallest scale before the remote would be too small to read; past it the stage scrolls. */
+const MIN_SCALE = 0.42;
+
+/** Shows its child whole in the space it is given: measured at its natural size, then scaled
+ *  down (never up) with a transform, the box sized to the result. With `canWiden`, a child too
+ *  tall for the space is asked for its two-column layout when that would be shown larger. */
+function Fit({ canWiden = false, children }: { canWiden?: boolean; children: (two: boolean) => React.ReactNode }) {
+  const outer = useRef<HTMLDivElement>(null);
+  const inner = useRef<HTMLDivElement>(null);
+  const [fit, setFit] = useState<{ s: number; w: number; h: number; two: boolean }>({ s: 1, w: 0, h: 0, two: false });
+  // Natural sizes of both layouts once seen, so the choice between them doesn't flip back and forth.
+  const sizes = useRef<{ one?: { w: number; h: number }; two?: { w: number; h: number } }>({});
+  useLayoutEffect(() => {
+    const o = outer.current, i = inner.current;
+    if (!o || !i) return;
+    const measure = () => {
+      const w = i.offsetWidth, h = i.offsetHeight;
+      const aw = o.clientWidth, ah = o.clientHeight;
+      if (!w || !h || aw <= 0 || ah <= 0) return;
+      const scale = (x: { w: number; h: number }) => Math.min(1, aw / x.w, ah / x.h);
+      setFit((f) => {
+        sizes.current[f.two ? "two" : "one"] = { w, h };
+        let two = f.two;
+        if (canWiden) {
+          const one = sizes.current.one, wide = sizes.current.two ?? (one && { w: one.w * 2 + 28, h: one.h * 0.56 });
+          if (one && wide) {
+            const s1 = scale(one), s2 = scale(wide);
+            two = f.two ? s2 > s1 + 0.02 : s1 < 0.85 && s2 > s1 + 0.08;
+          }
+        } else two = false;
+        // Switching layouts re-measures on the next pass.
+        if (two !== f.two) return { ...f, two };
+        const s = Math.max(MIN_SCALE, scale({ w, h }));
+        return Math.abs(f.s - s) < 0.004 && f.w === w && f.h === h ? f : { s, w, h, two };
+      });
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(o);
+    ro.observe(i);
+    return () => ro.disconnect();
+  }, [canWiden]);
+  return (
+    <div ref={outer} className="rc-fit">
+      <div className="rc-fit-box" style={fit.w ? { width: Math.ceil(fit.w * fit.s), height: Math.ceil(fit.h * fit.s) } : undefined}>
+        <div ref={inner} className="rc-fit-inner" style={fit.s < 1 ? { transform: `scale(${fit.s})` } : undefined}>{children(fit.two)}</div>
+      </div>
+    </div>
+  );
+}
+
+// ---- rooms ------------------------------------------------------------------------------------
+
+/** A room as a remote: what's on, room off, what to watch and listen to (worked out from the
+ *  room's end-points and the AV wiring), and the room's volume. */
+function RoomRemote({ ctl }: { ctl: Ctl }) {
+  const room = ctl.d;
+  const [sources, setSources] = useState<ReturnType<typeof roomSources> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let gone = false;
+    Promise.all([api.connections(), api.tree().catch(() => null)])
+      .then(([r, t]) => { if (!gone) setSources(roomSources(room, r.connections, t?.tree)); }, (e) => { if (!gone) setError(errText(e)); });
+    return () => { gone = true; };
+  }, [room]);
+  const f = (...n: string[]) => findCommand(ctl.available, ...n);
+  const v = (n: string) => stateOf(ctl.vars.filter((x) => x.owner === room.id), n);
+  const video = numberOf(v("CURRENT_VIDEO_DEVICE")) ?? 0, audio = numberOf(v("CURRENT_AUDIO_DEVICE")) ?? 0;
+  const [picked, hold] = useHeld<{ kind: "watch" | "listen"; id: number } | null>(null);
+  const on = picked ? true : v("POWER_STATE") == null ? null : isOn(v("POWER_STATE"));
+  const watching = picked?.kind === "watch" ? picked.id : picked ? 0 : video;
+  const listening = picked?.kind === "listen" ? picked.id : picked ? 0 : (video ? 0 : audio);
+  const all = [...(sources?.watch ?? []), ...(sources?.listen ?? [])];
+  const nameOf = (id: number) => all.find((x) => x.id === id)?.name ?? `#${id}`;
+  const volume = numberOf(v("CURRENT_VOLUME"));
+  const muted = isOn(v("IS_MUTED"));
+  const discreteVolume = truthy(v("HAS_DISCRETE_VOLUME"));
+  const discreteMute = truthy(v("HAS_DISCRETE_MUTE"));
+  const mute = discreteMute ? (muted ? f("MUTE_OFF") : f("MUTE_ON")) ?? f("MUTE_TOGGLE") : f("MUTE_TOGGLE") ?? (muted ? f("MUTE_OFF") : f("MUTE_ON"));
+  const off = f("ROOM_OFF");
+
+  const pick = (kind: "watch" | "listen", s: RoomSource) => {
+    const a = f(kind === "watch" ? "SELECT_VIDEO_DEVICE" : "SELECT_AUDIO_DEVICE");
+    if (!a) return;
+    hold({ kind, id: s.id });
+    void ctl.send(a, fillParams(a.def, [[/device/i, () => String(s.id)]], [{ name: "deviceid", type: "INTEGER", value: String(s.id) }]));
+  };
+  const grid = (kind: "watch" | "listen", list: RoomSource[], current: number) => (
+    <div className="rc-block">
+      <div className="rc-cap">{kind === "watch" ? <MonitorPlay size={12} strokeWidth={2} /> : <Headphones size={12} strokeWidth={2} />}{kind === "watch" ? "Watch" : "Listen"}
+        {sources && <span className="dim"> · {list.length}</span>}</div>
+      {!sources ? <span className="dim small">{error ? "" : "Working out the room's sources…"}</span>
+        : !list.length ? <span className="dim small">{kind === "watch"
+          ? (sources.endpoints.watch.length ? `Nothing feeds ${sources.endpoints.watch.map((e) => e.name).join(", ")} through the AV connections.` : "No video end-point: connect the room's Video End-Point to a display in Connections.")
+          : (sources.endpoints.listen.length ? `Nothing feeds ${sources.endpoints.listen.map((e) => e.name).join(", ")} through the AV connections.` : "No audio end-point: connect the room's Audio End-Point in Connections.")}</span>
+        : (
+          <div className="rc-sources">
+            {list.map((x) => (
+              <button key={x.id} type="button" className={cx("rc-chip rc-source", current === x.id && "on")} disabled={ctl.disabled} aria-pressed={current === x.id}
+                      title={ctl.why ?? `${kind === "watch" ? "SELECT_VIDEO_DEVICE" : "SELECT_AUDIO_DEVICE"} ${x.id}${x.via.length ? ` — through ${x.via.join(" › ")}` : ""}`}
+                      onClick={() => pick(kind, x)}>
+                <span className="rc-source-name"><DriverIcon driver={x.driver} kind="proxy" proxy={x.driver?.replace(/\.c4[iz]$/i, "")} size={14} />{x.name}</span>
+                {x.via.length > 0 && <small>via {x.via[0]}</small>}
+              </button>
+            ))}
+          </div>
+        )}
+    </div>
+  );
+
+  return (
+    <div className="rc-room" aria-label={`${room.name} controls`}>
+      <div className="rc-room-head">
+        <div className="rc-room-title">
+          <b>{room.name}</b>
+          <span className="dim small">{on == null ? "State not reported" : !on ? "Off" : watching ? `Watching ${nameOf(watching)}` : listening ? `Listening to ${nameOf(listening)}` : "On"}</span>
+        </div>
+        <span className="grow" />
+        <Key ctl={ctl} a={off} label="Room off" className="rc-pill power" on={on === false}><Power size={14} strokeWidth={2.2} />Room off</Key>
+      </div>
+      {error && <p className="err small flush-p">Couldn't read the room's connections: {error}</p>}
+      {grid("watch", sources?.watch ?? [], watching)}
+      {grid("listen", sources?.listen ?? [], listening)}
+      <div className="rc-block">
+        <div className="rc-cap"><Volume2 size={12} strokeWidth={2} />Volume{volume != null && volume >= 0 && <span className="dim"> · {volume}</span>}</div>
+        <div className="rc-room-vol">
+          <Key ctl={ctl} a={f("PULSE_VOL_DOWN")} label="Volume down" className="rc-round" repeat><Minus size={17} strokeWidth={2} /></Key>
+          {discreteVolume && f("SET_VOLUME_LEVEL")
+            ? <LevelSlider ctl={ctl} a={f("SET_VOLUME_LEVEL")!} value={volume != null && volume >= 0 ? volume : null} label="Room volume" />
+            : <span className="dim small rc-room-steps">{on ? "The playing device has volume steps only" : "Volume follows what's playing"}</span>}
+          <Key ctl={ctl} a={f("PULSE_VOL_UP")} label="Volume up" className="rc-round" repeat><Plus size={17} strokeWidth={2} /></Key>
+          <Key ctl={ctl} a={mute} label={muted ? "Unmute" : "Mute"} className="rc-round" on={muted}>{muted ? <VolumeX size={17} strokeWidth={2} /> : <Volume2 size={17} strokeWidth={2} />}</Key>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -464,7 +651,7 @@ function Key({ ctl, a, label, className, on, repeat, hold, params, caption, chil
   const names = [a?.def.name, canHold ? `${hold!.start!.def.name} (hold)` : null].filter(Boolean).join(" · ");
   return (
     <button type="button" className={cx("rc-key", className, on && "on", down && "pressed")} aria-label={label} aria-pressed={on}
-            title={ctl.why ?? `${label} — ${names}${a?.standard ? " (standard command)" : ""}`} disabled={ctl.disabled} data-caption={caption}
+            title={ctl.why ?? `${label} — ${names}${whyThere(a)}`} disabled={ctl.disabled} data-caption={caption}
             onPointerDown={(e) => { if (e.button !== 0) return; e.currentTarget.setPointerCapture(e.pointerId); press(); }}
             onPointerUp={release} onPointerCancel={release} onLostPointerCapture={release}
             onKeyDown={(e) => { if ((e.key === "Enter" || e.key === " ") && !e.repeat) { e.preventDefault(); press(); } }}
@@ -533,13 +720,27 @@ function InputKeys({ ctl }: { ctl: Ctl }) {
 
 const LETTERS = ["", "", "ABC", "DEF", "GHI", "JKL", "MNO", "PQRS", "TUV", "WXYZ"];
 
-function Remote({ ctl, family }: { ctl: Ctl; family: Family }) {
+/** Whether the remote has keys for a second column: playback, function keys, colours, digits. */
+function hasSecondColumn(ctl: Ctl) {
+  const f = (k: string) => findCommand(ctl.available, ...K[k]);
+  return ["skipRev", "scanRev", "play", "playPause", "pause", "stop", "scanFwd", "skipFwd", "record", "pageUp", "pageDown", "dvr", "live", "list",
+    "favorites", "tvVideo", "cc", "settings", "eject", "red", "green", "yellow", "blue", "n1", "n0"].some((k) => f(k));
+}
+
+/** The remote, scaled to fit; a tall remote in a short, wide window goes to two columns rather
+ *  than shrinking past legibility. */
+function RemoteFit({ ctl, family }: { ctl: Ctl; family: Family }) {
+  return <Fit canWiden={hasSecondColumn(ctl)}>{(two) => <Remote ctl={ctl} family={family} two={two} />}</Fit>;
+}
+
+function Remote({ ctl, family, two }: { ctl: Ctl; family: Family; two?: boolean }) {
   const f = (k: string) => findCommand(ctl.available, ...K[k]);
   const vars = ctl.vars;
   const powerState = stateOf(vars, "POWER_STATE", "POWER");
   const powered = powerState == null ? null : isOn(powerState);
-  const muted = isOn(stateOf(vars, "MUTE_STATE", "MUTE"));
-  const volLevel = numberOf(stateOf(vars, "VOLUME_LEVEL", "VOLUME", "CURRENT_VOLUME"));
+  // Control4's tv proxy reports CURRENT_VOLUME_LEVEL and CURRENT_MUTE; drivers their own names.
+  const muted = isOn(stateOf(vars, "MUTE_STATE", "MUTE", "CURRENT_MUTE"));
+  const volLevel = numberOf(stateOf(vars, "VOLUME_LEVEL", "CURRENT_VOLUME_LEVEL", "VOLUME", "CURRENT_VOLUME"));
   const channel = stateOf(vars, "CURRENT_CHANNEL", "CHANNEL");
   const playState = stateOf(vars, "PLAY_STATE", "TRANSPORT_STATE");
   const has = (...ks: string[]) => ks.some((k) => f(k));
@@ -670,16 +871,37 @@ function Remote({ ctl, family }: { ctl: Ctl; family: Family }) {
 
   // A receiver is mostly volume and inputs; a player mostly navigation and playback (a cable
   // box is a player with channels, so it's laid out like a TV).
-  const sections = family === "av"
-    ? [top, <InputKeys key="inputs" ctl={ctl} />, rockers, volSlider, nav, menuRow, transport, fns, colors, numpad]
-    : family === "media" && !chRocker
-      ? [top, <InputKeys key="inputs" ctl={ctl} />, nav, menuRow, transport, rockers, volSlider, fns, colors, numpad]
-      : [top, <InputKeys key="inputs" ctl={ctl} />, nav, menuRow, rockers, volSlider, transport, fns, colors, numpad];
+  const inputs = <InputKeys key="inputs" ctl={ctl} />;
+  // Each section with its rough height (px), for splitting into two even columns.
+  const order: [React.ReactNode, number][] = [[top, 42], [inputs, f("input") ? 80 : 0], [nav, 240], [menuRow, 40], [rockers, 160], [volSlider, 56],
+    [transport, 100], [fns, 76], [colors, 16], [numpad, 200]];
+  const placed = family === "av" ? [0, 1, 4, 5, 2, 3, 6, 7, 8, 9] : family === "media" && !chRocker ? [0, 1, 2, 3, 6, 4, 5, 7, 8, 9] : [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+  const parts = placed.map((i) => order[i]).filter(([x, h]) => x && h);
+  const sections = parts.map(([x]) => x);
+  const brand = <div className="rc-brand" key="brand">{ctl.d.device?.manufacturer || ctl.d.name}</div>;
+  const empty = !sections.some((x, i) => x && (i > 0 || f("on") || f("off") || f("toggle") || f("inputCycle") || f("home")));
 
+  if (two) {
+    // Split in reading order where the two columns come out closest in height.
+    const total = parts.reduce((n, [, h]) => n + h, 0);
+    let at = 0, best = Infinity, run = 0;
+    parts.forEach(([, h], i) => {
+      run += h;
+      const tall = Math.max(run, total - run);
+      if (tall < best) { best = tall; at = i + 1; }
+    });
+    return (
+      <div className="rc-body two" aria-label={`${ctl.d.name} remote`}>
+        <div className="rc-col">{sections.slice(0, at)}</div>
+        <div className="rc-col">{sections.slice(at)}{brand}</div>
+      </div>
+    );
+  }
   return (
     <div className="rc-body" aria-label={`${ctl.d.name} remote`}>
       {sections.filter(Boolean)}
-      <div className="rc-brand">{ctl.d.device?.manufacturer || ctl.d.name}</div>
+      {empty && <p className="dim small rc-none">{silentNote(ctl)}</p>}
+      {brand}
     </div>
   );
 }
@@ -706,7 +928,7 @@ function LevelSlider({ ctl, a, value, label, unit = "", fill, icons }: {
     <div className="rc-level">
       {icons?.[0]}
       <input type="range" className="rc-slider" min={lo} max={hi} value={shown} disabled={ctl.disabled} aria-label={label}
-             title={ctl.why ?? `${a.def.name}${a.standard ? " (standard command)" : ""}`}
+             title={ctl.why ?? `${a.def.name}${whyThere(a)}`}
              style={{ "--p": pct / 100, ...(fill ? { "--rc-fill": fill } : {}) } as React.CSSProperties}
              onChange={(e) => { const n = Number(e.target.value); setDrag(n); out.push(n); }}
              onPointerUp={(e) => end(Number((e.target as HTMLInputElement).value))}
@@ -719,7 +941,6 @@ function LevelSlider({ ctl, a, value, label, unit = "", fill, icons }: {
 
 // ---- lights ------------------------------------------------------------------------------------
 
-const truthy = (v: string | undefined) => v != null && /^(true|1|yes)$/i.test(v.trim());
 
 /** light_v2's colour command, for a light whose proxy declares none: what the proxy takes. */
 const COLOR_TARGET: CommandDef = {
@@ -752,7 +973,8 @@ function LightRemote({ ctl }: { ctl: Ctl }) {
   const kMax = numberOf(caps.color_correlated_temperature_max ?? null) ?? 6500;
   const light = ctl.items.find((x) => /^light/i.test(x.driver ?? "")) ?? ctl.d;
   const colorCmd: Available | undefined = declaredColor ?? ((color || cct) ? {
-    target: light.id, targetName: light.name, role: (light.driver ?? "light_v2").replace(/\.c4[iz]$/i, ""), def: COLOR_TARGET, standard: true,
+    target: light.id, targetName: light.name, role: (light.driver ?? "light_v2").replace(/\.c4[iz]$/i, ""), def: COLOR_TARGET,
+    evidence: `capability ${color ? "supports_color" : "supports_color_correlated_temperature"}`,
   } : undefined);
 
   const [hs, holdHs] = useHeld(st.hs);
@@ -816,7 +1038,7 @@ function LightRemote({ ctl }: { ctl: Ctl }) {
       <div className="rc-light-head">
         <button type="button" className={cx("rc-bulb", powered && "on")} aria-label={powered ? "Turn off" : "Turn on"} aria-pressed={powered === true}
                 disabled={ctl.disabled || !powerKey} onClick={pressPower}
-                title={ctl.why ?? `${powerKey?.def.name ?? "No power command"}${powerKey?.standard ? " (standard command)" : ""}`}>
+                title={ctl.why ?? `${powerKey?.def.name ?? "No power command"}${whyThere(powerKey)}`}>
           <Power size={26} strokeWidth={2.2} />
         </button>
         <div className="rc-light-title">
@@ -1063,11 +1285,12 @@ function Matrix({ ctl, route }: { ctl: Ctl; route: NonNullable<ReturnType<typeof
 /** The driver's other buttons (commands that take nothing) and choices (one list parameter),
  *  so the remote has every key without opening All commands. */
 function Extras({ ctl, layout }: { ctl: Ctl; layout: Layout }) {
-  const placed = layout === "light" ? LIGHT_PLACED : layout === "generic" ? QUICK_PLACED : layout === "switch" ? new Set([...K.on, ...K.off, ...K.toggle]) : REMOTE_PLACED;
+  const placed = layout === "light" ? LIGHT_PLACED : layout === "generic" ? QUICK_PLACED : layout === "switch" ? new Set([...K.on, ...K.off, ...K.toggle])
+    : layout === "room" ? new Set(ROOM_COMMANDS.map((x) => x.name)) : REMOTE_PLACED;
   const seen = new Set<string>();
   const mine = ctl.available.filter((a) => {
     const n = normName(a.def.name);
-    if (a.standard || placed.has(n) || seen.has(`${a.target}:${n}`)) return false;
+    if (placed.has(n) || seen.has(`${a.target}:${n}`)) return false;
     seen.add(`${a.target}:${n}`);
     return true;
   });
@@ -1188,7 +1411,7 @@ function QRow({ label, icon, children }: { label: string; icon?: React.ReactNode
 function QBtn({ a, send, disabled, why, on, children }: { a: Available; send: Send; disabled: boolean; why?: string; on?: boolean; children: React.ReactNode }) {
   const [busy, setBusy] = useState(false);
   return (
-    <Tip text={why ?? `${a.def.name} → ${a.targetName}${a.standard ? " (standard command)" : ""}`}>
+    <Tip text={why ?? `${a.def.name} → ${a.targetName}${whyThere(a)}`}>
       <span><button className={cx("act small", on && "on")} disabled={disabled || busy}
                     onClick={async () => { setBusy(true); await send(a); setBusy(false); }}>{busy && <Spinner />}{children}</button></span>
     </Tip>
@@ -1318,10 +1541,11 @@ function CommandRow({ a, name, send, disabled, why }: { a: Available; name: stri
   };
   const described = describe(a.def, name);
   return (
-    <div className="cmd" onKeyDown={(e) => { if (e.key === "Enter" && (e.target as HTMLElement).tagName === "INPUT") { e.preventDefault(); void go(); } }}>
+    <div className={cx("cmd", a.unsupported && "unsupported")} onKeyDown={(e) => { if (e.key === "Enter" && (e.target as HTMLElement).tagName === "INPUT") { e.preventDefault(); void go(); } }}>
       <div className="cmd-name">
         <span className="mono">{a.def.name}</span>
-        {a.standard && <Tip text="Control4's standard command for this proxy type"><span className="tag">standard</span></Tip>}
+        {a.evidence && <Tip text={`Not in a command list; offered because of its ${a.evidence}`}><span className="tag">{a.evidence.split(" ")[0]}</span></Tip>}
+        {a.unsupported && <Tip text={`Declared, but ${a.unsupported}: the remote leaves it out`}><span className="tag warn">not supported</span></Tip>}
         {described && <span className="dim small cmd-desc" title={described}>{described}</span>}
       </div>
       <div className="cmd-params">

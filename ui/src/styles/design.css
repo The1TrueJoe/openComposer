@@ -287,6 +287,8 @@
 .cmd-owner { display: flex; align-items: center; gap: 7px; font-size: 12px; font-weight: 600; padding: 6px 2px 0; }
 .cmd { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
 .cmd:hover { border-color: color-mix(in srgb, var(--dim) 60%, var(--line)); }
+.cmd.unsupported { background: var(--tint); }
+.cmd.unsupported .cmd-name .mono { color: var(--dim); }
 .cmd-name { flex: 1 1 200px; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 1px 8px; }
 .cmd-name .mono { font-weight: 600; }
 .cmd-desc { flex-basis: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

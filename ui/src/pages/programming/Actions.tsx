@@ -167,7 +167,8 @@ function Commands({ target, node, rev, canAdd, why, onAdd, drag }: {
                   {canAdd && <GripVertical size={12} strokeWidth={1.8} className="pc-grip" />}
                   <span className="pc-main">
                     <span className="pc-name"><span className="mono">{a.def.name}</span>
-                      {a.standard && <Tip text="Control4's standard command for this proxy type"><span className="tag">standard</span></Tip>}
+                      {a.evidence && <Tip text={`Not in a command list; offered because of its ${a.evidence}`}><span className="tag">{a.evidence.split(" ")[0]}</span></Tip>}
+                      {a.unsupported && <Tip text={`Declared, but ${a.unsupported}`}><span className="tag warn">not supported</span></Tip>}
                     </span>
                     {described && <span className="pc-desc" title={described}>{described}</span>}
                   </span>

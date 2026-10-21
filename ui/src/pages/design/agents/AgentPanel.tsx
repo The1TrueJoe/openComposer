@@ -26,7 +26,7 @@ export function AgentPanel({ v, shell, onSelect, reload }: {
     case "push_notification": return <PushView {...p} data={v.data} />;
     case "email_notification": return <EmailView agent={v.agent} shell={shell} reload={reload} data={v.data} />;
     case "screen_saver": return (
-      <div className="ag">
+      <div className="ag ag-scroll">
         <dl className="ag-dl ag-card">
           <dt>Photos from</dt><dd>{v.data.device ? <Ref r={v.data.device} onSelect={onSelect} /> : <span className="dim">no storage device</span>}</dd>
           <dt>Folder</dt><dd className="mono">{v.data.picture_path || <span className="dim">none</span>}</dd>

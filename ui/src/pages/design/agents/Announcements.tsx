@@ -1,16 +1,18 @@
 /** The Announcements agent's own tab, in place of Composer's Announcements editor: what each
- *  announcement plays and shows, and where. Added, changed and removed as approvals
+ *  announcement plays and shows, and where — a table, the picked one under it. Added, changed and removed as approvals
  *  (add/modify/remove_announcement). Camera logins in image URLs stay masked here and are
  *  kept by the backend when the masked URL comes back unchanged. */
 
-import { Image, Megaphone, Monitor, Music, Pencil, Plus, Trash2, Volume2 } from "lucide-react";
-import { useState } from "react";
+import { createColumnHelper } from "@tanstack/react-table";
+import { Image, Megaphone, Monitor, Music, Plus, Volume2 } from "lucide-react";
+import { useMemo, useState } from "react";
 import type { AnnouncementSpec, AnnouncementView, AnnouncementsData, AnnouncementVolume, NamedRef } from "../../../api";
+import { DataTable } from "../../../components/DataTable";
 import { Tip, useDialog } from "../../../components/Dialogs";
 import { Select, Switch } from "../../../components/controls";
 import type { Shell } from "../../../lib/shell";
 import { plural } from "../../../lib/ui";
-import { EditorCard, MultiPick, Ref, RemoveChip, VolumeInput, refLabel, useWrites } from "./common";
+import { AgentSplit, DetailPane, EditIcon, EditorCard, IconAct, MultiPick, ProgramLink, Ref, RemoveChip, RemoveIcon, VolumeInput, refLabel, useWrites } from "./common";
 
 const MASK = "••••";
 
@@ -20,12 +22,18 @@ const BLANK = (): AnnouncementSpec => ({
 
 const secondsLabel = (s: number) => (s >= 60 ? `${s / 60} minute${s === 60 ? "" : "s"}` : `${s} seconds`);
 
+const col = createColumnHelper<AnnouncementView>();
+/** An announcement's events: when it executes (its id) and when it completes. */
+const COMPLETES = 50000;
+
 export function AnnouncementsView({ agent, data, shell, onSelect, reload }: {
   agent: { id: number; name: string }; data: AnnouncementsData; shell: Shell; onSelect: (id: number) => void; reload: () => void;
 }) {
   const dialog = useDialog();
   const w = useWrites(shell, reload);
+  const [picked, setPicked] = useState<number | null>(null);
   const [editing, setEditing] = useState<AnnouncementView | "new" | null>(null);
+  const sel = data.announcements.find((a) => a.id === picked) ?? null;
 
   const remove = async (a: AnnouncementView) => {
     const ok = await dialog.confirm({
@@ -36,56 +44,72 @@ export function AnnouncementsView({ agent, data, shell, onSelect, reload }: {
     if (ok) await w.propose([{ op: "remove_announcement", agent: agent.id, id: a.id }], `Remove the announcement “${a.name}”.`);
   };
 
+  const columns = useMemo(() => [
+    col.accessor("name", { header: "Announcement", cell: (c) => <span className="ellip">{c.getValue()}</span> }),
+    col.accessor((a) => a.audio ?? "", {
+      id: "sound", header: "Sound", meta: { width: "24%", hideBelow: 480 },
+      cell: (c) => (c.getValue() ? <span className="ellip mono">{c.getValue()}</span> : <span className="dim">—</span>),
+    }),
+    col.accessor((a) => a.text || (a.image ? "(image)" : ""), {
+      id: "shows", header: "Shows", meta: { width: "28%", hideBelow: 400 },
+      cell: (c) => (c.getValue() ? <span className="ellip">{c.getValue()}</span> : <span className="dim">—</span>),
+    }),
+    col.accessor((a) => a.rooms.length + a.screens.length, {
+      id: "where", header: "Where", meta: { width: 92, hideBelow: 340 },
+      cell: (c) => { const a = c.row.original; return <span className="dim">{[a.rooms.length && plural(a.rooms.length, "room"), a.screens.length && plural(a.screens.length, "screen")].filter(Boolean).join(", ") || "—"}</span>; },
+    }),
+    col.accessor("programmed", { header: "Lines", meta: { width: 58, align: "right" }, cell: (c) => c.getValue() || <span className="dim">—</span> }),
+  ], []);
+
+  const detail = editing ? (
+    <AnnouncementEditor key={editing === "new" ? "new" : editing.id} a={editing === "new" ? null : editing} data={data} busy={w.busy}
+      onCancel={() => setEditing(null)}
+      onSave={async (spec) => {
+        const ok = editing === "new"
+          ? await w.propose([{ op: "add_announcement", agent: agent.id, announcement: spec }], `Add the announcement “${spec.name}”.`)
+          : await w.propose([{ op: "modify_announcement", agent: agent.id, id: editing.id, announcement: spec }], `Change the announcement “${editing.name}”.`);
+        if (ok) setEditing(null);
+      }} />
+  ) : sel && (
+    <DetailPane icon={<Megaphone size={14} strokeWidth={1.8} />} title={sel.name}
+      tags={<>
+        <span className="dim mono small">#{sel.id}</span>
+        {!!sel.programmed && <span className="tag accent">{plural(sel.programmed, "programming line")}</span>}
+      </>}
+      actions={<>
+        <ProgramLink lines={0} label="Executes" onClick={() => shell.program({ device: agent.id, event: sel.id })} />
+        <ProgramLink lines={0} label="Completes" onClick={() => shell.program({ device: agent.id, event: sel.id + COMPLETES })} />
+        <IconAct label="Edit" why={w.why} disabled={w.busy} onClick={() => setEditing(sel)}><EditIcon /></IconAct>
+        <IconAct label="Remove" why={w.why} disabled={w.busy} danger onClick={() => remove(sel)}><RemoveIcon /></IconAct>
+      </>}>
+      <dl className="ag-dl">
+        <dt><Music size={12} strokeWidth={1.8} />Sound</dt><dd className="mono">{sel.audio ?? <span className="dim">none</span>}</dd>
+        {sel.text && <><dt><Monitor size={12} strokeWidth={1.8} />Text</dt><dd>“{sel.text}”</dd></>}
+        {sel.image && <><dt><Image size={12} strokeWidth={1.8} />Image</dt><dd className="mono ag-url">{sel.image}</dd></>}
+        {(sel.text || sel.image) && <><dt>On screen</dt><dd>{secondsLabel(sel.display_seconds)}{sel.ok_button ? ", with an OK button" : ""}</dd></>}
+        <dt><Volume2 size={12} strokeWidth={1.8} />Plays in</dt>
+        <dd className="ag-refs">{sel.rooms.length ? sel.rooms.map((r) => <span key={r.room.id}><Ref r={r.room} onSelect={onSelect} />{r.volume != null && <span className="dim small"> {r.volume}%</span>}</span>) : <span className="dim">no rooms</span>}</dd>
+        {!!sel.screens.length && <><dt><Monitor size={12} strokeWidth={1.8} />Shows on</dt>
+          <dd className="ag-refs">{sel.screens.map((x) => <Ref key={x.device.id} r={x.device} onSelect={onSelect} />)}</dd></>}
+        {!!sel.touchscreen_audio.length && <><dt><Volume2 size={12} strokeWidth={1.8} />Screen sound</dt>
+          <dd className="ag-refs">{sel.touchscreen_audio.map((t) => <span key={t.device.id}><Ref r={t.device} onSelect={onSelect} />{t.volume != null && <span className="dim small"> {t.volume}%</span>}</span>)}</dd></>}
+      </dl>
+    </DetailPane>
+  );
+
   return (
-    <div className="ag">
-      <div className="ag-bar">
-        <span className="dim small">{plural(data.announcements.length, "announcement")}</span>
-        <span className="spread" />
-        <Tip text={w.why ?? "Add an announcement"}>
-          <span><button className="act small primary" disabled={!w.can} onClick={() => setEditing("new")}><Plus size={13} strokeWidth={2} />Add announcement</button></span>
-        </Tip>
-      </div>
-      {editing && (
-        <AnnouncementEditor key={editing === "new" ? "new" : editing.id} a={editing === "new" ? null : editing} data={data} busy={w.busy}
-          onCancel={() => setEditing(null)}
-          onSave={async (spec) => {
-            const ok = editing === "new"
-              ? await w.propose([{ op: "add_announcement", agent: agent.id, announcement: spec }], `Add the announcement “${spec.name}”.`)
-              : await w.propose([{ op: "modify_announcement", agent: agent.id, id: editing.id, announcement: spec }], `Change the announcement “${editing.name}”.`);
-            if (ok) setEditing(null);
-          }} />
-      )}
-      {!data.announcements.length && !editing && <p className="empty pad">No announcements yet.</p>}
-      {data.announcements.map((a) => (
-        <div key={a.id} className="ag-card">
-          <div className="ag-card-head">
-            <Megaphone size={14} strokeWidth={1.8} />
-            <b>{a.name}</b>
-            <span className="dim mono small">#{a.id}</span>
-            {!!a.programmed && <span className="tag accent">{plural(a.programmed, "programming line")}</span>}
-            <span className="spread" />
-            <Tip text={w.why ?? "Edit"}>
-              <span><button className="icon-btn" aria-label="Edit" disabled={!w.can} onClick={() => setEditing(a)}><Pencil size={13} strokeWidth={1.8} /></button></span>
-            </Tip>
-            <Tip text={w.why ?? "Remove"}>
-              <span><button className="icon-btn danger" aria-label="Remove" disabled={!w.can} onClick={() => remove(a)}><Trash2 size={13} strokeWidth={1.8} /></button></span>
-            </Tip>
-          </div>
-          <dl className="ag-dl">
-            {a.audio && <><dt><Music size={12} strokeWidth={1.8} />Sound</dt><dd className="mono">{a.audio}</dd></>}
-            {a.text && <><dt><Monitor size={12} strokeWidth={1.8} />Text</dt><dd>“{a.text}”</dd></>}
-            {a.image && <><dt><Image size={12} strokeWidth={1.8} />Image</dt><dd className="mono ag-url">{a.image}</dd></>}
-            {(a.text || a.image) && <><dt>On screen</dt><dd>{secondsLabel(a.display_seconds)}{a.ok_button ? ", with an OK button" : ""}</dd></>}
-            {!!a.rooms.length && <><dt><Volume2 size={12} strokeWidth={1.8} />Plays in</dt>
-              <dd className="ag-refs">{a.rooms.map((r) => <span key={r.room.id}><Ref r={r.room} onSelect={onSelect} />{r.volume != null && <span className="dim small"> {r.volume}%</span>}</span>)}</dd></>}
-            {!!a.screens.length && <><dt><Monitor size={12} strokeWidth={1.8} />Shows on</dt>
-              <dd className="ag-refs">{a.screens.map((s) => <Ref key={s.device.id} r={s.device} onSelect={onSelect} />)}</dd></>}
-            {!!a.touchscreen_audio.length && <><dt><Volume2 size={12} strokeWidth={1.8} />Screen sound</dt>
-              <dd className="ag-refs">{a.touchscreen_audio.map((t) => <span key={t.device.id}><Ref r={t.device} onSelect={onSelect} />{t.volume != null && <span className="dim small"> {t.volume}%</span>}</span>)}</dd></>}
-          </dl>
-        </div>
-      ))}
-    </div>
+    <AgentSplit id="announcements" detail={detail} bar={<>
+      <span className="dim small">{plural(data.announcements.length, "announcement")}</span>
+      <span className="spread" />
+      <Tip text={w.why ?? "Add an announcement"}>
+        <span><button className="act small primary" disabled={!w.can} onClick={() => { setPicked(null); setEditing("new"); }}><Plus size={13} strokeWidth={2} />Add announcement</button></span>
+      </Tip>
+    </>}>
+      <DataTable data={data.announcements} columns={columns} rowId={(a) => String(a.id)} label="Announcements" sort={[{ id: "name", desc: false }]}
+        selected={sel ? String(sel.id) : null} onSelect={(a) => { setPicked(a.id); if (editing !== "new" && editing?.id !== a.id) setEditing(null); }}
+        onActivate={(a) => { if (w.can) setEditing(a); }}
+        empty={<p className="empty">No announcements yet.</p>} />
+    </AgentSplit>
   );
 }
 

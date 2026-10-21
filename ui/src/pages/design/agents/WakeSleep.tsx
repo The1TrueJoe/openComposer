@@ -1,15 +1,18 @@
 /** The Wake/Sleep agent's own tab, in place of Composer's Wake/Sleep editor: each room's
- *  defaults for the wake-ups and goodnights people set on touchscreens. Rooms are set up,
+ *  defaults for the wake-ups and goodnights people set on touchscreens, a room per row with the
+ *  picked one under the table. Rooms are set up,
  *  changed and removed as approvals (add/modify/remove_wake_sleep_room). */
 
-import { BellRing, Pencil, Plus, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { createColumnHelper } from "@tanstack/react-table";
+import { BellRing, Plus } from "lucide-react";
+import { useMemo, useState } from "react";
 import type { NamedRef, WakeSleepData, WakeSleepRoomView, WakeSleepSpec, Weekday } from "../../../api";
+import { DataTable } from "../../../components/DataTable";
 import { Tip, useDialog } from "../../../components/Dialogs";
 import { Select, Switch } from "../../../components/controls";
 import type { Shell } from "../../../lib/shell";
 import { cx, plural } from "../../../lib/ui";
-import { EditorCard, Ref, refLabel, useWrites } from "./common";
+import { AgentSplit, DetailPane, EditIcon, EditorCard, IconAct, Ref, RemoveIcon, refLabel, useWrites } from "./common";
 
 const DAYS: { id: Weekday; short: string }[] = [
   { id: "sunday", short: "Sun" }, { id: "monday", short: "Mon" }, { id: "tuesday", short: "Tue" }, { id: "wednesday", short: "Wed" },
@@ -31,70 +34,84 @@ function Part({ label, visible, enabled, children }: { label: string; visible: b
   );
 }
 
+const col = createColumnHelper<WakeSleepRoomView>();
+
 export function WakeSleepView({ agent, data, shell, onSelect, reload }: {
   agent: { id: number; name: string }; data: WakeSleepData; shell: Shell; onSelect: (id: number) => void; reload: () => void;
 }) {
   const dialog = useDialog();
   const w = useWrites(shell, reload);
-  const [editing, setEditing] = useState<number | null>(null);
+  const [picked, setPicked] = useState<number | null>(null);
+  const [editing, setEditing] = useState(false);
   const [room, setRoom] = useState("");
+  const sel = data.rooms.find((r) => r.id === picked) ?? null;
 
   const remove = async (r: WakeSleepRoomView) => {
     const ok = await dialog.confirm({ title: `Remove Wake/Sleep from “${r.room.name}”?`, description: "Wake-ups and goodnights set there go with it.", confirmLabel: "Remove", danger: true });
-    if (ok) await w.propose([{ op: "remove_wake_sleep_room", agent: agent.id, id: r.id }], `Remove Wake/Sleep from “${r.room.name}”.`);
+    if (ok && await w.propose([{ op: "remove_wake_sleep_room", agent: agent.id, id: r.id }], `Remove Wake/Sleep from “${r.room.name}”.`)) setPicked(null);
   };
 
-  return (
-    <div className="ag">
-      <div className="ag-bar">
-        <span className="dim small">{plural(data.rooms.length, "room")}{data.hospitality ? " · hospitality mode" : ""}</span>
-        <span className="spread" />
-        {!!data.available_rooms.length && <>
-          <Select<string> value={room} label="Room to set up" placeholder="Set up a room…"
-            options={data.available_rooms.map((r) => ({ value: String(r.id), label: r.name }))} onValueChange={setRoom} disabled={!w.can} />
-          <Tip text={w.why ?? "Set up Wake/Sleep in the room, with Composer's defaults"}>
-            <span><button className="act small primary" disabled={!w.can || !room} onClick={async () => {
-              const r = data.available_rooms.find((x) => String(x.id) === room);
-              if (r && await w.propose([{ op: "add_wake_sleep_room", agent: agent.id, room: r.id }], `Set up Wake/Sleep in “${r.name}”.`)) setRoom("");
-            }}><Plus size={13} strokeWidth={2} />Add</button></span>
-          </Tip>
-        </>}
+  const columns = useMemo(() => [
+    col.accessor((r) => r.room.name, { id: "room", header: "Room", cell: (c) => <span className="ellip">{c.getValue()}</span> }),
+    col.accessor((r) => r.settings.wake_time, { id: "wake", header: "Wake", meta: { width: 84 }, cell: (c) => t12(c.getValue()) }),
+    col.accessor((r) => daysText(r.settings.wake_days), { id: "days", header: "Days", meta: { width: "26%", hideBelow: 420 }, cell: (c) => <span className="ellip dim">{c.getValue()}</span> }),
+    col.accessor((r) => r.settings.sleep_minutes, { id: "fade", header: "Goodnight", meta: { width: 92, align: "right", hideBelow: 340 }, cell: (c) => `${c.getValue()} min` }),
+    col.accessor((r) => ["lights", "media", "blinds", "temperature"].filter((k) => r.settings[k as "lights"].visible).length, {
+      id: "parts", header: "Offers", meta: { width: "24%", hideBelow: 520 },
+      cell: (c) => { const st = c.row.original.settings; return <span className="ellip dim">{(["lights", "media", "blinds", "temperature"] as const).filter((k) => st[k].visible).join(", ") || "—"}</span>; },
+    }),
+  ], []);
+
+  const detail = sel && (editing ? (
+    <RoomEditor key={sel.id} r={sel} data={data} busy={w.busy} onCancel={() => setEditing(false)}
+      onSave={async (settings) => {
+        if (await w.propose([{ op: "modify_wake_sleep_room", agent: agent.id, id: sel.id, settings }], `Change the Wake/Sleep defaults of “${sel.room.name}”.`)) setEditing(false);
+      }} />
+  ) : (
+    <DetailPane icon={<BellRing size={14} strokeWidth={1.8} />} title={<Ref r={{ ...sel.room, room: null }} onSelect={onSelect} />}
+      actions={<>
+        <IconAct label="Edit" why={w.why} disabled={w.busy} onClick={() => setEditing(true)}><EditIcon /></IconAct>
+        <IconAct label="Remove" why={w.why} disabled={w.busy} danger onClick={() => remove(sel)}><RemoveIcon /></IconAct>
+      </>}>
+      <dl className="ag-dl">
+        <dt>Wake up</dt><dd><b>{t12(sel.settings.wake_time)}</b> <span className="dim">{daysText(sel.settings.wake_days)}</span></dd>
+        <dt>Goodnight</dt><dd>fades over <b>{sel.settings.sleep_minutes} min</b></dd>
+      </dl>
+      <div className="ag-parts">
+        <Part label="Lights" visible={sel.settings.lights.visible} enabled={sel.settings.lights.enabled}>
+          <Ref r={sel.light} onSelect={onSelect} /> <span className="dim">over {sel.settings.lights.ramp_minutes} min</span>
+        </Part>
+        <Part label="Media" visible={sel.settings.media.visible} enabled={sel.settings.media.enabled}>
+          {sel.source ?? <span className="dim">no source</span>}{sel.item && <span className="dim"> · {sel.item}</span>}
+        </Part>
+        <Part label="Blinds" visible={sel.settings.blinds.visible} enabled={sel.settings.blinds.enabled}><Ref r={sel.blind} onSelect={onSelect} /></Part>
+        <Part label="Temperature" visible={sel.settings.temperature.visible} enabled={sel.settings.temperature.enabled}>
+          {[sel.settings.temperature.mode, `${sel.settings.temperature.setpoint_f}°F`].filter(Boolean).join(" ")}
+        </Part>
       </div>
-      {!data.rooms.length && <p className="empty pad">No rooms are set up for Wake/Sleep.</p>}
-      {data.rooms.map((r) => editing === r.id ? (
-        <RoomEditor key={r.id} r={r} data={data} busy={w.busy} onCancel={() => setEditing(null)}
-          onSave={async (settings) => {
-            if (await w.propose([{ op: "modify_wake_sleep_room", agent: agent.id, id: r.id, settings }], `Change the Wake/Sleep defaults of “${r.room.name}”.`)) setEditing(null);
-          }} />
-      ) : (
-        <div key={r.id} className="ag-card">
-          <div className="ag-card-head">
-            <BellRing size={14} strokeWidth={1.8} />
-            <Ref r={{ ...r.room, room: null }} onSelect={onSelect} />
-            <span className="small">wake <b>{t12(r.settings.wake_time)}</b> <span className="dim">{daysText(r.settings.wake_days)}</span> · goodnight fade <b>{r.settings.sleep_minutes} min</b></span>
-            <span className="spread" />
-            <Tip text={w.why ?? "Edit"}>
-              <span><button className="icon-btn" aria-label="Edit" disabled={!w.can} onClick={() => setEditing(r.id)}><Pencil size={13} strokeWidth={1.8} /></button></span>
-            </Tip>
-            <Tip text={w.why ?? "Remove"}>
-              <span><button className="icon-btn danger" aria-label="Remove" disabled={!w.can} onClick={() => remove(r)}><Trash2 size={13} strokeWidth={1.8} /></button></span>
-            </Tip>
-          </div>
-          <div className="ag-parts">
-            <Part label="Lights" visible={r.settings.lights.visible} enabled={r.settings.lights.enabled}>
-              <Ref r={r.light} onSelect={onSelect} /> <span className="dim">over {r.settings.lights.ramp_minutes} min</span>
-            </Part>
-            <Part label="Media" visible={r.settings.media.visible} enabled={r.settings.media.enabled}>
-              {r.source ?? <span className="dim">no source</span>}{r.item && <span className="dim"> · {r.item}</span>}
-            </Part>
-            <Part label="Blinds" visible={r.settings.blinds.visible} enabled={r.settings.blinds.enabled}><Ref r={r.blind} onSelect={onSelect} /></Part>
-            <Part label="Temperature" visible={r.settings.temperature.visible} enabled={r.settings.temperature.enabled}>
-              {[r.settings.temperature.mode, `${r.settings.temperature.setpoint_f}°F`].filter(Boolean).join(" ")}
-            </Part>
-          </div>
-        </div>
-      ))}
-    </div>
+    </DetailPane>
+  ));
+
+  return (
+    <AgentSplit id="wake-sleep" detail={detail} bar={<>
+      <span className="dim small">{plural(data.rooms.length, "room")}{data.hospitality ? " · hospitality mode" : ""}</span>
+      <span className="spread" />
+      {!!data.available_rooms.length && <>
+        <Select<string> value={room} label="Room to set up" placeholder="Set up a room…"
+          options={data.available_rooms.map((r) => ({ value: String(r.id), label: r.name }))} onValueChange={setRoom} disabled={!w.can} />
+        <Tip text={w.why ?? "Set up Wake/Sleep in the room, with Composer's defaults"}>
+          <span><button className="act small primary" disabled={!w.can || !room} onClick={async () => {
+            const r = data.available_rooms.find((x) => String(x.id) === room);
+            if (r && await w.propose([{ op: "add_wake_sleep_room", agent: agent.id, room: r.id }], `Set up Wake/Sleep in “${r.name}”.`)) setRoom("");
+          }}><Plus size={13} strokeWidth={2} />Add</button></span>
+        </Tip>
+      </>}
+    </>}>
+      <DataTable data={data.rooms} columns={columns} rowId={(r) => String(r.id)} label="Wake/Sleep rooms" sort={[{ id: "room", desc: false }]}
+        selected={sel ? String(sel.id) : null} onSelect={(r) => { if (r.id !== picked) setEditing(false); setPicked(r.id); }}
+        onActivate={(r) => { setPicked(r.id); if (w.can) setEditing(true); }}
+        empty={<p className="empty">No rooms are set up for Wake/Sleep.</p>} />
+    </AgentSplit>
   );
 }
 

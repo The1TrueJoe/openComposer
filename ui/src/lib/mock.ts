@@ -678,6 +678,42 @@ const CAPS = new Map<number, Record<string, string>>();
     ] });
     project.bindings.push({ provider_device: 64, provider_binding: 2000, consumer_device: 63, consumer_binding: 3000, consumer_name: "HDMI IN 1 (Cable)", classes: ["HDMI"] });
     vars(62, { POWER_STATE: "On", OUTPUT_1_SOURCE: "4", OUTPUT_2_SOURCE: "1", OUTPUT_3_SOURCE: "1", OUTPUT_4_SOURCE: "3" });
+
+    // The living-room TV's proxy as a real tv.c4i is: its commands by template only (no names),
+    // what the TV does in its capabilities, and Navigator's remote in TRANSPORTS_* variables
+    // (a Samsung's, read from a real controller). Bass, treble and info are declared, not had.
+    const tv = project.catalog.get(21);
+    if (tv) {
+      tv.commands = ["Turn on the NAME", "Turn off the NAME", "Push the Menu on the NAME", "Push the Up on the NAME", "Push the Down on the NAME",
+        "Push the Left on the NAME", "Push the Right on the NAME", "Push the enter on the NAME", "Push the Cancel on the NAME", "Push the Info on the NAME",
+        "Push the Recall on the NAME", ...Array.from({ length: 10 }, (_, i) => `Enter '${i}' on the NAME`), "Push the Dash on the NAME",
+        "Pulse the volume up on the NAME", "Pulse the volume down on the NAME", "Pulse the channel up on the NAME", "Pulse the channel down on the NAME",
+        "Turn mute on the NAME", "Turn mute off the NAME", "Turn mute toggle the NAME", "Set volume to INTEGER on the NAME", "Set input to INTEGER on the NAME",
+        "Set channel to INTEGER on the NAME", "Pulse the input on the NAME", "Pulse the bass up on the NAME", "Pulse the treble up on the NAME",
+        "Push the TvVideo on the NAME"].map((description) => ({ name: "", description, params: [] }));
+      const samsung = { has_audio: "true", has_channel_up_down: "True", has_discrete_channel_select: "True", has_discrete_input_select: "True",
+        has_discrete_mute_control: "True", has_discrete_volume_control: "True", has_toad_input_select: "True", has_toggle_mute_control: "True",
+        has_up_down_volume_control: "True" };
+      CAPS.set(20, samsung);
+      CAPS.set(21, samsung);
+      vars(21, { TRANSPORTS_SUPPORTED: "PLAY,PAUSE,STOP,SCAN_FWD,SCAN_REV,SKIP_FWD,SKIP_REV,PG_UP,PG_DOWN,PRG_BTNS,KEYPAD,CH_UP_DN,DPAD",
+        TRANSPORTS_BUTTONS: "HOME,BACK,MENU,EXIT,CC", POWER_STATE: "1", CURRENT_VOLUME_LEVEL: "24", CURRENT_MUTE: "0", CURRENT_INPUT: "2000" });
+    }
+
+    // The Living Room as Director has it: its video end-point bound to the TV, its audio
+    // end-points to the receiver, and the room's own variables (what's on, its volume).
+    project.catalog.set(10, { manufacturer: "", model: "", driver_name: "", version: "3", control_method: "", search_type: "", proxies: [],
+      connections: [{ id: 1, name: "Video End-Point", consumer: true, classes: ["VIDEO_SELECTION"] },
+        { id: 2, name: "Audio End-Point 1", consumer: true, classes: ["AUDIO_SELECTION"] },
+        { id: 3, name: "Video's Audio End-Point 1", consumer: true, classes: ["AUDIO_SELECTION"] }],
+      events: {}, properties: [], actions: [], commands: [] });
+    project.bindings.push(
+      { provider_device: 21, provider_binding: 7000, consumer_device: 10, consumer_binding: 1, consumer_name: "Video End-Point", classes: ["VIDEO_SELECTION"] },
+      { provider_device: 23, provider_binding: 7001, consumer_device: 10, consumer_binding: 2, consumer_name: "Audio End-Point 1", classes: ["AUDIO_SELECTION"] },
+      { provider_device: 23, provider_binding: 7001, consumer_device: 10, consumer_binding: 3, consumer_name: "Video's Audio End-Point 1", classes: ["AUDIO_SELECTION"] },
+    );
+    vars(10, { CURRENT_SELECTED_DEVICE: "25", CURRENT_AUDIO_DEVICE: "0", CURRENT_VIDEO_DEVICE: "25", POWER_STATE: "1", CURRENT_VOLUME: "32",
+      HAS_DISCRETE_VOLUME: "1", HAS_DISCRETE_MUTE: "1", IS_MUTED: "0", LAST_DEVICE_GROUP: "watch" });
   }
 }
 
@@ -711,6 +747,26 @@ function command(target: number, cmd: string, params: CommandParam[]): string[] 
   const d = owner(target);
   const p = (n: string) => params.find((x) => x.name === n)?.value ?? "";
   if (showcaseCommand(d, cmd, p)) return [];
+  if (item(target).kind === "room") {
+    // Director's room: what it's watching or listening to, room off, its volume.
+    const id = p("deviceid");
+    if (cmd === "SELECT_VIDEO_DEVICE" || cmd === "SELECT_AUDIO_DEVICE") {
+      const video = cmd === "SELECT_VIDEO_DEVICE";
+      setVar(target, "CURRENT_SELECTED_DEVICE", id);
+      setVar(target, "CURRENT_VIDEO_DEVICE", video ? id : "0");
+      setVar(target, "CURRENT_AUDIO_DEVICE", video ? "0" : id);
+      setVar(target, "POWER_STATE", "1");
+      setVar(target, "LAST_DEVICE_GROUP", video ? "watch" : "listen");
+    } else if (cmd === "ROOM_OFF") {
+      for (const n of ["CURRENT_SELECTED_DEVICE", "CURRENT_VIDEO_DEVICE", "CURRENT_AUDIO_DEVICE", "POWER_STATE"]) setVar(target, n, "0");
+    } else if (cmd === "SET_VOLUME_LEVEL") setVar(target, "CURRENT_VOLUME", p("LEVEL"));
+    else if (cmd === "PULSE_VOL_UP" || cmd === "PULSE_VOL_DOWN") {
+      setVar(target, "CURRENT_VOLUME", String(Math.max(0, Math.min(100, Number(getVar(target, "CURRENT_VOLUME") ?? 0) + (cmd === "PULSE_VOL_UP" ? 1 : -1)))));
+    } else if (cmd === "MUTE_ON" || cmd === "MUTE_OFF" || cmd === "MUTE_TOGGLE") {
+      setVar(target, "IS_MUTED", cmd === "MUTE_ON" ? "1" : cmd === "MUTE_OFF" ? "0" : getVar(target, "IS_MUTED") === "1" ? "0" : "1");
+    }
+    return [];
+  }
   const clamp = (n: number) => String(Math.max(0, Math.min(100, Math.round(n))));
   const light = getVar(d, "LIGHT_LEVEL") != null;
   switch (cmd) {
