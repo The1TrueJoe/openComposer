@@ -63,6 +63,11 @@ npm ci --prefix ui
 npx @tauri-apps/cli@2.12.3 dev --config app/tauri.conf.json
 ```
 
+On a development Mac, `scripts/install-mac.sh` builds, signs with a local identity named
+"openComposer Local Signing" (a self-signed code-signing certificate in the login keychain,
+trusted for code signing) and installs to /Applications. A stable signature means macOS keeps
+your keychain and local-network approvals across rebuilds.
+
 Release installers (unsigned macOS universal `.dmg` and Windows NSIS `.exe`) are built by
 the `release` workflow: run it from the Actions tab or push a `v*` tag.
 
