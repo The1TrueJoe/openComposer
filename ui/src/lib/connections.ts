@@ -49,6 +49,19 @@ export const CONN_KINDS: { id: ConnKind; label: string }[] = [
   { id: "other", label: "Other" },
 ];
 
+/** Classes in the order a dealer looks for them, best first: digital video ahead of analog,
+ *  digital audio ahead of analog. Unlisted classes follow, in the driver's own order. */
+const CLASS_ORDER = [
+  "HDMI", "DVI", "COMPONENT", "SVIDEO", "COMPOSITE", "VGA", "RF_CABLE", "RF_UHF_VHF", "RF_MINI_APP",
+  "DIGITAL_AUDIO_SERVER", "DIGITAL_AUDIO_CLIENT", "DIGITAL_OPTICAL", "DIGITAL_COAX", "STEREO", "SPEAKER", "RF_FM", "RF_AM",
+];
+
+/** Where a connection sorts by its type: its best-ranked class. */
+export function classRank(classes: string[]): number {
+  const ranks = classes.map((c) => CLASS_ORDER.indexOf(c)).filter((i) => i >= 0);
+  return ranks.length ? Math.min(...ranks) : CLASS_ORDER.length;
+}
+
 /** The drawing for a class: a connector where there is one (components/icons.tsx `ConnIcon`). */
 export type Glyph =
   | "hdmi" | "dvi" | "vga" | "rca" | "component" | "stereo" | "svideo" | "optical" | "fcoax" | "antenna" | "app" | "storage"

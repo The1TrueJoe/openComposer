@@ -13,7 +13,7 @@ import { Tip } from "../../components/Dialogs";
 import { BottomPane, Grip, MainPane, Panes } from "../../components/Panes";
 import { Select, Spinner } from "../../components/controls";
 import { ConnChip, ConnIcon, KindIcon } from "../../components/icons";
-import { classLook, CONN_KINDS, connectOp, disconnectOp, kindOf, shared, type ConnKind } from "../../lib/connections";
+import { classLook, classRank, CONN_KINDS, connectOp, disconnectOp, kindOf, shared, type ConnKind } from "../../lib/connections";
 import type { Shell } from "../../lib/shell";
 import { cx, useLoad } from "../../lib/ui";
 
@@ -29,9 +29,10 @@ export function Connections({ d, shell, onSelect }: { d: ItemDetail; shell: Shel
       { id: d.id, name: d.name, kind: d.kind, driver: d.driver, connections: d.connections },
       ...d.children.filter((c) => c.connections.length),
     ];
+    // HDMI first within each group, then the other classes by rank; ties keep the driver's order.
     return owners.flatMap((o) => o.connections.map((def) => ({
       key: `${o.id}:${def.id}`, owner: { id: o.id, name: o.name, kind: o.kind, driver: o.driver }, def, kind: kindOf(def),
-    })));
+    }))).map((c, i) => ({ c, i })).sort((a, b) => classRank(a.c.def.classes) - classRank(b.c.def.classes) || a.i - b.i).map((x) => x.c);
   }, [d]);
   const [picked, setPicked] = useState<string | null>(null);
   const sel = conns.find((c) => c.key === picked) ?? conns[0] ?? null;
@@ -57,6 +58,7 @@ export function Connections({ d, shell, onSelect }: { d: ItemDetail; shell: Shel
     })] : []),
     col.accessor((c) => c.def.classes.map((k) => classLook(k).label).join(" "), {
       id: "type", header: "Type", meta: { width: "24%", hideBelow: 520 },
+      sortingFn: (a, b) => classRank(a.original.def.classes) - classRank(b.original.def.classes),
       cell: (x) => <Classes list={x.row.original.def.classes} />,
     }),
     col.accessor((c) => c.def.connected_to.map((p) => p.device.name).join(" "), {
