@@ -11,6 +11,24 @@ Nothing changes on a controller until a person approves the change on a diff.
 > ships no Control4 software, certificates, keys or drivers — you supply your own, for
 > controllers you own or are authorised to manage.
 
+## Screenshots
+
+Every write is shown as a plain-language diff and applied only after you approve it —
+whether the change comes from you, an MCP client or the agent:
+
+![Approvals: a semantic diff of pending changes, with approve and decline](docs/images/approvals.jpg)
+
+| Browse the project | Programming |
+|---|---|
+| ![The project tree, a device and its driver pages](docs/images/project.jpg) | ![Events, conditionals and scheduled actions](docs/images/programming.jpg) |
+
+Connecting is a short wizard; it uses a client certificate your controller trusts, which
+you provide.
+
+![Connect screen listing controllers found on the network](docs/images/connect.jpg)
+
+> Screenshots use built-in fixture data, not a real system.
+
 ## Building
 
 ```bash
