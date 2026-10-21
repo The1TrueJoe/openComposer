@@ -1,0 +1,92 @@
+/* Built-in agents' own inspector tabs (pages/design/agents). Everything is under .ag so it
+   can't reach other panes. */
+
+.ag { padding: 10px 14px 24px; display: flex; flex-direction: column; gap: 8px; container-type: inline-size; }
+/* base.css styles every <label> as a small-caps field label; switches and checkboxes aren't. */
+.ag .ag-switch, .ag .ag-check { text-transform: none; letter-spacing: normal; font-weight: normal; margin: 0; }
+.ag-form > label { margin: 0; }
+.ag-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding-bottom: 2px; }
+.ag-bar .spread { flex: 1; }
+.ag-sun { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--soft); }
+.ag-sun b { color: var(--text); font-weight: 600; margin-right: 6px; }
+.ag-switch { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--soft); cursor: pointer; }
+.ag-h { margin: 8px 0 0; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.ag-note { margin: 0; }
+
+.ag-card { border: 1px solid var(--line); border-radius: 9px; background: var(--side); overflow: hidden; }
+.ag-card-head { display: flex; align-items: center; gap: 8px; padding: 8px 12px; flex-wrap: wrap; }
+.ag-card-head .spread { margin-left: auto; }
+
+/* Scheduler entries */
+.ag-entry.off { background: var(--tint); }
+.ag-entry.off .ag-entry-name b, .ag-entry.off .ag-time { color: var(--muted); }
+.ag-entry-main { display: grid; grid-template-columns: minmax(118px, auto) 1fr auto auto; grid-template-areas: "time what next acts";
+  align-items: center; gap: 4px 12px; padding: 9px 12px; }
+.ag-time { grid-area: time; }
+.ag-entry-what { grid-area: what; }
+.ag-entry-next { grid-area: next; }
+.ag-entry-acts { grid-area: acts; }
+.ag-time { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ag-time svg { color: var(--muted); flex: none; }
+.ag-time.sunrise svg { color: #d97706; }
+.ag-time.sunset svg { color: #7c3aed; }
+.ag-entry-what { min-width: 0; }
+.ag-entry-name { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ag-entry-name b { overflow: hidden; text-overflow: ellipsis; }
+.ag-entry-next { display: flex; flex-direction: column; align-items: flex-end; min-width: 88px; text-align: right; }
+.ag-next-day { font-size: 12px; font-weight: 600; color: var(--text-2); }
+.ag-next-day.soon { color: var(--accent-text); }
+.ag-entry-acts { display: flex; align-items: center; gap: 2px; }
+.ag-prog { display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 11px; padding: 3px 8px; margin-right: 4px;
+  border-radius: 99px; border: 1px dashed var(--line); background: transparent; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.ag-prog:hover { color: var(--accent-text); border-color: var(--accent); }
+.ag-prog.has { border-style: solid; color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+button.icon-btn.danger:hover:not(:disabled) { color: var(--bad); }
+.ag-code { cursor: pointer; padding: 3px 0; }
+.ag-code:hover { background: color-mix(in srgb, var(--accent) 5%, var(--bar)); }
+
+/* Scheduler editor */
+.ag-editor { border-color: color-mix(in srgb, var(--accent) 55%, var(--line)); box-shadow: 0 1px 0 var(--divider), 0 4px 18px -10px var(--shadow); }
+.ag-editor-head { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--line); background: var(--tint); }
+.ag-editor-head .spread, .ag-editor-foot .spread { flex: 1; }
+.ag-form { display: grid; grid-template-columns: 92px 1fr; gap: 9px 12px; align-items: center; padding: 12px; }
+.ag-form > label { font-size: 12px; color: var(--soft); }
+.ag-form > input:not([type]) { max-width: 360px; }
+.ag-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ag-check { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; color: var(--soft); }
+.ag-seg { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
+.ag-seg button { display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 12px; padding: 4px 10px; border: 0;
+  background: var(--btn); color: var(--soft); cursor: pointer; }
+.ag-seg button + button { border-left: 1px solid var(--line); }
+.ag-seg button.on { background: var(--sel); color: var(--sel-fg); }
+.ag-days { display: flex; gap: 4px; flex-wrap: wrap; }
+.ag-days button { font: inherit; font-size: 12px; width: 42px; padding: 4px 0; border-radius: 99px; border: 1px solid var(--line);
+  background: var(--btn); color: var(--soft); cursor: pointer; }
+.ag-days button.on { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+.ag-editor-foot { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-top: 1px solid var(--line); }
+.ag-problem { font-size: 12px; color: var(--warn); }
+
+/* Read-only agents */
+.ag-ref { font: inherit; background: none; border: 0; padding: 0; color: var(--accent-text); cursor: pointer; text-align: left; }
+.ag-ref:hover { text-decoration: underline; }
+.ag-table { width: 100%; border-collapse: collapse; font-size: 12px; border-top: 1px solid var(--line); }
+.ag-table td { padding: 5px 12px; vertical-align: top; border-top: 1px solid var(--divider); }
+.ag-table td:first-child { width: 40%; }
+.ag-step { display: inline-flex; align-items: center; gap: 5px; margin-right: 12px; }
+.ag-swatch { width: 11px; height: 11px; border-radius: 50%; border: 1px solid var(--line); display: inline-block; }
+.ag-dl { display: grid; grid-template-columns: 96px 1fr; gap: 5px 12px; margin: 0; padding: 8px 12px 10px; border-top: 1px solid var(--line); font-size: 12px; }
+.ag-dl dt { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); }
+.ag-dl dd { margin: 0; min-width: 0; }
+.ag-url { overflow-wrap: anywhere; color: var(--soft); }
+.ag-refs { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.ag-parts { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 10px; }
+.ag-part { font-size: 12px; padding: 2px 9px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+.ag-part.on { color: var(--on); border-color: color-mix(in srgb, var(--on) 50%, transparent); }
+
+/* The inspector is often narrow: name first, then when it runs and the buttons. */
+@container (max-width: 560px) {
+  .ag-entry-main { grid-template-columns: auto 1fr auto; grid-template-areas: "what what what" "time next acts"; }
+  .ag-entry-next { flex-direction: row; align-items: baseline; justify-content: flex-start; gap: 6px; min-width: 0; }
+  .ag-form { grid-template-columns: 1fr; gap: 4px 0; }
+  .ag-form > label { margin-top: 6px; }
+}

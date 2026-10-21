@@ -4,6 +4,7 @@
 
 pub mod actions;
 pub mod agent;
+pub mod agent_views;
 pub mod approvals;
 pub mod backups;
 pub mod bridge;

@@ -3,6 +3,7 @@ import { Bell, X } from "lucide-react";
 import type { Approval } from "../api";
 import { cx } from "../lib/ui";
 import { ApprovalCard } from "./ApprovalCard";
+import { EdgeGrip, useStoredSize } from "./Panes";
 
 export function ApprovalsBell({ pending, onClick }: { pending: number; onClick: () => void }) {
   return (
@@ -22,11 +23,13 @@ export function ApprovalsDrawer({ approvals, open, onOpenChange }: {
 }) {
   const live = approvals.filter((a) => a.status === "pending" || a.status === "applying");
   const done = approvals.filter((a) => a.status !== "pending" && a.status !== "applying");
+  // Diffs read better wide; a sheet that hides the page you came from does not. Your call: drag its edge.
+  const [width, setWidth] = useStoredSize("approvals-drawer", 760, 420, 1400);
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
         <Dialog.Overlay className="drawer-scrim" />
-        <Dialog.Content className="drawer" aria-describedby={undefined}
+        <Dialog.Content className="drawer" aria-describedby={undefined} style={{ width: `min(${width}px, calc(100vw - 60px))` }}
                         onOpenAutoFocus={(e) => { if (live.length) e.preventDefault(); }}>
           <div className="drawer-head">
             <Dialog.Title asChild><h2>Approvals</h2></Dialog.Title>
@@ -39,6 +42,8 @@ export function ApprovalsDrawer({ approvals, open, onOpenChange }: {
             {done.length > 0 && <div className="group">History</div>}
             {done.map((a) => <ApprovalCard key={a.id} approval={a} collapsible />)}
           </div>
+          {/* Last, so opening the sheet focuses its cards or Close, not the grip. */}
+          <EdgeGrip edge="left" size={width} onSize={setWidth} label="Resize the approvals drawer" min={420} max={1400} />
         </Dialog.Content>
       </Dialog.Portal>
     </Dialog.Root>

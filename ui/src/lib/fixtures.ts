@@ -277,18 +277,36 @@ const VARIABLES: Variable[] = [
 ];
 
 let lineId = 500;
-const code = (...lines: [depth: number, text: string, enabled?: boolean][]): CodeLineView[] =>
-  lines.map(([depth, text, enabled = true]) => ({ depth, text, enabled, id: lineId++ }));
+type Param = { name: string; type: string; value: string };
+/** A device command line: what it targets, sends and with what (kind 1, like Director's). */
+type Cmd = [target: number, command: string, params?: Param[]];
+/** Lines as views.rs sends them: a command line carries its stored template (NAME for the
+ *  target), command and parameters; `"flow"` marks a conditional (no command); lines with
+ *  neither are left bare, like ones the backend can't read. */
+const code = (...lines: [depth: number, text: string, what?: Cmd | "flow", enabled?: boolean][]): CodeLineView[] =>
+  lines.map(([depth, text, what, enabled = true]) => {
+    const base = { depth, text, enabled, id: lineId++ };
+    if (what === "flow") return { ...base, kind: 2, target: 0, command: null, params: [] };
+    if (!what) return base;
+    const [target, command, params = []] = what;
+    const name = ROWS.find((r) => r[0] === target)?.[1] ?? "";
+    return { ...base, kind: 1, target, command, params, display: name ? text.replace(name, "NAME") : text };
+  });
+const P = (name: string, value: string, type = "INTEGER"): Param => ({ name, type, value });
+const SELECT_APPLE_TV: Cmd = [10, "SELECT_VIDEO_DEVICE", [P("deviceid", "24")]];
 
 const PROGRAMMING: [string, CodeLineView[]][] = [
-  ["32:1", code([0, "Toggle Kitchen Lights"])],
-  ["32:3", code([0, "If Living TV is On"], [1, "Turn off Living TV"], [1, "Turn off Living Receiver"], [0, "Else"],
-    [1, "Select Living Apple TV in Living Room"])],
-  ["90:1", code([0, "Ramp Kitchen Lights to 40% over 5 seconds"], [0, "If Bedroom Thermostat Heat Setpoint < 68"],
-    [1, "Set Bedroom Thermostat Heat Setpoint to 68", false])],
-  ["90:3", code([0, "Set Bedroom Thermostat HVAC mode to Auto"], [0, "Announce “Good morning” in Kitchen"],
-    [0, "Wait 30 seconds", false], [0, "Ramp Kitchen Lights to 80%"])],
-  ["20:1", code([0, "Ramp Kitchen Lights to 20%"], [0, "Select Living Apple TV in Living Room"])],
+  ["32:1", code([0, "Toggle Kitchen Lights", [31, "TOGGLE"]])],
+  ["32:3", code([0, "If Living TV is On", "flow"], [1, "Turn off Living TV", [21, "OFF"]], [1, "Turn off Living Receiver", [23, "OFF"]],
+    [0, "Else", "flow"], [1, "Select Living Apple TV in Living Room", SELECT_APPLE_TV])],
+  ["90:1", code([0, "Ramp Kitchen Lights to 40% over 5 seconds", [31, "RAMP_TO_LEVEL", [P("LEVEL", "40"), P("TIME", "5000")]]],
+    [0, "If Bedroom Thermostat Heat Setpoint < 68", "flow"],
+    [1, "Set Bedroom Thermostat Heat Setpoint to 68", [51, "SET_SETPOINT_HEAT", [P("SETPOINT", "68")]], false])],
+  ["90:3", code([0, "Set Bedroom Thermostat HVAC mode to Auto", [51, "SET_MODE_HVAC", [P("MODE", "Auto", "STRING")]]],
+    [0, "Announce “Good morning” in Kitchen", [91, "EXECUTE_ANNOUNCEMENT", [P("ANNOUNCEMENT_ID", "1")]]],
+    [0, "Wait 30 seconds", undefined, false], [0, "Ramp Kitchen Lights to 80%", [31, "RAMP_TO_LEVEL", [P("LEVEL", "80")]]])],
+  ["20:1", code([0, "Ramp Kitchen Lights to 20%", [31, "RAMP_TO_LEVEL", [P("LEVEL", "20")]]],
+    [0, "Select Living Apple TV in Living Room", SELECT_APPLE_TV])],
 ];
 
 export function seedProject(): MProject {

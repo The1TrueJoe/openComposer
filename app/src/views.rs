@@ -15,7 +15,7 @@ fn masked(name: &str, value: &str) -> String {
 
 fn short_item(p: &Project, id: u32) -> Value {
     match p.item(id) {
-        Some(i) => json!({ "id": id, "name": i.name, "kind": i.kind.label(), "driver": i.driver }),
+        Some(i) => json!({ "id": id, "name": p.name_of(id), "kind": i.kind.label(), "driver": i.driver }),
         None => json!({ "id": id, "name": format!("#{id}") }),
     }
 }
@@ -29,7 +29,7 @@ pub fn overview(p: &Project) -> Value {
             .iter()
             .filter_map(|c| p.item(*c))
             .filter(|d| d.kind == ItemKind::Device)
-            .map(|d| json!({ "id": d.id, "name": d.name, "driver": d.driver }))
+            .map(|d| json!({ "id": d.id, "name": p.name_of(d.id), "driver": d.driver }))
             .collect();
         let location: Vec<String> = p.ancestors(room.id).iter().map(|a| a.name.clone()).collect();
         rooms.push(json!({ "id": room.id, "name": room.name, "location": location.join(" › "), "devices": devices }));
@@ -57,8 +57,12 @@ pub fn overview(p: &Project) -> Value {
 pub fn tree(p: &Project) -> Value {
     fn node(p: &Project, id: u32) -> Value {
         let it = &p.items[&id];
-        let children: Vec<Value> = it.children.iter().filter(|c| p.items.contains_key(c)).map(|c| node(p, *c)).collect();
-        json!({ "id": id, "name": it.name, "kind": it.kind.label(), "driver": it.driver, "children": children })
+        // A device's only proxy is the device as far as anyone is concerned: fold it in.
+        let sole = p.sole_proxy(id).map(|x| x.id);
+        let children: Vec<Value> =
+            it.children.iter().filter(|c| p.items.contains_key(c) && Some(**c) != sole).map(|c| node(p, *c)).collect();
+        json!({ "id": id, "name": p.name_of(id), "kind": it.kind.label(), "driver": it.driver, "proxy": sole,
+            "children": children })
     }
     match p.root {
         Some(r) => node(p, r),
@@ -76,11 +80,12 @@ pub fn find(p: &Project, query: &str, kind: Option<&str>) -> Value {
         .filter(|i| {
             q.is_empty()
                 || i.name.to_lowercase().contains(&q)
+                || p.name_of(i.id).to_lowercase().contains(&q)
                 || i.driver.as_deref().is_some_and(|d| d.to_lowercase().contains(&q))
                 || p.room_of(i.id).is_some_and(|r| r.name.to_lowercase().contains(&q))
         })
         .take(100)
-        .map(|i| json!({ "id": i.id, "name": i.name, "kind": i.kind.label(), "driver": i.driver, "path": p.path(i.id) }))
+        .map(|i| json!({ "id": i.id, "name": p.name_of(i.id), "kind": i.kind.label(), "driver": i.driver, "path": p.path(i.id) }))
         .collect();
     json!({ "matches": hits })
 }
@@ -89,7 +94,7 @@ fn device_info(d: &DeviceInfo) -> Value {
     json!({
         "manufacturer": d.manufacturer, "model": d.model, "driver_name": d.driver_name,
         "version": d.version, "control_method": d.control_method, "search_type": d.search_type,
-        "proxies": d.proxies,
+        "proxies": d.proxies, "capabilities": d.capabilities,
     })
 }
 
@@ -125,7 +130,7 @@ fn connections_of(p: &Project, cat: &Catalog, id: u32) -> Vec<Value> {
                     }
                 })
                 .collect();
-            json!({ "id": c.id, "name": c.name, "role": if c.consumer { "input" } else { "output" },
+            json!({ "id": c.id, "name": c.name, "role": if c.consumer { "input" } else { "output" }, "type": c.conn_type,
                 "classes": c.classes, "connected_to": peers })
         })
         .collect()
@@ -133,7 +138,10 @@ fn connections_of(p: &Project, cat: &Catalog, id: u32) -> Vec<Value> {
 
 fn code_lines(p: &Project, code: &[CodeItem], depth: usize, out: &mut Vec<Value>) {
     for c in code {
-        out.push(json!({ "depth": depth, "text": c.text(p), "enabled": c.enabled, "id": c.id, "target": c.device }));
+        // The command and its parameters, so a line can be re-added elsewhere (moved).
+        let (command, params) = c.command().unzip();
+        out.push(json!({ "depth": depth, "text": c.text(p), "enabled": c.enabled, "id": c.id, "target": c.device,
+            "kind": c.kind, "display": c.display, "command": command, "params": params.unwrap_or_default() }));
         code_lines(p, &c.children, depth + 1, out);
     }
 }
@@ -155,25 +163,32 @@ pub fn item(p: &Project, cat: &Catalog, id: u32) -> Option<Value> {
             .collect(),
         _ => it.properties.iter().map(|(k, v)| json!({ "name": k, "value": masked(k, v) })).collect(),
     };
+    // A device shown under its sole proxy's name is shown with the proxy's state and events
+    // too: the tree folds the proxy away, so this is the only place they appear.
+    let sole = p.sole_proxy(id).map(|x| x.id);
+    let own = [Some(id), sole];
     let mut events = Vec::new();
-    if let Some(d) = info {
+    for dev in own.into_iter().flatten() {
+        let Some(d) = cat.devices.get(&dev) else { continue };
         for (eid, name) in &d.events {
             let mut lines = Vec::new();
-            if let Some(code) = p.programming.get(&event_key(id, *eid)) {
+            if let Some(code) = p.programming.get(&event_key(dev, *eid)) {
                 code_lines(p, code, 0, &mut lines);
             }
-            events.push(json!({ "id": eid, "name": name, "programming": lines }));
+            events.push(json!({ "id": eid, "device": dev, "name": name, "programming": lines }));
         }
     }
     let children: Vec<Value> = it
         .children
         .iter()
         .filter_map(|c| p.item(*c))
-        .map(|c| json!({ "id": c.id, "name": c.name, "kind": c.kind.label(), "driver": c.driver,
+        .map(|c| json!({ "id": c.id, "name": p.name_of(c.id), "kind": c.kind.label(), "driver": c.driver,
             "connections": connections_of(p, cat, c.id) }))
         .collect();
     Some(json!({
-        "id": id, "name": it.name, "kind": it.kind.label(), "path": p.path(id),
+        "id": id, "name": p.name_of(id), "kind": it.kind.label(), "path": p.path(id),
+        // Renaming a device with one proxy renames the proxy (where its name lives).
+        "proxy": p.sole_proxy(id).map(|x| x.id), "driver_title": (p.sole_proxy(id).is_some()).then(|| it.name.clone()),
         "room": p.room_of(id).map(|r| r.name.clone()), "driver": it.driver,
         "device": info.map(device_info),
         "properties": properties,
@@ -183,7 +198,7 @@ pub fn item(p: &Project, cat: &Catalog, id: u32) -> Option<Value> {
         "network": p.network_bindings.iter().filter(|n| n.device == id).collect::<Vec<_>>(),
         "network_connections": info.map(|d| d.connections.iter().filter(|c| c.conn_type == 4)
             .map(|c| json!({ "id": c.id, "name": c.name, "classes": c.classes })).collect::<Vec<_>>()).unwrap_or_default(),
-        "variables": p.variables.iter().filter(|v| v.device == id).collect::<Vec<_>>(),
+        "variables": p.variables.iter().filter(|v| own.contains(&Some(v.device))).collect::<Vec<_>>(),
         "events": events,
         "children": children,
     }))
@@ -208,7 +223,7 @@ pub fn connections(p: &Project, cat: &Catalog, device: Option<u32>, class: Optio
                     continue;
                 }
             }
-            rows.push(json!({ "device": { "id": id, "name": it.name, "room": p.room_of(*id).map(|r| r.name.clone()) },
+            rows.push(json!({ "device": { "id": id, "name": p.name_of(it.id), "room": p.room_of(*id).map(|r| r.name.clone()) },
                 "connection": c }));
         }
         let _ = info;

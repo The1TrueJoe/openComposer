@@ -7,6 +7,7 @@ import { PackageSearch, Plus, Radar } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, errText, type Announcement, type DriverDoc } from "../../api";
 import { DataTable } from "../../components/DataTable";
+import { WithDetail } from "../../components/Panes";
 import { Tip } from "../../components/Dialogs";
 import { Spinner } from "../../components/controls";
 import { DriverIcon } from "../../components/icons";
@@ -28,6 +29,8 @@ interface Row {
   d: Unidentified;
   /** What the device is, from its SDDP type: "television", "av_gen"… */
   type: string;
+  /** What to call it: make and model when it says, else its host name, else its type. */
+  name: string;
   file: string | null;
   where: Where | "unknown" | null;
   target: AddTarget | null;
@@ -101,51 +104,29 @@ export function Discovered({ shell, local, add, onFind }: {
         if (doc) target = { filename: doc.filename, name: doc.name, manufacturer: doc.manufacturer, model: doc.model };
       }
     }
-    return { d, type: typeWord(d.device_type), file: target?.filename ?? named, where, target };
+    const type = typeWord(d.device_type);
+    const name = [d.manufacturer, d.model].filter(Boolean).join(" ") || d.host || target?.name || type;
+    return { d, type, name, file: target?.filename ?? named, where, target };
   }), [found, local, online]);
 
   const why = shell.writable ? undefined : `${shell.director?.name ?? "This Director"} is read-only`;
   const addRow = (r: Row) => { if (r.target && !why) void add(r.target, { identify: r.d.identity, at: r.d.address }); };
 
   const columns = useMemo(() => [
-    col.accessor("type", {
-      header: "Type", meta: { width: "22%", hideBelow: 470 },
+    col.accessor("name", {
+      header: "Device",
       cell: (c) => {
         const r = c.row.original;
         const seen = r.d.seenBy.length === 2 ? "Director and this computer" : r.d.seenBy[0] === "director" ? "Director (not this computer's scan)" : "this computer's SDDP scan";
         return (
-          <Tip text={<>{r.d.device_type}<br />Seen by {seen}</>}>
-            <span className="row nowrap ellip"><DriverIcon driver={r.file} proxy={r.d.device_type} size={15} /><span className="ellip cap">{c.getValue()}</span></span>
+          <Tip text={<>{r.d.device_type} · {r.d.address}<br />Seen by {seen}</>}>
+            <span className="row nowrap ellip">
+              <DriverIcon driver={r.file} proxy={r.d.device_type} size={15} />
+              <span className="ellip">{c.getValue()}</span>
+              {c.getValue() !== r.type && <span className="dim small cap ellip">{r.type}</span>}
+            </span>
           </Tip>
         );
-      },
-    }),
-    col.accessor((r) => r.d.manufacturer, { id: "mfr", header: "Manufacturer", meta: { width: "22%", hideBelow: 400 }, cell: (c) => <span className="ellip">{c.getValue() || "—"}</span> }),
-    col.accessor((r) => r.d.model, {
-      id: "model", header: "Model",
-      cell: (c) => {
-        const r = c.row.original;
-        // Narrow pane: the type and maker columns are hidden, so this one says what it is.
-        const narrow = !c.table.getColumn("type")?.getIsVisible();
-        const text = narrow ? [r.d.manufacturer, r.d.model].filter(Boolean).join(" ") || r.type : c.getValue() || "—";
-        return (
-          <span className="row nowrap ellip">
-            {narrow && <DriverIcon driver={r.file} proxy={r.d.device_type} size={15} />}
-            <span className="ellip" title={`${text} · ${r.d.device_type}`}>{text}</span>
-          </span>
-        );
-      },
-    }),
-    col.accessor((r) => r.d.address, {
-      id: "address", header: "Address", meta: { width: 104, className: "mono" },
-      sortingFn: (a, b) => a.original.d.address.localeCompare(b.original.d.address, undefined, { numeric: true }),
-    }),
-    col.accessor((r) => r.where ?? "", {
-      id: "driver", header: "Driver", meta: { width: 92 },
-      cell: (c) => {
-        const r = c.row.original;
-        if (!r.where) return <span className="dim small"><Spinner />checking</span>;
-        return <Tip text={r.file ?? undefined}><span><Avail where={r.where} /></span></Tip>;
       },
     }),
     col.display({
@@ -159,6 +140,7 @@ export function Discovered({ shell, local, add, onFind }: {
             </Tip>
           );
         }
+        if (!r.where) return <Tip text="Looking for a driver"><span className="dim"><Spinner /></span></Tip>;
         if (r.where === "unknown") {
           return <Tip text="Find a driver"><button className="icon-btn" aria-label="Find driver" onClick={() => onFind(r.d.device_type)}><PackageSearch size={14} strokeWidth={1.8} /></button></Tip>;
         }
@@ -167,8 +149,30 @@ export function Discovered({ shell, local, add, onFind }: {
     }),
   ], [why, onFind, add]);
 
+  const detail = (() => {
+    const r = rows.find((x) => x.d.address === picked);
+    if (!r) return null;
+    return (
+      <div className="drv-detail">
+        <div className="drv-facts">
+          <span className="k">Type</span><span className="mono">{r.d.device_type}</span>
+          <span className="k">Address</span><span className="mono">{r.d.address}</span>
+          {r.d.host && <><span className="k">Host</span><span className="mono">{r.d.host}</span></>}
+          <span className="k">Driver</span>
+          <span className="row nowrap">{r.file ? <code>{r.file}</code> : <span className="dim">none found</span>}{r.where && <Avail where={r.where} />}</span>
+        </div>
+        <div className="row">
+          {r.target && <Tip text={why}><span><button className="act small primary" disabled={!!why} onClick={() => addRow(r)}><Plus size={13} strokeWidth={1.8} />Add to room…</button></span></Tip>}
+          {r.where !== "controller" && r.where !== "library" && (
+            <button className="act small" onClick={() => onFind(r.d.device_type)}><PackageSearch size={13} strokeWidth={1.8} />Find driver</button>
+          )}
+        </div>
+      </div>
+    );
+  })();
+
   return (
-    <>
+    <WithDetail id="discovered" detail={detail}>
       <div className="filters">
         <button className="act small" onClick={() => void rescan()} disabled={scanning}>
           {scanning ? <Spinner /> : <Radar size={13} strokeWidth={1.8} />}{scanning ? "Scanning…" : "Rescan"}
@@ -180,29 +184,10 @@ export function Discovered({ shell, local, add, onFind }: {
       {!net.data && !scan && !net.error
         ? <div className="loading"><Spinner size="lg" /><span>Listening for devices…</span></div>
         : (
-          <DataTable data={rows} columns={columns} rowId={(r) => r.d.address} label="Discovered devices" sort={[{ id: "address", desc: false }]}
+          <DataTable data={rows} columns={columns} rowId={(r) => r.d.address} label="Discovered devices" sort={[{ id: "name", desc: false }]}
                      selected={picked} onSelect={(r) => setPicked(r.d.address)} onActivate={addRow}
                      empty={scanning ? <span className="dim"><Spinner />Listening for devices…</span> : <p className="empty">Everything on the network is in the project.</p>} />
         )}
-      {(() => {
-        const r = rows.find((x) => x.d.address === picked);
-        if (!r) return null;
-        return (
-          <div className="drv-detail">
-            <div className="drv-facts">
-              <span className="k">Type</span><span className="mono">{r.d.device_type}</span>
-              {r.d.host && <><span className="k">Host</span><span className="mono">{r.d.host}</span></>}
-              <span className="k">Driver</span>{r.file ? <code>{r.file}</code> : <span className="dim">none found</span>}
-            </div>
-            <div className="row">
-              {r.target && <Tip text={why}><span><button className="act small primary" disabled={!!why} onClick={() => addRow(r)}><Plus size={13} strokeWidth={1.8} />Add to room…</button></span></Tip>}
-              {r.where !== "controller" && r.where !== "library" && (
-                <button className="act small" onClick={() => onFind(r.d.device_type)}><PackageSearch size={13} strokeWidth={1.8} />Find driver</button>
-              )}
-            </div>
-          </div>
-        );
-      })()}
-    </>
+    </WithDetail>
   );
 }

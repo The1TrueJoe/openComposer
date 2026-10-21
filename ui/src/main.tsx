@@ -9,11 +9,13 @@ import "./styles/panes.css";
 import "./styles/diff.css";
 import "./styles/approvals.css";
 import "./styles/design.css";
+import "./styles/programming.css";
 import "./styles/tables.css";
 import "./styles/network.css";
 import "./styles/agent.css";
 import "./styles/settings.css";
 import "./styles/connect.css";
+import "./styles/control.css";
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>

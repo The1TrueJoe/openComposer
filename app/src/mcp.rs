@@ -164,8 +164,8 @@ impl OpenComposerMcp {
         self.run("director_read", s, actions::director_read(&self.app, a)).await
     }
 
-    #[tool(description = "Change the project. Give an ordered list of ops (add_device, add_room, remove_item, rename_item, \
-        move_item, add_connection, remove_connection, add_network_binding, remove_network_binding, set_property, run_action, add_code, remove_code). For add_code take the event id from the device's events and the command from the target's commands (both in get_item). The user sees a \
+    #[tool(description = "Change the project. Give an ordered list of ops (add_device, add_room, add_location (site/building/floor), remove_item, rename_item, \
+        move_item, add_connection, remove_connection, add_network_binding, remove_network_binding, set_property, run_action, add_code, remove_code, add_schedule_entry, modify_schedule_entry, remove_schedule_entry). For add_code take the event id from the device's events and the command from the target's commands (both in get_item). The user sees a \
         project diff and approves or declines; this call waits for that and returns what happened, including new item ids.",
         annotations(read_only_hint = false, destructive_hint = true))]
     async fn propose_changes(&self, Parameters(a): Parameters<ProposeArgs>) -> Result<CallToolResult, McpError> {
@@ -227,6 +227,15 @@ impl OpenComposerMcp {
         annotations(read_only_hint = false, destructive_hint = false))]
     async fn ui_show(&self, Parameters(a): Parameters<UiShowArgs>) -> Result<CallToolResult, McpError> {
         self.run("ui_show", format!("{:?} {:?} {:?}", a.view, a.item, a.tab), async { actions::ui_show(&self.app, a) }).await
+    }
+
+    #[tool(description = "What Composer's own editor shows for a built-in agent, read live: Scheduler events \
+        (time, repeat, next run, the programming under each), Advanced Lighting scenes with their lights, \
+        announcements, Wake/Sleep rooms, push/email notification templates. Change Scheduler events with \
+        propose_changes (add_schedule_entry, modify_schedule_entry, remove_schedule_entry).",
+        annotations(read_only_hint = true))]
+    async fn agent_view(&self, Parameters(a): Parameters<ItemArgs>) -> Result<CallToolResult, McpError> {
+        self.run("agent_view", format!("#{}", a.id), actions::agent_view(&self.app, a)).await
     }
 
     #[tool(description = "A device's variables right now (power, level, input…): its live state.",

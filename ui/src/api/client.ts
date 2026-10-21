@@ -2,7 +2,7 @@ import type {
   Activity, Announcement, AppStatus, Approval, BackupInfo, ConnectionRow, ConversationInfo, Diff,
   DirectorInfo, DriverDoc, Events, ItemDetail, McpStatus, NetworkView, Op, Outcome, Overview,
   ProgrammingEvent, Provider, ProviderStatus, SavedDirector, AccessMode, TreeNode, ZigbeeQuery, BackupResult,
-  AddDriverArgs, ControllerDriver, LibraryDriver, UiContext, CommandParam, DeviceState, Effort, AuthRequest, McpGrant, DriverTab,
+  AddDriverArgs, ControllerDriver, LibraryDriver, UiContext, CommandParam, DeviceState, Effort, AuthRequest, McpGrant, DriverTab, AgentView,
 } from "./types";
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -122,6 +122,8 @@ export const api = {
   driverIcons: (filenames?: string[]) => action<{ icons: Record<string, string> }>("driver_icons", { filenames }),
   /** The driver's own web pages (its `<tabs>`), as URLs openComposer serves. */
   driverTabs: (device: number) => action<{ tabs: DriverTab[] }>("driver_tabs", { device }),
+  /** What Composer's own editor for a built-in agent shows (Scheduler, Advanced Lighting…). */
+  agentView: (id: number) => action<AgentView>("agent_view", { id }),
   /** A device's variables right now (power, level, input…). */
   deviceState: (device: number) => action<DeviceState>("device_state", { device }),
   /** Send a command now — the user's own click, so no approval card; refused on read-only Directors. */

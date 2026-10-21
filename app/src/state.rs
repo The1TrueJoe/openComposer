@@ -334,14 +334,24 @@ impl Session {
         Ok(s)
     }
 
-    /// Driver definitions change only when drivers are added or updated.
+    /// Driver definitions change only when drivers are added or updated. The exception is
+    /// the Scheduler, whose events are its entries: those are taken from the latest snapshot
+    /// (`GetItems` keeps a stale copy of them until Director restarts).
     pub async fn catalog(&self, refresh: bool) -> AppResult<Arc<Catalog>> {
-        if !refresh {
-            if let Some(c) = self.catalog.read().await.as_ref() {
-                return Ok(c.clone());
+        let cached = if refresh { None } else { self.catalog.read().await.clone() };
+        let c = match cached {
+            Some(c) => c,
+            None => Arc::new(self.director.catalog().await?),
+        };
+        let snap = self.snapshot.read().await.as_ref().map(|(_, s)| s.clone());
+        let c = match snap {
+            Some(s) if !c.has_schedule_events(&s.project) => {
+                let mut fresh = (*c).clone();
+                fresh.set_schedule_events(&s.project);
+                Arc::new(fresh)
             }
-        }
-        let c = Arc::new(self.director.catalog().await?);
+            _ => c,
+        };
         *self.catalog.write().await = Some(c.clone());
         Ok(c)
     }

@@ -281,6 +281,7 @@ pub async fn action(app: S<'_>, name: String, args: Option<Value>) -> R<Value> {
         "send_command" => actions::send_command(app, req(a)?, UI_SOURCE).await,
         "device_state" => actions::device_state(app, req(a)?).await,
         "driver_tabs" => actions::driver_tabs(app, req(a)?).await,
+        "agent_view" => actions::agent_view(app, req(a)?).await,
         other => return Err(format!("unknown action {other}")),
     };
     if matches!(name.as_str(), "propose_changes" | "load_backup" | "backup_project" | "install_driver" | "add_driver" | "import_driver" | "send_command") {

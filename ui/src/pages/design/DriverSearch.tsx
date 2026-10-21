@@ -7,6 +7,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../../api";
 import { DataTable } from "../../components/DataTable";
 import { Tip } from "../../components/Dialogs";
+import { WithDetail } from "../../components/Panes";
 import { Spinner } from "../../components/controls";
 import { DriverIcon } from "../../components/icons";
 import type { Shell } from "../../lib/shell";
@@ -93,7 +94,7 @@ export function DriverSearch({ shell, local, controllerError, query, onQuery, pi
   ], []);
 
   return (
-    <>
+    <WithDetail id="driver-search" detail={sel && <Detail d={sel} shell={shell} room={room} add={add} onImport={onImport} />}>
       <div className="search-box">
         <Search size={13} strokeWidth={1.8} />
         {query.type && (
@@ -119,8 +120,7 @@ export function DriverSearch({ shell, local, controllerError, query, onQuery, pi
       {online.data && online.data.total > online.data.drivers.length && (
         <p className="hint pad-t dim small">Showing {online.data.drivers.length} of {online.data.total} online matches — narrow the search to see others.</p>
       )}
-      {sel && <Detail d={sel} shell={shell} room={room} add={add} onImport={onImport} />}
-    </>
+    </WithDetail>
   );
 }
 

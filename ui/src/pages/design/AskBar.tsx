@@ -7,6 +7,7 @@ import {
 } from "../../components/AgentControls";
 import { ApprovalCard } from "../../components/ApprovalCard";
 import { Tip } from "../../components/Dialogs";
+import { EdgeGrip, useStoredSize } from "../../components/Panes";
 import { Spinner } from "../../components/controls";
 import { Transcript } from "../../components/Transcript";
 import { AGENT_SOURCE, PROVIDER_NAMES, approvalFor, chatTitle, proposes, useAgentPrefs, withContext } from "../../lib/agent";
@@ -162,12 +163,16 @@ export function AskBar({ shell, focus, project }: { shell: Shell; focus: FocusIt
   };
 
   const stop = () => { if (conv) api.agentStop(conv.id).catch((e) => toast.error(errText(e))); };
+  // The panel grows with the conversation until you drag its top edge; from then on it keeps the
+  // height you gave it, still clear of the page head on a short window.
+  const [tall, setTall, sized] = useStoredSize("ask-panel", 520, 160, 1200);
 
   return (
     <div ref={drop.ref} className={cx("ask", drop.over && "drop-over")} {...drop.handlers}
          onKeyDown={(e) => { if (e.key === "Escape" && open) { e.stopPropagation(); setOpen(false); } }}>
       {open && (
-        <div className="ask-panel" role="region" aria-label="Design assistant">
+        <div className="ask-panel" role="region" aria-label="Design assistant" style={sized ? { height: `min(${tall}px, calc(100vh - 220px))`, maxHeight: "none" } : undefined}>
+          <EdgeGrip edge="top" size={tall} onSize={setTall} label="Resize the assistant" min={160} max={1200} />
           <div className="ask-head">
             <Sparkles size={14} strokeWidth={1.8} className="accent" />
             <b>Design assistant</b>

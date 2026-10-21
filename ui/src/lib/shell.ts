@@ -48,4 +48,14 @@ export interface Shell {
   /** The conversation the Agent tab should show next (set by "Open in Agent tab"). */
   chat: string | null;
   openChat: (id: string) => void;
+  /** The event the Programming page shows (set by clicking an event elsewhere). */
+  programFocus: ProgramFocus | null;
+  /** Open Programming on one device's event. */
+  program: (f: ProgramFocus) => void;
+}
+
+/** One event to program: `device` owns it (a proxy, for most devices' events). */
+export interface ProgramFocus {
+  device: number;
+  event: number;
 }

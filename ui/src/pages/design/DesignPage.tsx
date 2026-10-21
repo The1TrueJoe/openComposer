@@ -52,7 +52,8 @@ export function DesignPage({ shell }: { shell: Shell }) {
   const actions: ItemActions = useMemo(() => ({
     rename: async (id, name) => {
       const to = await ask({ title: `Rename “${name}”`, initial: name, confirmLabel: "Propose rename" });
-      if (to && to !== name) await shell.propose([{ op: "rename_item", id, name: to }]);
+      // A device's name lives on its proxy when it has just one.
+      if (to && to !== name) await shell.propose([{ op: "rename_item", id: idx.get(id)?.node.proxy ?? id, name: to }]);
     },
     remove: async (id, name, kind) => {
       const inside = countBelow(idx.get(id)?.node);

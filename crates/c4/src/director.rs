@@ -94,6 +94,8 @@ pub struct DeviceInfo {
     pub icon: Option<String>,
     /// Web tabs the driver declares (`<tabs><tab name file/>`): pages in its www folder.
     pub tabs: Vec<DriverTab>,
+    /// `<capabilities>` as declared, e.g. `supports_color` = `True`, `dimmer` = `True`.
+    pub capabilities: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -111,9 +113,56 @@ pub struct Catalog {
     /// driver's full definition in `AddItem`).
     #[serde(skip)]
     pub room_template: Option<String>,
+    /// The same for sites (2), buildings (3) and floors (4): their `<itemdata>` only.
+    #[serde(skip)]
+    pub location_templates: BTreeMap<u32, String>,
+}
+
+/// `template` with its `<itemdata><tag>` replaced by (or given) a new one, in the form
+/// Composer uses: a v4 UUID with underscores, e.g. `18132870_8761_424b_9559_cb6bc5f2b305`.
+fn with_fresh_tag(template: &str) -> String {
+    use rand_core::{OsRng, RngCore};
+    let mut b = [0u8; 16];
+    OsRng.fill_bytes(&mut b);
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    let tag = format!("<tag>{}_{}_{}_{}_{}</tag>", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..]);
+    match (template.find("<tag>"), template.find("</tag>")) {
+        (Some(a), Some(z)) if a < z => format!("{}{tag}{}", &template[..a], &template[z + "</tag>".len()..]),
+        _ => template.replacen("</itemdata>", &format!("{tag}</itemdata>"), 1).replacen("<itemdata />", &format!("<itemdata>{tag}</itemdata>"), 1),
+    }
 }
 
 impl Catalog {
+    /// The definition Director wants in `AddItem` for a new location, copied from one that exists.
+    pub fn template_for(&self, op: &Op) -> Option<&str> {
+        match op {
+            Op::AddRoom { .. } => self.room_template.as_deref(),
+            Op::AddLocation { kind, .. } => self.location_templates.get(&kind.item_kind().code()).map(String::as_str),
+            _ => None,
+        }
+    }
+
+    /// Agents declare no events; the Scheduler's are its entries (Composer's plugin reports
+    /// them the same way), so programming can name and check them. They come from a
+    /// snapshot, which has them current.
+    pub fn set_schedule_events(&mut self, p: &Project) {
+        for (agent, entries) in &p.schedules {
+            let info = self.devices.entry(*agent).or_insert_with(|| DeviceInfo { id: *agent, ..Default::default() });
+            info.events = entries.iter().map(|e| (e.id, e.spec.name.clone())).collect();
+        }
+    }
+
+    /// Whether [`Self::set_schedule_events`] would change nothing.
+    pub fn has_schedule_events(&self, p: &Project) -> bool {
+        p.schedules.iter().all(|(agent, entries)| {
+            self.devices.get(agent).is_some_and(|d| {
+                d.events.len() == entries.len() && entries.iter().all(|e| d.events.get(&e.id) == Some(&e.spec.name))
+            })
+        })
+    }
+
     pub fn names(&self) -> Names {
         let mut n = Names::default();
         for (id, d) in &self.devices {
@@ -209,6 +258,20 @@ impl Director {
         let doc = r.doc()?;
         let mut cat = Catalog::default();
         for item in doc.descendants().filter(|n| n.has_tag_name("item")) {
+            if let Some(kind @ (2 | 3 | 4)) = child_u32(item, "type") {
+                if !cat.location_templates.contains_key(&kind) {
+                    // A fresh tag: Composer gives every location its own.
+                    let itemdata: String = child(item, "itemdata")
+                        .map(|n| {
+                            n.children()
+                                .filter(|c| c.is_element() && !c.has_tag_name("tag"))
+                                .map(|c| r.raw[c.range()].to_string())
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    cat.location_templates.insert(kind, format!("<item><itemdata>{itemdata}</itemdata></item>"));
+                }
+            }
             let (Some(id), Some(dd)) = (child_u32(item, "id"), child(item, "devicedata")) else { continue };
             let t = |n: &str| child_text(dd, n).unwrap_or_default().to_string();
             let mut info = DeviceInfo {
@@ -275,6 +338,13 @@ impl Director {
                 .and_then(|n| n.text())
                 .map(|t| t.trim().to_string())
                 .filter(|t| !t.is_empty());
+            if let Some(caps) = child(dd, "capabilities") {
+                info.capabilities = caps
+                    .children()
+                    .filter(|c| c.is_element())
+                    .map(|c| (c.tag_name().name().to_string(), c.text().unwrap_or_default().trim().to_string()))
+                    .collect();
+            }
             info.tabs = dd
                 .descendants()
                 .filter(|n| n.has_tag_name("tab"))
@@ -364,15 +434,36 @@ impl Director {
         Ok(to_json(doc.root_element()))
     }
 
+    /// Ask an agent for its data the way Composer's agent editors do (`SendToDevice` with a
+    /// `GET_…` devicecommand, answered synchronously); returns the reply's XML. Only reads
+    /// are sent: anything else is a change and goes through an [`Op`].
+    pub async fn agent_read(&self, agent: u32, command: &str, params: &[(&str, &str, &str)]) -> Result<String> {
+        if !crate::agents::is_read_command(command) {
+            return Err(DirectorError::Other(format!("{command} is not a read (only GET_*/IS_* agent commands are sent here)")));
+        }
+        let data = crate::agents::device_command(command, params);
+        let r = self.conn.call(Call::new("SendToDevice").num("iddevice", agent).xml("data", data)).await?;
+        Ok(r.body().to_string())
+    }
+
     /// Perform one op. Callers are responsible for approval; this only executes.
+    /// `template` is `Catalog::template_for(op)`: the item definition a new location copies.
     pub async fn apply(&self, op: &Op, room_template: Option<&str>) -> Result<Applied> {
         if matches!(op, Op::AddRoom { .. }) && room_template.is_none() {
             return Err(DirectorError::Other(
                 "adding a room needs an existing room to copy its definition from".into(),
             ));
         }
+        if let (Op::AddLocation { kind, .. }, None) = (op, room_template) {
+            return Err(DirectorError::Other(format!(
+                "adding a {} needs an existing one in the project to copy its definition from",
+                kind.item_kind().label()
+            )));
+        }
+        // Every location has its own tag; one copied from the template would be shared.
+        let fresh = room_template.map(with_fresh_tag);
         let mut applied = Applied::default();
-        for call in op.calls(room_template) {
+        for call in op.calls(fresh.as_deref()) {
             let r = self.conn.call(call).await?;
             let doc = r.doc()?;
             for n in doc.descendants() {
@@ -390,5 +481,21 @@ impl Director {
             }
         }
         Ok(applied)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::with_fresh_tag;
+
+    #[test]
+    fn fresh_tags() {
+        let room = "<item><itemdata><small_image>x</small_image><tag>old</tag></itemdata></item>";
+        let a = with_fresh_tag(room);
+        assert!(!a.contains("<tag>old</tag>") && a.contains("<small_image>x</small_image><tag>"));
+        assert_ne!(a, with_fresh_tag(room));
+        let b = with_fresh_tag("<item><itemdata><small_image>x</small_image></itemdata></item>");
+        let tag = &b[b.find("<tag>").unwrap() + 5..b.find("</tag>").unwrap()];
+        assert_eq!(tag.split('_').map(str::len).collect::<Vec<_>>(), [8, 4, 4, 4, 12]);
     }
 }

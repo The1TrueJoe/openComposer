@@ -63,6 +63,11 @@ impl ItemKind {
             Self::Other(n) => n,
         }
     }
+    /// `label` for use in error messages that need a `&'static str`.
+    pub fn label_static(self) -> &'static str {
+        self.label()
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             Self::Project => "project",
@@ -136,6 +141,27 @@ pub struct Variable {
 }
 
 impl CodeItem {
+    /// The device command this line sends and its static parameters (what `AddCode` takes),
+    /// or `None` for a line that isn't a plain device command.
+    pub fn command(&self) -> Option<(String, Vec<crate::ops::CodeParam>)> {
+        let doc = roxmltree::Document::parse(&self.cmdcond).ok()?;
+        let cmd = doc.descendants().find(|n| n.has_tag_name("devicecommand"))?;
+        let name = child_text(cmd, "command")?.to_string();
+        let params = cmd
+            .descendants()
+            .filter(|n| n.has_tag_name("param"))
+            .map(|n| {
+                let value = child(n, "value");
+                crate::ops::CodeParam {
+                    name: child_text(n, "name").unwrap_or_default().to_string(),
+                    r#type: value.and_then(|v| v.attribute("type")).unwrap_or("STRING").to_string(),
+                    value: value.and_then(|v| child_text(v, "static")).unwrap_or_default().to_string(),
+                }
+            })
+            .collect();
+        Some((name, params))
+    }
+
     /// The line as Composer shows it: `NAME` replaced by the device it acts on.
     pub fn text(&self, p: &Project) -> String {
         if self.display.contains("NAME") { self.display.replace("NAME", &p.name_of(self.device)) } else { self.display.clone() }
@@ -168,6 +194,10 @@ pub struct Project {
     pub programming: BTreeMap<String, Vec<CodeItem>>,
     /// Director's next-id counter (`iditemcurrent`).
     pub next_item_id: u32,
+    /// Scheduler agent id → its scheduled events, from the agent's stored state. Each entry
+    /// id is also an event id of the agent in `programming`.
+    #[serde(default)]
+    pub schedules: BTreeMap<u32, Vec<crate::agents::ScheduleEntry>>,
 }
 
 /// Programming is keyed `"device:event"` so the map serialises as a JSON object.
@@ -286,6 +316,9 @@ impl Project {
             properties: child_text(node, "state").map(parse_persisted_properties).unwrap_or_default(),
         };
         self.items.insert(id, item);
+        if let Some(entries) = crate::agents::schedule_from_item(node) {
+            self.schedules.insert(id, entries);
+        }
         if let Some(p) = parent.and_then(|p| self.items.get_mut(&p)) {
             p.children.push(id);
         }
@@ -300,8 +333,28 @@ impl Project {
         self.items.get(&id)
     }
 
+    /// The name people know an item by. A device with a single proxy is named on its proxy:
+    /// the device keeps the driver's own name ("Philips Hue Light (OS 3.3.0+)") and the proxy
+    /// holds the one the dealer gave it ("Left Lamp"), which is what Composer shows.
     pub fn name_of(&self, id: u32) -> String {
-        self.items.get(&id).map(|i| i.name.clone()).unwrap_or_else(|| format!("#{id}"))
+        match self.items.get(&id) {
+            Some(i) => self.sole_proxy(id).unwrap_or(i).name.clone(),
+            None => format!("#{id}"),
+        }
+    }
+
+    /// A device's only proxy, when it has exactly one. Renaming such a device means renaming
+    /// this, and the tree folds it into the device.
+    pub fn sole_proxy(&self, id: u32) -> Option<&Item> {
+        let it = self.items.get(&id)?;
+        if it.kind != ItemKind::Device {
+            return None;
+        }
+        let mut proxies = it.children.iter().filter_map(|c| self.items.get(c)).filter(|c| c.kind == ItemKind::Proxy);
+        match (proxies.next(), proxies.next()) {
+            (Some(p), None) => Some(p),
+            _ => None,
+        }
     }
 
     /// Ancestors from the top (excluding the project root), e.g. `["Home", "House", "Main", "Living"]`.
@@ -446,13 +499,16 @@ mod tests {
         assert_eq!(p.name, "Sample House");
         let tv = p.items.values().find(|i| i.name == "Living TV").unwrap();
         assert_eq!(tv.kind, ItemKind::Device);
-        assert_eq!(p.path(tv.id), "Home › House › Main › Living › Living TV");
+        // Named, like Composer does, by its only proxy.
+        assert_eq!(p.sole_proxy(tv.id).map(|x| x.id), Some(22));
+        assert_eq!(p.path(tv.id), "Home › House › Main › Living › TV");
         assert_eq!(p.room_of(tv.id).unwrap().name, "Living");
         assert_eq!(tv.properties.get("IP Address").map(String::as_str), Some("192.168.1.50"));
         assert!(p.bindings.iter().any(|b| b.consumer_device == tv.id && b.classes == ["HDMI"]));
         assert_eq!(p.network_bindings.len(), 1);
         let code = &p.programming[&event_key(20, 1)];
         assert_eq!(code[0].display, "Turn on Living TV");
+        assert_eq!(code[0].command().map(|(c, _)| c), Some("ON".into()));
         assert_eq!(code[0].children.len(), 1);
     }
 }

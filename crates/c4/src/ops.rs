@@ -18,6 +18,8 @@ pub enum Op {
     /// Add a driver to a room. The driver file must already be on the controller.
     AddDevice { room: u32, name: String, driver: String },
     AddRoom { floor: u32, name: String },
+    /// Add a site (under the project), building (under a site) or floor (under a building).
+    AddLocation { parent: u32, kind: LocationKind, name: String },
     RemoveItem { id: u32 },
     RenameItem { id: u32, name: String },
     MoveItem { id: u32, parent: u32, before: Option<u32> },
@@ -66,6 +68,22 @@ pub enum Op {
     /// Press one of a driver's Actions (Composer's Actions tab). Changes nothing in the
     /// project, but can do anything on the device, so it is approved like a write.
     RunAction { device: u32, command: String },
+    /// Add an event to the Scheduler agent (Composer's Scheduler "Add"). Director picks its id,
+    /// which is also its event id for programming.
+    AddScheduleEntry { agent: u32, entry: crate::agents::ScheduleSpec },
+    /// Replace a Scheduler event's settings (Composer's "Edit Entry"). `creator` and
+    /// `category` must be the entry's current ones (`agent_view` lists them; usually 0 and "").
+    ModifyScheduleEntry {
+        agent: u32,
+        id: u32,
+        entry: crate::agents::ScheduleSpec,
+        #[serde(default)]
+        creator: u32,
+        #[serde(default)]
+        category: String,
+    },
+    /// Remove a Scheduler event, and the programming under it.
+    RemoveScheduleEntry { agent: u32, id: u32 },
     /// Put a driver file on the controller (via its web API, not c4soap). The project is
     /// unchanged until a device uses it.
     InstallDriver {
@@ -83,6 +101,32 @@ pub enum Op {
         #[schemars(skip)]
         xml: String,
     },
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum LocationKind {
+    Site,
+    Building,
+    Floor,
+}
+
+impl LocationKind {
+    pub fn item_kind(self) -> ItemKind {
+        match self {
+            Self::Site => ItemKind::Site,
+            Self::Building => ItemKind::Building,
+            Self::Floor => ItemKind::Floor,
+        }
+    }
+    /// Where this kind goes in the hierarchy.
+    pub fn parent_kind(self) -> ItemKind {
+        match self {
+            Self::Site => ItemKind::Project,
+            Self::Building => ItemKind::Site,
+            Self::Floor => ItemKind::Building,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, schemars::JsonSchema)]
@@ -118,6 +162,14 @@ pub enum OpError {
     NoNetworkBinding { device: String, binding: u32 },
     #[error("no programming line #{id} under that event")]
     NoSuchCode { id: u32 },
+    #[error("#{0} is not a Scheduler agent")]
+    NotScheduler(u32),
+    #[error("the Scheduler has no event #{0}")]
+    NoSuchScheduleEntry(u32),
+    #[error("scheduled event “{0}” is locked; Composer doesn't allow changing it either")]
+    ScheduleEntryLocked(String),
+    #[error("{0}")]
+    BadScheduleEntry(String),
     #[error("project to load does not parse: {0}")]
     BadProject(String),
 }
@@ -135,6 +187,7 @@ impl Op {
         match self {
             Op::AddDevice { room, name, driver } => format!("Add “{name}” ({driver}) to {}", n(*room)),
             Op::AddRoom { floor, name } => format!("Add room “{name}” to {}", n(*floor)),
+            Op::AddLocation { parent, kind, name } => format!("Add {} “{name}” to {}", kind.item_kind().label(), n(*parent)),
             Op::RemoveItem { id } => {
                 let k = p.item(*id).map(|i| i.kind.label()).unwrap_or("item");
                 format!("Remove {k} {}", n(*id))
@@ -168,6 +221,17 @@ impl Op {
                 format!("Add to {} programming: “{}”", n(*device), display.replace("NAME", &p.name_of(*target)))
             }
             Op::RemoveCode { device, id, .. } => format!("Remove programming line #{id} from {}", n(*device)),
+            Op::AddScheduleEntry { agent, entry } => {
+                format!("Add scheduled event “{}” to {}: {} at {}", entry.name, n(*agent), entry.repeat_text(), entry.time_text())
+            }
+            Op::ModifyScheduleEntry { agent, id, entry, .. } => {
+                let old = p.schedules.get(agent).and_then(|es| es.iter().find(|e| e.id == *id)).map(|e| e.spec.name.clone());
+                format!("Change scheduled event “{}” in {}", old.unwrap_or_else(|| entry.name.clone()), n(*agent))
+            }
+            Op::RemoveScheduleEntry { agent, id } => {
+                let old = p.schedules.get(agent).and_then(|es| es.iter().find(|e| e.id == *id)).map(|e| e.spec.name.clone());
+                format!("Remove scheduled event “{}” from {}", old.unwrap_or_else(|| format!("#{id}")), n(*agent))
+            }
             Op::InstallDriver { filename, source, bytes } => {
                 format!("Install driver file {filename} ({} KB) from {source}", bytes.len().div_ceil(1024))
             }
@@ -204,6 +268,21 @@ impl Op {
                     parent: Some(*floor),
                     children: vec![],
                     driver: Some("roomdevice.c4i".into()),
+                    properties: Default::default(),
+                });
+            }
+            Op::AddLocation { parent, kind, name } => {
+                let (want, label) = (kind.parent_kind(), kind.parent_kind().label());
+                expect_kind(p, *parent, &[want], kind.item_kind().label_static(), label)?;
+                non_empty(name)?;
+                let id = next_id(p);
+                insert(p, Item {
+                    id,
+                    name: name.clone(),
+                    kind: kind.item_kind(),
+                    parent: Some(*parent),
+                    children: vec![],
+                    driver: None,
                     properties: Default::default(),
                 });
             }
@@ -355,6 +434,48 @@ impl Op {
                     return Err(OpError::NoSuchCode { id: *id });
                 }
             }
+            Op::AddScheduleEntry { agent, entry } => {
+                let entries = schedule_of(p, *agent)?;
+                check_entry(entries, entry, None)?;
+                // Director numbers entries from a counter that never goes back; any unused
+                // id is as good for a preview (the diff matches added entries by name).
+                let id = entries.iter().map(|e| e.id).max().unwrap_or(0) + 1;
+                entries.push(crate::agents::ScheduleEntry {
+                    id,
+                    spec: entry.clone(),
+                    locked: false,
+                    hidden: false,
+                    creator: 0,
+                    category: String::new(),
+                    next: None,
+                });
+            }
+            Op::ModifyScheduleEntry { agent, id, entry, creator, category } => {
+                let entries = schedule_of(p, *agent)?;
+                check_entry(entries, entry, Some(*id))?;
+                let e = entries.iter_mut().find(|e| e.id == *id).ok_or(OpError::NoSuchScheduleEntry(*id))?;
+                if e.locked {
+                    return Err(OpError::ScheduleEntryLocked(e.spec.name.clone()));
+                }
+                // Another agent's entry (Update Manager's nightly check…) is found by its
+                // creator; writing it back without one would orphan it.
+                if (e.creator, e.category.as_str()) != (*creator, category.as_str()) {
+                    return Err(OpError::BadScheduleEntry(format!(
+                        "“{}” has creator {} and category “{}”; pass those unchanged",
+                        e.spec.name, e.creator, e.category
+                    )));
+                }
+                e.spec = entry.clone();
+            }
+            Op::RemoveScheduleEntry { agent, id } => {
+                let entries = schedule_of(p, *agent)?;
+                let pos = entries.iter().position(|e| e.id == *id).ok_or(OpError::NoSuchScheduleEntry(*id))?;
+                if entries[pos].locked {
+                    return Err(OpError::ScheduleEntryLocked(entries[pos].spec.name.clone()));
+                }
+                entries.remove(pos);
+                p.programming.remove(&crate::model::event_key(*agent, *id));
+            }
             Op::InstallDriver { .. } => {}
             Op::LoadProject { xml, .. } => {
                 *p = Project::parse(xml).map_err(|e| OpError::BadProject(e.to_string()))?;
@@ -373,6 +494,13 @@ impl Op {
                 let param = if driver.to_ascii_lowercase().ends_with(".c4i") { "c4i_name" } else { "c4z_name" };
                 vec![Call::new("AddDevice").num("idparent", *room).str("name", name).str(param, driver)]
             }
+            Op::AddLocation { parent, kind, name } => vec![
+                Call::new("AddItem")
+                    .num("idparent", *parent)
+                    .str("name", name)
+                    .num("type", kind.item_kind().code())
+                    .xml("data", room_template.unwrap_or("<item><itemdata /></item>")),
+            ],
             Op::AddRoom { floor, name } => vec![
                 Call::new("AddItem")
                     .num("idparent", *floor)
@@ -458,6 +586,18 @@ impl Op {
                 );
                 vec![Call::new("SendToDevice").num("iddevice", *device).xml("data", cmd)]
             }
+            Op::AddScheduleEntry { agent, entry } => {
+                let cmd = crate::agents::device_command("ADD_ENTRY", &[("ENTRY_XML", "XML", &entry.to_xml(0, 0, "", false))]);
+                vec![Call::new("SendToDevice").num("iddevice", *agent).xml("data", cmd)]
+            }
+            Op::ModifyScheduleEntry { agent, id, entry, creator, category } => {
+                let cmd = crate::agents::device_command("MODIFY_ENTRY", &[("ENTRY_XML", "XML", &entry.to_xml(*id, *creator, category, false))]);
+                vec![Call::new("SendToDevice").num("iddevice", *agent).xml("data", cmd)]
+            }
+            Op::RemoveScheduleEntry { agent, id } => {
+                let cmd = crate::agents::device_command("DELETE_ENTRY", &[("EVENT_ID", "INT", &id.to_string())]);
+                vec![Call::new("SendToDevice").num("iddevice", *agent).xml("data", cmd)]
+            }
             Op::InstallDriver { .. } => vec![],
             Op::LoadProject { xml, .. } => {
                 let body = xml.trim_start();
@@ -503,6 +643,26 @@ fn expect_kind(p: &Project, id: u32, kinds: &[ItemKind], what: &'static str, exp
     } else {
         Err(OpError::WrongParent { what, expected, id, name: it.name.clone(), actual: with_article(it.kind.label()) })
     }
+}
+
+/// The entries of a Scheduler agent, or why `agent` isn't one.
+fn schedule_of(p: &mut Project, agent: u32) -> Result<&mut Vec<crate::agents::ScheduleEntry>, OpError> {
+    let it = p.item(agent).ok_or(OpError::NoSuchItem(agent))?;
+    let is_scheduler = it.driver.as_deref().and_then(crate::agents::AgentKind::from_driver) == Some(crate::agents::AgentKind::Scheduler);
+    if !is_scheduler {
+        return Err(OpError::NotScheduler(agent));
+    }
+    Ok(p.schedules.entry(agent).or_default())
+}
+
+/// Composer's "Edit Entry" checks, plus its rule that names are unique.
+fn check_entry(entries: &[crate::agents::ScheduleEntry], e: &crate::agents::ScheduleSpec, own: Option<u32>) -> Result<(), OpError> {
+    e.validate().map_err(OpError::BadScheduleEntry)?;
+    let taken = entries.iter().any(|x| Some(x.id) != own && x.spec.name.trim().eq_ignore_ascii_case(e.name.trim()));
+    if taken {
+        return Err(OpError::BadScheduleEntry(format!("the Scheduler already has an event named “{}”", e.name.trim())));
+    }
+    Ok(())
 }
 
 fn max_code_id(code: &[crate::model::CodeItem]) -> u32 {
@@ -611,6 +771,57 @@ mod tests {
         assert!(c4i[0].encode(false).contains(r#"<param name="c4i_name" type="string">tv_Vizio_SV421XVT.c4i</param>"#));
         let c4z = Op::AddDevice { room: 1, name: "AVR".into(), driver: "sony_strdn840.c4z".into() }.calls(None);
         assert!(c4z[0].encode(false).contains(r#"<param name="c4z_name" type="string">sony_strdn840.c4z</param>"#));
+    }
+
+    #[test]
+    fn scheduler_entries_add_change_and_remove() {
+        let mut before = sample();
+        before.items.insert(100100, Item {
+            id: 100100,
+            name: "Scheduler".into(),
+            kind: ItemKind::Agent,
+            parent: before.root,
+            children: vec![],
+            driver: Some("control4_agent_scheduler.c4i".into()),
+            properties: Default::default(),
+        });
+        let spec = |name: &str| crate::agents::ScheduleSpec {
+            name: name.into(),
+            enabled: true,
+            time_base: crate::agents::TimeBase::Sunset,
+            minutes: 0,
+            randomize_minutes: 0,
+            start_date: "2026-10-21".into(),
+            start_on: None,
+            repeat: crate::agents::Frequency::Daily,
+            every: 1,
+            days: vec![],
+            end_date: None,
+        };
+        let mut after = before.clone();
+        Op::AddScheduleEntry { agent: 100100, entry: spec("Porch") }.predict(&mut after).unwrap();
+        let d = diff(&before, &after, &Names::default(), DiffOptions::default());
+        let [Change::ScheduleAdded { name, when, .. }] = d.changes.as_slice() else { panic!("{:?}", d.changes) };
+        assert_eq!((name.as_str(), when.as_str()), ("Porch", "Every day at Sunset, from 2026-10-21"));
+        // Names are unique, as in Composer.
+        assert!(Op::AddScheduleEntry { agent: 100100, entry: spec("porch") }.predict(&mut after.clone()).is_err());
+        // Only Scheduler agents take entries.
+        assert!(matches!(Op::AddScheduleEntry { agent: 20, entry: spec("x") }.predict(&mut after.clone()), Err(OpError::NotScheduler(20))));
+
+        let before = after.clone();
+        let mut later = spec("Porch");
+        later.time_base = crate::agents::TimeBase::Clock;
+        later.minutes = 1110;
+        Op::ModifyScheduleEntry { agent: 100100, id: 1, entry: later, creator: 0, category: String::new() }.predict(&mut after).unwrap();
+        let d = diff(&before, &after, &Names::default(), DiffOptions::default());
+        let [Change::ScheduleChanged { field, from, to, .. }] = d.changes.as_slice() else { panic!("{:?}", d.changes) };
+        assert_eq!((field.as_str(), from.as_str(), to.as_str()), ("time", "Sunset", "6:30 PM"));
+
+        after.programming.insert(crate::model::event_key(100100, 1), sample().programming["20:1"].clone());
+        Op::RemoveScheduleEntry { agent: 100100, id: 1 }.predict(&mut after).unwrap();
+        assert!(after.schedules[&100100].is_empty() && !after.programming.contains_key("100100:1"), "its programming goes too");
+        let call = Op::RemoveScheduleEntry { agent: 100100, id: 7 }.calls(None)[0].encode(false);
+        assert!(call.contains("&lt;command&gt;DELETE_ENTRY") || call.contains("<command>DELETE_ENTRY"), "{call}");
     }
 
     #[test]

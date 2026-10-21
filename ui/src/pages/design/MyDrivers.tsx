@@ -6,6 +6,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronDown, ChevronRight, Folder, FolderOpen, Search } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Spinner } from "../../components/controls";
+import { WithDetail } from "../../components/Panes";
 import { DriverIcon } from "../../components/icons";
 import type { Shell } from "../../lib/shell";
 import { cx, toggleIn } from "../../lib/ui";
@@ -76,7 +77,7 @@ export function MyDrivers({ shell, local, controllerError, loading, picked, onPi
   };
 
   return (
-    <>
+    <WithDetail id="my-drivers" detail={sel && <Detail d={sel} shell={shell} room={room} add={add} />}>
       <div className="search-box">
         <Search size={13} strokeWidth={1.8} />
         <input placeholder="Filter my drivers…" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter my drivers" />
@@ -114,7 +115,6 @@ export function MyDrivers({ shell, local, controllerError, loading, picked, onPi
           })}
         </div>
       </div>
-      {sel && <Detail d={sel} shell={shell} room={room} add={add} />}
-    </>
+    </WithDetail>
   );
 }

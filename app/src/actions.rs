@@ -704,6 +704,15 @@ pub struct TabsArgs {
     pub device: u32,
 }
 
+/// What Composer's own editor for a built-in agent shows (Scheduler events, Advanced
+/// Lighting scenes, announcements, wake/sleep rooms, notification templates), read live
+/// from the agent. `view` is null for agents Composer shows with the generic tabs only.
+pub async fn agent_view(app: &Arc<App>, a: ItemArgs) -> AppResult<Value> {
+    let s = app.session(a.director.as_deref()).await?;
+    let (snap, cat) = (s.snapshot(false).await?, s.catalog(false).await?);
+    crate::agent_views::view(&s.director, &snap.project, &cat, a.id).await
+}
+
 /// The web tabs a device's driver declares, as URLs to open in the app (see `webui`).
 pub async fn driver_tabs(app: &Arc<App>, a: TabsArgs) -> AppResult<Value> {
     crate::webui::tabs(app, a.director.as_deref(), a.device).await

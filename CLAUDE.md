@@ -48,8 +48,9 @@ OPENCOMPOSER_DATA=/tmp/oc C4_CERT=… C4_KEY=… cargo run -p opencomposer --exa
   Not yet used against the real EA-1. Backups still lack mm.db / identity.db / images
   (served over SMB by the controller).
 - Programming: command lines can be added/removed (`add_code` / `remove_code`, checked
-  against the device's events and the target's commands). Conditionals, loops, variables
-  and reordering aren't done. Proxy event names (e.g. a light's PUSH) come from Control4's
+  against the device's events and the target's commands); a move is `remove_code` + `add_code`
+  of the same line (verified on the Virtual Director). Conditionals, loops and variables
+  aren't done. Proxy event names (e.g. a light's PUSH) come from Control4's
   built-in proxy definitions, which `GetItems` leaves unnamed. Z-Wave edits not captured.
 - Codex agent path is unverified (no Codex on the dev machine).
 - Identify (`add_network_binding`) after `add_device` is accepted by Director but didn't bind
@@ -65,3 +66,12 @@ OPENCOMPOSER_DATA=/tmp/oc C4_CERT=… C4_KEY=… cargo run -p opencomposer --exa
 - `.c4i` drivers are added with `c4i_name`, `.c4z` with `c4z_name`.
 - Discovery: controllers answer SDDP `*` or their exact type only; only the primary runs a
   Director (`/api/v1/status` says `"director":"connected"`, secondaries `"disabled"`).
+- A device with one proxy is named by the proxy (`Project::name_of` / `sole_proxy`): the device
+  keeps the driver's generic name, the proxy holds the dealer's.
+- New sites/buildings/floors/rooms copy an existing one's `<itemdata>` (`Catalog::template_for`)
+  with a fresh `<tag>`.
+- Agents' Composer editors are .NET plugins (`*.c4a.dll`) that talk `SendToDevice` with the
+  agent's own commands (`crates/c4/src/agents.rs`). Scheduler is read/write; Advanced
+  Lighting, Announcements, Wake/Sleep, Push/Email notification are read-only so far.
+- The light colour wheel sends `SET_COLOR_TARGET` with light_v2's `LIGHT_COLOR_TARGET_*`
+  params; not yet sent to a real light.

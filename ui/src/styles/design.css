@@ -45,9 +45,6 @@
 .event { border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: var(--tint); }
 .event.bare { opacity: .7; }
 .event-head { display: flex; align-items: center; gap: 7px; padding: 6px 10px; font-size: 12.5px; }
-.prog { padding: 4px 22px 40px; }
-.prog-group { scroll-margin-top: 8px; }
-.prog-group .event { margin-bottom: 8px; }
 
 /* Add devices: discovered devices and driver search (also the drop target for driver files) */
 .add-pane { position: relative; display: flex; flex-direction: column; flex: 1; min-height: 0; }
@@ -135,16 +132,73 @@
 .ask-chip svg { flex: none; }
 .ask-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-/* Connections tab: this item's connections on top, the picked one's possible other ends below. */
+/* Connector colours (components/icons.tsx `ConnIcon`, lib/connections.ts `classLook`). Tokens
+   here rather than in base.css because only the connection views draw them. They echo the real
+   plugs — yellow composite, R/G/B component, red/white stereo, orange coax, red optical, blue
+   VGA, purple IR — darkened in light so a 15px glyph holds 3:1 on white, lifted in dark. */
+:root {
+  --conn-hdmi: #3f4756; --conn-dvi: #5b6474; --conn-vga: #1d4ed8; --conn-composite: #b88a00; --conn-svideo: #4b5563;
+  --conn-coax: #d96200; --conn-optical: #d1242f; --conn-rf: #0277b6; --conn-app: #c0266d; --conn-ir: #8a35d6;
+  --conn-serial: #4d7c0f; --conn-relay: #b45309; --conn-zigbee: #15803d; --conn-zwave: #4338ca; --conn-usb: #475569;
+  --conn-speaker: #9a3412; --conn-stream: #b5179e; --conn-net: #0f766e;
+  --conn-red: #d92d2d; --conn-green: #1f9d4c; --conn-blue: #2563eb; --conn-white: #ffffff; --conn-white-line: #8d94a1;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --conn-hdmi: #c3c8d2; --conn-dvi: #9aa1ae; --conn-vga: #6ea8ff; --conn-composite: #ffd23f; --conn-svideo: #a3a9b6;
+    --conn-coax: #ff9a3c; --conn-optical: #ff6b6b; --conn-rf: #38bdf8; --conn-app: #f472b6; --conn-ir: #c084fc;
+    --conn-serial: #a3d65c; --conn-relay: #fbbf24; --conn-zigbee: #4ade80; --conn-zwave: #a5b4fc; --conn-usb: #a8b2c1;
+    --conn-speaker: #fdba74; --conn-stream: #e879f9; --conn-net: #2dd4bf;
+    --conn-red: #ff5c5c; --conn-green: #4fd18a; --conn-blue: #5b9bff; --conn-white: #eef0f4; --conn-white-line: #eef0f4;
+  }
+}
+.ct-hdmi { --c: var(--conn-hdmi); } .ct-dvi { --c: var(--conn-dvi); } .ct-vga { --c: var(--conn-vga); }
+.ct-composite { --c: var(--conn-composite); } .ct-component { --c: var(--conn-green); } .ct-stereo { --c: var(--conn-red); }
+.ct-svideo { --c: var(--conn-svideo); } .ct-coax { --c: var(--conn-coax); } .ct-optical { --c: var(--conn-optical); }
+.ct-rf { --c: var(--conn-rf); } .ct-app { --c: var(--conn-app); } .ct-ir { --c: var(--conn-ir); } .ct-serial { --c: var(--conn-serial); }
+.ct-relay, .ct-contact { --c: var(--conn-relay); } .ct-zigbee { --c: var(--conn-zigbee); } .ct-zwave { --c: var(--conn-zwave); }
+.ct-usb { --c: var(--conn-usb); } .ct-speaker { --c: var(--conn-speaker); } .ct-stream { --c: var(--conn-stream); }
+.ct-net { --c: var(--conn-net); } .ct-room { --c: var(--accent); } .ct-neutral { --c: var(--dim); }
+.conn-ic { flex: none; color: var(--c, var(--dim)); }
+/* The label stays in text colour (yellow text on white is unreadable); the icon and a wash of the
+   connector's colour carry the type. */
+.chip.conn { gap: 5px; padding: 1px 8px 1px 5px; color: var(--text-2); font-size: 11.5px; line-height: 17px;
+  background: color-mix(in srgb, var(--c) 10%, transparent); border: 1px solid color-mix(in srgb, var(--c) 28%, transparent); }
+.chip.conn.ct-component { background: linear-gradient(90deg, color-mix(in srgb, var(--conn-red) 10%, transparent),
+  color-mix(in srgb, var(--conn-green) 10%, transparent), color-mix(in srgb, var(--conn-blue) 10%, transparent)); }
+.chip.conn.ct-stereo { background: linear-gradient(90deg, color-mix(in srgb, var(--conn-red) 11%, transparent), color-mix(in srgb, var(--ink) 4%, transparent)); }
+.dt tr.sel .chip.conn { color: var(--sel-fg); }
+
+/* Connections tab: this item's connections on top, the picked one's possible other ends below,
+   split by a grip (components/Panes.tsx). */
 .conn-split { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.conn-split > .conn-top { flex: 0 1 auto; max-height: 42%; border-bottom: 1px solid var(--line); }
-.conn-ends { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.conn-split > .panes { flex: 1; }
+.conn-top { height: 100%; }
+.conn-ends { height: 100%; min-height: 0; display: flex; flex-direction: column; }
+
+/* Group rows: Inputs / Outputs, and under each the kind (Video, Audio, Control…). */
+.dt tr.cg td { height: 25px; background: var(--bar); cursor: pointer; font-size: 11px; font-weight: 600; color: var(--dim);
+  text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid var(--line); }
+.dt tr.cg:hover td { background: color-mix(in srgb, var(--ink) 6%, var(--bar)); color: var(--text); }
+.dt tr.cg.sub td { background: var(--hover-head); text-transform: none; letter-spacing: .01em; font-size: 11.5px; color: var(--text-2);
+  border-bottom-color: var(--divider-2); padding-left: 26px; }
+.dt tr.cg.sub:hover td { background: var(--hover-strong); }
+.cg-in { all: unset; display: inline-flex; align-items: center; gap: 6px; max-width: 100%; cursor: pointer; }
+.cg-in > svg:first-child { color: var(--dim); flex: none; }
+.cg-icons { display: inline-flex; align-items: center; gap: 3px; margin-left: 2px; }
+.cg-n { font-weight: 500; font-size: 10.5px; color: var(--dim); background: var(--fill); border-radius: 99px; padding: 0 6px; line-height: 16px;
+  letter-spacing: 0; }
+.dt tr.cg:focus-visible td { box-shadow: inset 0 0 0 1px var(--accent); }
+.dt tr.cg:focus-visible { outline: none; }
+/* Rows under a sub-group sit indented, so the grouping reads without the headers. */
+.dt.grouped tbody tr:not(.cg) td:first-child { padding-left: 34px; }
 .conn-filters { gap: 6px; padding: 6px 10px; background: var(--bar); flex-wrap: wrap; }
 .conn-filters .grow { flex: 1 0 0; }
 .conn-filters .select-trigger { min-width: 104px; padding: 2px 8px; font-size: 12px; }
 .conn-filters .search-box.inline { flex: 1; min-width: 130px; height: 26px; }
-.conn-ends-title { flex: 1 1 100%; font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
-.conn-ends-title b { color: var(--text); font-weight: 600; }
+.conn-ends-title { flex: 1 1 100%; display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--dim); white-space: nowrap; overflow: hidden; min-width: 0; }
+.conn-ends-title b { color: var(--text); font-weight: 600; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.conn-ends-cls { flex-wrap: nowrap; margin-left: 2px; }
 .conn-ends .dt-scroll { flex: 1; }
 
 /* A driver's own web page, full size. */
@@ -165,13 +219,12 @@
 .icon-btn:disabled { opacity: .4; cursor: not-allowed; }
 
 /* Locations */
-.loc-target { padding: 6px 10px; gap: 8px; flex-wrap: nowrap; }
-.loc-target .select-trigger { flex: 1; min-width: 0; padding: 2px 8px; font-size: 12px; }
+.loc-target { display: inline-flex; align-items: center; gap: 6px; min-width: 0; max-width: 60%; font-weight: 400; }
+.loc-target .select-trigger { min-width: 0; padding: 1px 8px; font-size: 12px; }
 .loc .tw-row { min-height: 25px; }
-.loc .tw-row.head { cursor: default; font-weight: 600; }
+.loc .tw-row.head { cursor: pointer; font-weight: 600; }
 .loc .tw-row.head:hover { background: none; }
-.loc-group.off .tw-row { opacity: .45; cursor: not-allowed; }
-.loc-group.off .tw-row:hover { background: none; }
+.loc-group + .loc-group { margin-top: 4px; }
 .loc-room:focus-visible { outline: none; box-shadow: inset 0 0 0 1px var(--accent); }
 .loc-add { opacity: 0; }
 .loc-room:hover .loc-add, .loc-room.sel .loc-add, .loc-add:focus-visible { opacity: 1; }
@@ -265,3 +318,10 @@
 /* A narrow inspector wraps its tabs rather than hiding the driver's own ones off the end. */
 .insp > .detail-tabs { flex-wrap: wrap; overflow: visible; }
 .insp > .detail-tabs button svg { color: var(--dim); }
+
+/* Inspector › Events: each one opens in Programming. */
+.link-event { cursor: pointer; }
+.link-event:hover { border-color: var(--accent); }
+.link-event:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent); }
+.link-event .event-go { color: var(--muted); opacity: 0; margin-left: 6px; }
+.link-event:hover .event-go, .link-event:focus-visible .event-go { opacity: 1; color: var(--accent); }

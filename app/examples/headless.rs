@@ -37,7 +37,10 @@ async fn main() -> anyhow::Result<()> {
     })?;
     mcp::restart(app.clone()).await;
     let cfg = app.config();
-    println!("MCP {} token {} webui-key {}", mcp::status().url, cfg.mcp.token, opencomposer::webui::key());
+    // The listening port, which is a free loopback one when the configured port is taken
+    // (e.g. by the installed app): `url` names the configured one.
+    let st = mcp::status();
+    println!("MCP http://127.0.0.1:{}/mcp token {} webui-key {}", st.port, cfg.mcp.token, opencomposer::webui::key());
 
     // Auto-approver for the writable (virtual) Director only.
     let a2 = app.clone();

@@ -1,0 +1,135 @@
+/* The Programming page (pages/programming/): Device Events on the left, the open event's script
+   in the middle, Actions on the right. Tokens only, so both themes follow base.css. */
+
+/* ---- layout pieces shared by the three panes ---- */
+.prog-fill { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.prog-fill > .panes { flex: 1; }
+.prog-stack { height: 100%; display: flex; flex-direction: column; min-height: 0; background: var(--side); }
+.prog-tabs { background: var(--side); }
+.prog-tabs .n { margin-left: 4px; }
+.prog-sub { flex: none; display: flex; align-items: center; gap: 7px; height: 32px; padding: 0 10px 0 12px; border-bottom: 1px solid var(--line);
+  background: var(--bar); font-size: 12px; font-weight: 600; white-space: nowrap; }
+.prog-sub-name { overflow: hidden; text-overflow: ellipsis; }
+.prog-hint { padding-top: 12px; }
+.prog-foot { flex: none; margin: 0; padding: 6px 12px; border-top: 1px solid var(--line); line-height: 1.4; }
+
+/* ---- Device Events: an item's events, or every programmed one ---- */
+.pev-list { padding: 4px 0 20px; }
+.pev { display: flex; align-items: center; gap: 7px; min-height: 26px; padding: 2px 10px 2px 14px; cursor: pointer; outline: none; }
+.pev:hover { background: var(--hover-strong); }
+.pev.sel { background: var(--sel); color: var(--sel-fg); }
+.pev:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
+.pev-ic { color: var(--faint); flex: none; }
+.pev.has .pev-ic { color: var(--accent); }
+.pev.sel .pev-ic { color: var(--sel-dim); }
+.pev-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pev:not(.has) .pev-name { color: var(--soft); }
+.pev-n { flex: none; min-width: 18px; text-align: center; font-size: 10.5px; font-weight: 600; line-height: 16px; padding: 0 5px; border-radius: 99px;
+  color: var(--accent-text); background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.pev.sel .pev-n { color: var(--sel-fg); background: color-mix(in srgb, var(--accent) 26%, transparent); }
+.pev-owner { display: flex; align-items: center; gap: 7px; padding: 10px 12px 3px; font-size: 11.5px; font-weight: 600; color: var(--dim); }
+.pev-owner + .pev, .pev-owner ~ .pev { padding-left: 22px; }
+
+/* ---- the centre: crumbs, read-only note, overview ---- */
+.prog-crumbs { gap: 6px; padding: 0 10px 0 8px; }
+.prog-crumbs .sep { padding: 0 1px; }
+.prog-crumb { display: inline-flex; align-items: center; gap: 6px; color: var(--text-2); overflow: hidden; text-overflow: ellipsis; }
+.prog-crumbs > b { font-weight: 600; }
+.prog-ro { flex: none; display: flex; align-items: center; gap: 7px; padding: 6px 14px; font-size: 12px; color: var(--dim);
+  background: var(--tint); border-bottom: 1px solid var(--line); }
+
+.prog { padding: 4px 22px 40px; }
+.prog-group { scroll-margin-top: 8px; }
+.prog-group .event { margin-bottom: 8px; }
+.prog-open { width: 100%; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
+.prog-open:hover { background: var(--hover-head); }
+.prog-open-go { color: var(--accent-text); opacity: 0; margin-left: 4px; }
+.prog-open:hover .prog-open-go, .prog-open:focus-visible .prog-open-go { opacity: 1; }
+
+/* ---- the script ---- */
+.script { padding: 10px 0 60px; outline: none; font-size: 12.5px; min-height: 100%; }
+.script-when { display: flex; align-items: center; gap: 7px; margin: 4px 16px 6px; padding: 7px 11px; border: 1px solid var(--line);
+  border-radius: 8px; background: var(--side); font-size: 12.5px; flex-wrap: wrap; }
+.script-who { display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.script-when b { padding: 0 7px; border-radius: 5px; line-height: 20px; color: var(--accent-text); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+.sl { position: relative; display: flex; align-items: stretch; min-height: 28px; margin: 0 16px; border-radius: 6px; cursor: default; }
+.sl:hover { background: var(--hover-strong); }
+.sl.sel { background: var(--sel); color: var(--sel-fg); }
+.script:focus-visible .sl.sel { box-shadow: inset 0 0 0 1px var(--accent); }
+.sl-no { flex: none; width: 30px; padding-right: 6px; text-align: right; font-family: var(--mono); font-size: 10.5px; color: var(--faint);
+  display: flex; align-items: center; justify-content: flex-end; user-select: none; }
+.sl.sel .sl-no { color: var(--sel-dim); }
+.sl-body { position: relative; flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; padding: 3px 8px 3px 8px; }
+.sl-guide { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--line); }
+.sl-ic { flex: none; display: inline-flex; color: var(--dim); }
+.sl.flow .sl-ic { color: var(--syn-bool); }
+.sl-text { min-width: 0; overflow-wrap: anywhere; line-height: 1.45; }
+.sl-kw { font-weight: 600; color: var(--syn-bool); }
+.sl-dev { font-weight: 600; }
+.sl.sel .sl-kw, .sl.sel .sl-ic { color: inherit; }
+.sl.off .sl-text, .sl.off .sl-ic { opacity: .5; font-style: italic; }
+.sl-acts { flex: none; display: flex; align-items: center; padding-right: 6px; opacity: 0; }
+.sl:hover .sl-acts, .sl.sel .sl-acts { opacity: 1; }
+.sl.sel .icon-btn { color: var(--sel-dim); }
+.sl .icon-btn.del:hover:not(:disabled) { color: var(--bad); }
+.sl.moving { opacity: .45; }
+.sl[draggable="true"] { cursor: grab; }
+.sl .icon-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+/* Between lines: a thin strip that takes a click (or a drop) and shows where new lines go. */
+.sl-gap { position: relative; height: 7px; margin: 0 16px 0 calc(16px + 38px + var(--d, 0) * 20px); cursor: pointer; }
+.sl-gap::before { content: ""; position: absolute; left: 0; right: 0; top: 3px; height: 1px; background: transparent; transition: background-color .1s; }
+.sl-gap:hover::before { background: color-mix(in srgb, var(--accent) 45%, transparent); }
+.sl-gap.on { height: 20px; }
+.sl-gap.on::before { top: 9px; height: 2px; border-radius: 2px; background: var(--accent); }
+.sl-gap-tag { position: absolute; left: 0; top: 2px; display: inline-flex; align-items: center; gap: 4px; padding: 0 7px 0 5px; line-height: 16px;
+  font-size: 10.5px; font-weight: 600; border-radius: 99px; color: var(--on-accent); background: var(--accent); pointer-events: none; }
+.script.dropping .sl-gap { height: 10px; }
+.script.dropping .sl-gap.on { height: 22px; }
+
+.script-empty { margin: 4px 16px 0 54px; padding: 26px 18px; border: 1.5px dashed var(--track); border-radius: 10px; text-align: center;
+  color: var(--dim); display: flex; flex-direction: column; align-items: center; gap: 4px; }
+.script-empty p { margin: 0; }
+.script-empty.drag, .script.dropping .script-empty { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); color: var(--text); }
+
+/* ---- Actions ---- */
+.prog-cats { flex: none; display: flex; flex-wrap: wrap; gap: 4px; padding: 7px 8px; border-bottom: 1px solid var(--line); background: var(--side); }
+.prog-cats button { display: inline-flex; align-items: center; gap: 5px; font: inherit; font-size: 11.5px; padding: 2px 8px; border-radius: 6px;
+  border: 1px solid var(--line); background: var(--btn); color: var(--dim); cursor: pointer; }
+.prog-cats button.on { color: var(--accent-text); border-color: color-mix(in srgb, var(--accent) 60%, transparent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--btn)); }
+.prog-cats button:disabled { opacity: .5; cursor: not-allowed; border-style: dashed; }
+
+.pcl { padding: 4px 0 12px; }
+.pcl-owner { display: flex; align-items: center; gap: 7px; padding: 8px 12px 3px; font-size: 11.5px; font-weight: 600; color: var(--dim); }
+.pc { display: flex; align-items: center; gap: 6px; padding: 4px 10px 4px 6px; margin: 1px 6px; border-radius: 6px; cursor: pointer; outline: none; }
+.pc[draggable="true"] { cursor: grab; }
+.pc:hover { background: var(--hover-strong); }
+.pc.sel { background: var(--sel); color: var(--sel-fg); }
+.pc:focus-visible { box-shadow: inset 0 0 0 1px var(--accent); }
+.pc-grip { flex: none; color: var(--idle); }
+.pc:hover .pc-grip { color: var(--dim); }
+.pc-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.pc-name { display: flex; align-items: center; gap: 6px; }
+.pc-name .mono { font-size: 11.5px; font-weight: 600; }
+.pc-desc { font-size: 11.5px; color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pc.sel .pc-desc { color: var(--sel-dim); }
+.pc-params { flex: none; font-size: 10px; font-weight: 600; min-width: 16px; text-align: center; line-height: 16px; border-radius: 99px;
+  color: var(--dim); background: var(--fill); }
+.pc-params::after { content: " param"; font-weight: 400; }
+
+/* ---- asking for a command's parameters ---- */
+.prog-params { width: min(480px, calc(100vw - 40px)); }
+.pp-fields { display: flex; flex-direction: column; gap: 10px; margin-top: 14px; }
+.pp-field { display: grid; grid-template-columns: 130px 1fr; align-items: center; gap: 10px; }
+.pp-name { display: flex; flex-direction: column; line-height: 1.3; }
+.pp-name .mono { font-weight: 600; }
+.pp-num { display: flex; align-items: center; gap: 10px; }
+.pp-num input[type="range"] { flex: 1; }
+.pp-num input:not([type="range"]) { width: 100%; }
+.pp-num input[type="range"] + input { width: 84px; flex: none; }
+.pp-field.bad input:not([type="range"]) { border-color: var(--bad); }
+.pp-preview { display: flex; align-items: center; gap: 8px; margin-top: 16px; padding: 8px 11px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--bg); font-size: 12.5px; }
+.pp-why { margin-right: auto; align-self: center; }

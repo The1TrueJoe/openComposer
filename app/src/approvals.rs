@@ -388,8 +388,8 @@ fn check_connections(ops: &[Op], cat: &c4::Catalog, p: &c4::Project) -> AppResul
 }
 
 async fn apply_all(app: &Arc<App>, session: &Session, ops: &[Op]) -> (Vec<Applied>, Option<String>) {
-    let template = if ops.iter().any(|o| matches!(o, Op::AddRoom { .. })) {
-        session.catalog(false).await.ok().and_then(|c| c.room_template.clone())
+    let catalog = if ops.iter().any(|o| matches!(o, Op::AddRoom { .. } | Op::AddLocation { .. })) {
+        session.catalog(false).await.ok()
     } else {
         None
     };
@@ -423,7 +423,7 @@ async fn apply_all(app: &Arc<App>, session: &Session, ops: &[Op]) -> (Vec<Applie
                     .map_err(|e| e.to_string()),
                 Err(e) => Err(e.to_string()),
             },
-            _ => session.director.apply(op, template.as_deref()).await.map_err(|e| e.to_string()),
+            _ => session.director.apply(op, catalog.as_ref().and_then(|c| c.template_for(op))).await.map_err(|e| e.to_string()),
         };
         match result {
             Ok(a) => {

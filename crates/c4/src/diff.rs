@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::agents::{ScheduleEntry, ScheduleSpec};
 use crate::model::{Binding, CodeItem, ItemKind, Names, NetworkBinding, Project, Variable};
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
@@ -94,13 +95,25 @@ pub enum Change {
     VariableRemoved { owner: ItemRef, id: u32, name: String, value: String, cascade: bool },
     VariableChanged { owner: ItemRef, id: u32, name: String, field: String, from: String, to: String },
     ProgrammingChanged { owner: ItemRef, event: u32, event_name: Option<String>, lines: Vec<CodeLine> },
+    /// A Scheduler event; `when` reads like "Every day at Sunset".
+    ScheduleAdded { owner: ItemRef, id: u32, name: String, when: String },
+    ScheduleRemoved { owner: ItemRef, id: u32, name: String, when: String, cascade: bool },
+    ScheduleChanged { owner: ItemRef, id: u32, name: String, field: String, from: String, to: String },
 }
 
 impl Change {
     fn tally(&self, s: &mut Summary) {
         match self {
-            Change::ItemAdded { .. } | Change::ConnectionAdded { .. } | Change::NetworkAdded { .. } | Change::VariableAdded { .. } => s.added += 1,
-            Change::ItemRemoved { .. } | Change::ConnectionRemoved { .. } | Change::NetworkRemoved { .. } | Change::VariableRemoved { .. } => s.removed += 1,
+            Change::ItemAdded { .. }
+            | Change::ConnectionAdded { .. }
+            | Change::NetworkAdded { .. }
+            | Change::VariableAdded { .. }
+            | Change::ScheduleAdded { .. } => s.added += 1,
+            Change::ItemRemoved { .. }
+            | Change::ConnectionRemoved { .. }
+            | Change::NetworkRemoved { .. }
+            | Change::VariableRemoved { .. }
+            | Change::ScheduleRemoved { .. } => s.removed += 1,
             _ => s.changed += 1,
         }
     }
@@ -126,6 +139,10 @@ impl Change {
             Change::VariableRemoved { owner, id, .. } => format!("var-:{}:{id}", owner.id),
             Change::VariableChanged { owner, id, field, .. } => format!("var~:{}:{id}:{field}", owner.id),
             Change::ProgrammingChanged { owner, event, .. } => format!("code:{}:{event}", owner.id),
+            // A new entry's id is Director's to choose; match it by name.
+            Change::ScheduleAdded { owner, name, .. } => format!("sched+:{}:{name}", owner.id),
+            Change::ScheduleRemoved { owner, id, .. } => format!("sched-:{}:{id}", owner.id),
+            Change::ScheduleChanged { owner, id, field, .. } => format!("sched~:{}:{id}:{field}", owner.id),
         }
     }
 }
@@ -344,11 +361,68 @@ pub fn diff(before: &Project, after: &Project, names: &Names, opts: DiffOptions)
         });
     }
 
+    // Scheduler events.
+    let agents: BTreeSet<u32> = before.schedules.keys().chain(after.schedules.keys()).copied().collect();
+    for agent in agents {
+        let none = Vec::new();
+        let b: BTreeMap<u32, &ScheduleEntry> = before.schedules.get(&agent).unwrap_or(&none).iter().map(|e| (e.id, e)).collect();
+        let a: BTreeMap<u32, &ScheduleEntry> = after.schedules.get(&agent).unwrap_or(&none).iter().map(|e| (e.id, e)).collect();
+        for (id, e) in &b {
+            match a.get(id) {
+                None => changes.push(Change::ScheduleRemoved {
+                    owner: cx.item_in(before, agent),
+                    id: *id,
+                    name: e.spec.name.clone(),
+                    when: schedule_when(&e.spec),
+                    cascade: removed.contains(&agent),
+                }),
+                Some(n) => {
+                    for (field, from, to) in schedule_fields(&e.spec, &n.spec) {
+                        changes.push(Change::ScheduleChanged { owner: cx.item(agent), id: *id, name: n.spec.name.clone(), field: field.into(), from, to });
+                    }
+                }
+            }
+        }
+        for (id, e) in &a {
+            if !b.contains_key(id) {
+                changes.push(Change::ScheduleAdded { owner: cx.item_in(after, agent), id: *id, name: e.spec.name.clone(), when: schedule_when(&e.spec) });
+            }
+        }
+    }
+
     let mut summary = Summary::default();
     for c in &changes {
         c.tally(&mut summary);
     }
     Diff { changes, summary }
+}
+
+fn schedule_when(s: &ScheduleSpec) -> String {
+    let mut w = format!("{} at {}, from {}", s.repeat_text(), s.time_text(), s.start_text());
+    if let Some(e) = s.end_date.as_deref().filter(|_| s.repeat != crate::agents::Frequency::Once) {
+        w.push_str(&format!(" until {e}"));
+    }
+    if !s.enabled {
+        w.push_str(" (disabled)");
+    }
+    w
+}
+
+/// The fields of a scheduled event that differ, worded as Composer's editor shows them.
+fn schedule_fields(b: &ScheduleSpec, a: &ScheduleSpec) -> Vec<(&'static str, String, String)> {
+    let end = |s: &ScheduleSpec| s.end_date.clone().filter(|_| s.repeat != crate::agents::Frequency::Once).unwrap_or_else(|| "none".into());
+    let on = |x: bool| if x { "enabled" } else { "disabled" }.to_string();
+    [
+        ("name", b.name.clone(), a.name.clone()),
+        ("time", b.time_text(), a.time_text()),
+        ("start", b.start_text(), a.start_text()),
+        ("repeats", b.repeat_text(), a.repeat_text()),
+        ("end", end(b), end(a)),
+        ("state", on(b.enabled), on(a.enabled)),
+    ]
+    .into_iter()
+    .filter(|(_, f, t)| f != t)
+    .collect()
 }
 
 fn flatten(code: &[CodeItem], p: &Project) -> Vec<(usize, String, bool)> {

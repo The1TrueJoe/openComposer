@@ -11,6 +11,8 @@ import type {
   TreeNode, UiContext,
 } from "../api/types";
 import { splitContext } from "./agent.ts";
+import { agentView, applySchedule, describeSchedule, predictSchedule } from "./mockAgents.ts";
+import { rgbToHsv, xyToKelvin, xyToRgb } from "./control.ts";
 import {
   BACKUPS, DIRECTORS, DRIVERS, SDDP, ZIGBEE, agentApproval, historyApprovals, seedConversations, seedLibrary, seedProject, showcaseApproval,
   type MItem, type MProject,
@@ -195,7 +197,7 @@ function itemDetail(id: number): ItemDetail {
   return {
     id, name: it.name, kind: it.kind, path: path(id), room: roomOf(id)?.name ?? null, driver: it.driver,
     device: dev ? { manufacturer: dev.manufacturer, model: dev.model, driver_name: dev.driver_name, version: dev.version,
-      control_method: dev.control_method, search_type: dev.search_type, proxies: dev.proxies } : null,
+      control_method: dev.control_method, search_type: dev.search_type, proxies: dev.proxies, capabilities: CAPS.get(id) ?? null } : null,
     properties,
     actions: dev ? dev.actions.map(([name, command]) => ({ name, command })) : null,
     connections: connectionsOf(id),
@@ -216,6 +218,7 @@ function describe(op: Op): string {
   switch (op.op) {
     case "add_device": return `Add “${op.name}” (${op.driver}) to ${n(op.room)}`;
     case "add_room": return `Add room “${op.name}” to ${n(op.floor)}`;
+    case "add_location": return `Add ${op.kind} “${op.name}” to ${n(op.parent)}`;
     case "remove_item": return `Remove ${project.items.get(op.id)?.kind ?? "item"} ${n(op.id)}`;
     case "rename_item": return `Rename ${n(op.id)} to “${op.name}”`;
     case "move_item": return `Move ${n(op.id)} to ${n(op.parent)}`;
@@ -233,6 +236,9 @@ function describe(op: Op): string {
     case "add_code": return `Add to ${n(op.device)} programming: “${op.display.replace("NAME", project.items.get(op.target)?.name ?? "")}”`;
     case "remove_code": return `Remove programming line #${op.id} from ${n(op.device)}`;
     case "load_project": return `Replace the whole project with ${op.label}`;
+    case "add_schedule_entry":
+    case "modify_schedule_entry":
+    case "remove_schedule_entry": return describeSchedule(op, item(op.agent).name);
   }
 }
 
@@ -247,12 +253,14 @@ function predict(ops: Op[]): Change[] {
   let guess = nextId;
   // `add_driver` identifies the device it adds as device 0: the one added just before.
   let added: ItemRef | null = null;
+  const scratch: Map<string, CodeLineView[]> = new Map(project.programming);
   for (const op of ops) {
     switch (op.op) {
       case "add_device":
-      case "add_room": {
-        const parent = op.op === "add_device" ? op.room : op.floor;
-        const kind: ItemKind = op.op === "add_device" ? "device" : "room";
+      case "add_room":
+      case "add_location": {
+        const parent = op.op === "add_device" ? op.room : op.op === "add_room" ? op.floor : op.parent;
+        const kind: ItemKind = op.op === "add_device" ? "device" : op.op === "add_room" ? "room" : op.kind;
         added = { id: guess++, name: op.name, item_kind: kind, location: [...ancestors(parent).map((a) => a.name), item(parent).name] };
         changes.push({ kind: "item_added", driver: op.op === "add_device" ? op.driver : "roomdevice.c4i", descendants: 0, item: added });
         break;
@@ -309,11 +317,25 @@ function predict(ops: Op[]): Change[] {
           from: before == null ? null : masked(op.name, before), to: masked(op.name, op.value) });
         break;
       }
+      case "add_code":
+      case "remove_code": {
+        // Ops on one event build on each other (a move is remove + add): one change per event.
+        const { owner, event, lines } = codeEdit(op, scratch);
+        scratch.set(`${owner}:${event}`, lines);
+        const change: Change = { kind: "programming_changed", owner: itemRef(owner), event, event_name: project.catalog.get(owner)?.events[event] ?? null, lines };
+        const at = changes.findIndex((c) => c.kind === "programming_changed" && c.owner.id === owner && c.event === event);
+        if (at >= 0) changes[at] = change;
+        else changes.push(change);
+        break;
+      }
       case "install_driver":
       case "run_action":
       case "send_command":
-      case "add_code":
-      case "remove_code":
+        break;
+      case "add_schedule_entry":
+      case "modify_schedule_entry":
+      case "remove_schedule_entry":
+        changes.push(...predictSchedule(op, agentCtx));
         break;
       case "load_project":
         changes.push({ kind: "property_changed", item: itemRef(20), property: "Power On Delay (ms)", from: "2500", to: "3000" });
@@ -335,11 +357,12 @@ function bindingConnection(b: { consumer_device: number; consumer_binding: numbe
 function apply(op: Op): number[] {
   switch (op.op) {
     case "add_device":
-    case "add_room": {
+    case "add_room":
+    case "add_location": {
       const id = nextId++;
-      const parent = op.op === "add_device" ? op.room : op.floor;
-      project.items.set(id, { id, name: op.name, kind: op.op === "add_device" ? "device" : "room", parent, children: [],
-        driver: op.op === "add_device" ? op.driver : "roomdevice.c4i", properties: {} });
+      const parent = op.op === "add_device" ? op.room : op.op === "add_room" ? op.floor : op.parent;
+      project.items.set(id, { id, name: op.name, kind: op.op === "add_device" ? "device" : op.op === "add_room" ? "room" : op.kind, parent, children: [],
+        driver: op.op === "add_device" ? op.driver : op.op === "add_room" ? "roomdevice.c4i" : null, properties: {} });
       item(parent).children.push(id);
       if (op.op === "add_device") {
         const doc = DRIVERS.find((d) => d.filename === op.driver);
@@ -396,13 +419,58 @@ function apply(op: Op): number[] {
     case "send_command":
       command(op.device, op.command, op.params ?? []);
       return [];
-    case "run_action":
     case "add_code":
-    case "remove_code":
+    case "remove_code": {
+      const { owner, event, lines } = codeEdit(op);
+      project.programming.set(`${owner}:${event}`, lines.filter((l) => l.op !== "removed").map(({ op: _, ...l }) => l));
+      return [];
+    }
+    case "run_action":
       return [];
     case "load_project":
       return [];
+    case "add_schedule_entry":
+    case "modify_schedule_entry":
+    case "remove_schedule_entry":
+      applySchedule(op, agentCtx);
+      return [];
   }
+}
+
+/** What the agent fixtures need from the project (mockAgents.ts). */
+const agentCtx = {
+  ref: (id: number) => ({ id, name: project.items.get(id)?.name ?? `#${id}`, room: null }),
+  itemRef: (id: number) => itemRef(id),
+  programming: (agent: number, event: number) => project.programming.get(`${agent}:${event}`) ?? [],
+  dropProgramming: (agent: number, event: number) => { project.programming.delete(`${agent}:${event}`); },
+};
+
+/** An event's script with one line added or removed, each line marked as the diff shows it. */
+type Marked = CodeLineView & { op: "same" | "added" | "removed" };
+function codeEdit(op: Extract<Op, { op: "add_code" | "remove_code" }>, base: Map<string, CodeLineView[]> = project.programming): { owner: number; event: number; lines: Marked[] } {
+  item(op.device);
+  const old = (base.get(`${op.device}:${op.event}`) ?? []) as (CodeLineView & { op?: Marked["op"] })[];
+  const lines: Marked[] = old.map((l) => ({ ...l, op: l.op ?? "same" }));
+  if (op.op === "remove_code") {
+    const i = lines.findIndex((l) => l.id === op.id);
+    if (i < 0) throw `${item(op.device).name} event ${op.event} has no programming line #${op.id}`;
+    for (let j = i; j < lines.length && (j === i || lines[j].depth > lines[i].depth); j++) lines[j].op = "removed";
+    return { owner: op.device, event: op.event, lines };
+  }
+  const target = item(op.target);
+  const parent = op.parent ? lines.findIndex((l) => l.id === op.parent) : -1;
+  if (op.parent && parent < 0) throw `no programming line #${op.parent} to nest under`;
+  let at = op.before ? lines.findIndex((l) => l.id === op.before) : -1;
+  if (op.before && at < 0) throw `no programming line #${op.before} to insert before`;
+  const depth = parent >= 0 ? lines[parent].depth + 1 : 0;
+  if (at < 0) {
+    at = parent >= 0 ? parent + 1 : lines.length;
+    while (parent >= 0 && at < lines.length && lines[at].depth >= depth) at++;
+  }
+  const id = Math.max(0, ...[...project.programming.values()].flat().map((l) => l.id)) + 1;
+  lines.splice(at, 0, { id, depth, enabled: true, target: op.target, text: op.display.replace(/\bNAME\b/g, target.name), op: "added",
+    kind: 1, display: op.display, command: op.command, params: (op.params ?? []).map((p) => ({ name: p.name, type: p.type ?? "STRING", value: p.value })) });
+  return { owner: op.device, event: op.event, lines };
 }
 
 // ---- device control (send_command / device_state) ---------------------------------------------
@@ -420,10 +488,91 @@ function setVar(device: number, name: string, value: string) {
 }
 const getVar = (device: number, name: string) => project.variables.find((x) => x.device === device && x.name === name)?.value;
 
+// ---- remote showcase: a colour bulb, a cable box and an HDMI matrix ----------------------------
+// For the device control panel's remotes (pages/design/DeviceControl.tsx). Shaped after the
+// real ones: the Hue bulb's commands, capabilities and variables are a Philips Hue light_v2's;
+// the cable box's proxy declares nothing, so it gets Control4's standard satellite commands.
+
+const CAPS = new Map<number, Record<string, string>>();
+{
+  const prm = (name: string, prop_type: string, extra: Record<string, unknown> = {}) =>
+    ({ name, prop_type, default: null, readonly: false, items: [] as string[], minimum: null, maximum: null, ...extra });
+  const cmd = (name: string, ...params: ReturnType<typeof prm>[]) => ({ name, description: `${name.toLowerCase().replace(/_/g, " ")} on NAME`, params });
+  const add = (id: number, name: string, kind: "device" | "proxy", parent: number, driver: string, dev?: Partial<NonNullable<ReturnType<typeof project.catalog.get>>>) => {
+    project.items.set(id, { id, name, kind, parent, children: [], driver, properties: {} });
+    project.items.get(parent)?.children.push(id);
+    if (dev) {
+      project.catalog.set(id, { manufacturer: "Control4", model: "", driver_name: driver, version: "1", control_method: "", search_type: "", proxies: [],
+        connections: [], events: {}, properties: [], actions: [], ...dev });
+    }
+  };
+  const vars = (device: number, values: Record<string, string>) =>
+    Object.entries(values).forEach(([name, value], i) => project.variables.push({ device, id: 1000 + i, name, var_type: 1, readonly: true, hidden: false, description: "", value }));
+
+  if (project.items.has(10) && !project.items.has(60)) {
+    add(60, "Living Hue Lamp", "device", 10, "philips_hue_bulb.c4z", { manufacturer: "Philips", model: "Hue White and Color Ambiance", driver_name: "Hue Bulb",
+      control_method: "IP", proxies: ["light_v2"], commands: [cmd("IDENTIFY"), cmd("SET_EFFECT", prm("EFFECT", "LIST", { items: ["None", "Colorloop", "Candle", "Fireplace"] }))] });
+    add(61, "Living Hue Lamp", "proxy", 60, "light_v2.c4i", { model: "Light", driver_name: "Light V2", commands: [
+      cmd("ON"), cmd("OFF"), cmd("TOGGLE"), cmd("SET_LEVEL", prm("LEVEL", "RANGED_INTEGER", { minimum: "0", maximum: "100" })),
+      cmd("RAMP_TO_LEVEL", prm("LEVEL", "RANGED_INTEGER", { minimum: "0", maximum: "100" }), prm("TIME", "RANGED_INTEGER", { minimum: "0", maximum: "60000", default: "1000" })),
+      cmd("SET_COLOR_TARGET", prm("LIGHT_COLOR_TARGET_X", "FLOAT"), prm("LIGHT_COLOR_TARGET_Y", "FLOAT"), prm("LIGHT_COLOR_TARGET_MODE", "INTEGER", { default: "0" }),
+        prm("LIGHT_COLOR_TARGET_RATE", "INTEGER", { default: "0" })),
+      cmd("SET_BRIGHTNESS_TARGET", prm("LIGHT_BRIGHTNESS_TARGET", "RANGED_INTEGER", { minimum: "0", maximum: "100" }), prm("LIGHT_BRIGHTNESS_TARGET_RATE", "INTEGER", { default: "0" })),
+    ] });
+    const hue = { supports_color: "True", supports_color_correlated_temperature: "True", color_correlated_temperature_min: "2000",
+      color_correlated_temperature_max: "6500", dimmer: "True", set_level: "True", on_off: "True" };
+    CAPS.set(60, hue);
+    CAPS.set(61, hue);
+    vars(60, { "Brightness Percent": "72", LIGHT_STATE: "1", "Current Color Hue": "34", "Current Color Saturation": "52", "Current CCT": "3190",
+      "Current Color Chromaticity": "0.424006,0.399217,1" });
+
+    add(64, "Living Cable Box", "device", 10, "directv_genie.c4z", { manufacturer: "DIRECTV", model: "Genie HR54", driver_name: "DIRECTV Genie IP",
+      control_method: "IP", proxies: ["satellite"], connections: [{ id: 2000, name: "HDMI OUT", consumer: false, classes: ["HDMI"] }],
+      commands: [cmd("REBOOT"), cmd("SET_FORMAT", prm("FORMAT", "LIST", { items: ["Native", "1080p", "4K"] }))] });
+    add(65, "Living Cable Box", "proxy", 64, "satellite.c4i");
+    vars(64, { POWER_STATE: "On", CURRENT_CHANNEL: "206" });
+
+    add(62, "Theater Matrix", "device", 12, "atlona_omni_matrix.c4z", { manufacturer: "Atlona", model: "AT-UHD-PRO3-44M", driver_name: "Atlona 4x4 Matrix",
+      control_method: "IP", proxies: ["avswitch"], commands: [cmd("ON"), cmd("OFF"), cmd("RECALL_PRESET", prm("PRESET", "LIST", { items: ["Movie night", "Game day", "All to 1"] }))] });
+    add(63, "Theater Matrix", "proxy", 62, "avswitch.c4i", { model: "AV Switch", driver_name: "AV Switch", connections: [
+      ...["Cable", "Apple TV", "PlayStation", "Kaleidescape"].map((n, i) => ({ id: 3000 + i, name: `HDMI IN ${i + 1} (${n})`, consumer: true, classes: ["HDMI"] })),
+      ...["Projector", "Bar TV", "Patio TV", "Gym TV"].map((n, i) => ({ id: 2000 + i, name: `HDMI OUT ${i + 1} (${n})`, consumer: false, classes: ["HDMI"] })),
+    ] });
+    project.bindings.push({ provider_device: 64, provider_binding: 2000, consumer_device: 63, consumer_binding: 3000, consumer_name: "HDMI IN 1 (Cable)", classes: ["HDMI"] });
+    vars(62, { POWER_STATE: "On", OUTPUT_1_SOURCE: "4", OUTPUT_2_SOURCE: "1", OUTPUT_3_SOURCE: "1", OUTPUT_4_SOURCE: "3" });
+  }
+}
+
+/** The showcase devices' commands; false when the command is someone else's. */
+function showcaseCommand(d: number, cmd: string, p: (n: string) => string): boolean {
+  if (cmd === "SET_INPUT" && p("OUTPUT")) {
+    setVar(d, `OUTPUT_${(Number(p("OUTPUT")) % 1000) + 1}_SOURCE`, String((Number(p("INPUT")) % 1000) + 1));
+    return true;
+  }
+  if (getVar(d, "Brightness Percent") == null) return false;
+  const level = (n: number) => { setVar(d, "Brightness Percent", String(Math.max(0, Math.min(100, Math.round(n))))); setVar(d, "LIGHT_STATE", n > 0 ? "1" : "0"); };
+  const now = Number(getVar(d, "Brightness Percent"));
+  if (cmd === "ON") level(now > 0 ? now : 100);
+  else if (cmd === "OFF") level(0);
+  else if (cmd === "TOGGLE") level(getVar(d, "LIGHT_STATE") === "1" ? 0 : now > 0 ? now : 100);
+  else if (cmd === "SET_LEVEL" || cmd === "RAMP_TO_LEVEL") level(Number(p("LEVEL")));
+  else if (cmd === "SET_BRIGHTNESS_TARGET") level(Number(p("LIGHT_BRIGHTNESS_TARGET")));
+  else if (cmd === "SET_COLOR_TARGET") {
+    const x = Number(p("LIGHT_COLOR_TARGET_X")), y = Number(p("LIGHT_COLOR_TARGET_Y")), mode = p("LIGHT_COLOR_TARGET_MODE") === "1" ? 1 : 0;
+    const { h, s } = rgbToHsv(xyToRgb(x, y));
+    setVar(d, "Current Color Chromaticity", `${x.toFixed(6)},${y.toFixed(6)},${mode}`);
+    setVar(d, "Current Color Hue", String(Math.round(h)));
+    setVar(d, "Current Color Saturation", String(Math.round(s * 100)));
+    if (mode === 1) setVar(d, "Current CCT", String(xyToKelvin(x, y)));
+  } else return false;
+  return true;
+}
+
 /** What a command does to the fixture's state, roughly as the real devices would. */
 function command(target: number, cmd: string, params: CommandParam[]): string[] {
   const d = owner(target);
   const p = (n: string) => params.find((x) => x.name === n)?.value ?? "";
+  if (showcaseCommand(d, cmd, p)) return [];
   const clamp = (n: number) => String(Math.max(0, Math.min(100, Math.round(n))));
   const light = getVar(d, "LIGHT_LEVEL") != null;
   switch (cmd) {
@@ -920,6 +1069,11 @@ async function act(name: string, a: Args): Promise<unknown> {
       if (id === 20) return { tabs: [{ name: "Remote Buttons", url: tabPage("Remote Buttons", item(20).name) }, { name: "Setup", url: "http://127.0.0.1:9/ui/mock/missing.html" }] };
       if (id === 22) return { tabs: [{ name: "Settings", url: tabPage("Settings", item(22).name) }] };
       return { tabs: [] };
+    }
+    case "agent_view": {
+      await sleep(180);
+      const it = item(Number(a.id));
+      return agentView(it.id, it.driver, it.name, agentCtx);
     }
     case "device_state":
       await sleep(90);

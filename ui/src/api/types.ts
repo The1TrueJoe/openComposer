@@ -123,9 +123,12 @@ export type KindLabel = "project" | "site" | "building" | "floor" | "room" | "de
 
 export interface TreeNode {
   id: number;
+  /** For a device with one proxy, the proxy's name — the one the dealer gave it. */
   name: string;
   kind: KindLabel;
   driver: string | null;
+  /** That proxy (folded into the device in the tree); renaming the device renames it. */
+  proxy?: number | null;
   children: TreeNode[];
 }
 
@@ -157,6 +160,8 @@ export interface ConnectionDef {
   id: number;
   name: string;
   role: "input" | "output";
+  /** Director's connection type: 1 control, 2 proxy, 4 network, 5 video, 6 audio, 7 room. */
+  type?: number;
   classes: string[];
   connected_to: Peer[];
 }
@@ -198,6 +203,17 @@ export interface CodeLineView {
   text: string;
   enabled: boolean;
   id: number;
+  /** The device the line sends to or tests (app/src/views.rs `code_lines`); 0 for lines that
+   *  aren't about a device. */
+  target?: number;
+  /** Director's code item type: 1 is a device command (the only kind seen in real projects so
+   *  far); conditionals and loops use others. */
+  kind?: number;
+  /** The line's template as stored (NAME for the target), its command and parameters — what
+   *  `add_code` needs to put the same line somewhere else. */
+  display?: string;
+  command?: string | null;
+  params?: { name: string; type: string; value: string }[];
 }
 
 export interface ItemDetail {
@@ -210,7 +226,13 @@ export interface ItemDetail {
   device: {
     manufacturer: string; model: string; driver_name: string; version: string;
     control_method: string; search_type: string; proxies: string[];
+    /** `<capabilities>` as declared, e.g. `supports_color: "True"`. */
+    capabilities?: Record<string, string> | null;
   } | null;
+  /** The device's only proxy, which holds its name; null otherwise. */
+  proxy?: number | null;
+  /** The driver's own name for the device, when `name` is its proxy's. */
+  driver_title?: string | null;
   properties: PropertyView[];
   actions: { name: string; command: string }[] | null;
   connections: ConnectionDef[];
@@ -218,7 +240,7 @@ export interface ItemDetail {
   /** The driver's network connections (type 4, ids 6000-6999): what identify binds. */
   network_connections: { id: number; name: string; classes: string[] }[];
   variables: Variable[];
-  events: { id: number; name: string; programming: CodeLineView[] }[];
+  events: { id: number; /** The proxy, for a device shown with its sole proxy's events. */ device?: number; name: string; programming: CodeLineView[] }[];
   /** What the driver says it can be sent (Composer's device-specific commands); null when the
    *  item has no driver definition. */
   commands: CommandDef[] | null;
@@ -432,7 +454,11 @@ export type Change =
   | { kind: "variable_added"; owner: ItemRef; id: number; name: string; value: string }
   | { kind: "variable_removed"; owner: ItemRef; id: number; name: string; value: string; cascade: boolean }
   | { kind: "variable_changed"; owner: ItemRef; id: number; name: string; field: string; from: string; to: string }
-  | { kind: "programming_changed"; owner: ItemRef; event: number; event_name: string | null; lines: CodeLine[] };
+  | { kind: "programming_changed"; owner: ItemRef; event: number; event_name: string | null; lines: CodeLine[] }
+  /** A Scheduler event; `when` reads like "Every day at Sunset, from 2024-06-16". */
+  | { kind: "schedule_added"; owner: ItemRef; id: number; name: string; when: string }
+  | { kind: "schedule_removed"; owner: ItemRef; id: number; name: string; when: string; cascade: boolean }
+  | { kind: "schedule_changed"; owner: ItemRef; id: number; name: string; field: string; from: string; to: string };
 
 export interface Diff {
   changes: Change[];
@@ -441,9 +467,12 @@ export interface Diff {
 
 // ---- ops (crates/c4/src/ops.rs) ----------------------------------------------------------------
 
+export type LocationKind = "site" | "building" | "floor";
+
 export type Op =
   | { op: "add_device"; room: number; name: string; driver: string }
   | { op: "add_room"; floor: number; name: string }
+  | { op: "add_location"; parent: number; kind: LocationKind; name: string }
   | { op: "remove_item"; id: number }
   | { op: "rename_item"; id: number; name: string }
   | { op: "move_item"; id: number; parent: number; before: number | null }
@@ -460,6 +489,10 @@ export type Op =
   | { op: "add_code"; device: number; event: number; parent?: number; before?: number; target: number;
       command: string; params?: { name: string; type?: string; value: string }[]; display: string }
   | { op: "remove_code"; device: number; event: number; id: number }
+  /** Scheduler events (Composer's Scheduler agent). Modify keeps the entry's creator/category. */
+  | { op: "add_schedule_entry"; agent: number; entry: ScheduleSpec }
+  | { op: "modify_schedule_entry"; agent: number; id: number; entry: ScheduleSpec; creator: number; category: string }
+  | { op: "remove_schedule_entry"; agent: number; id: number }
   /** Only ever produced by `install_driver`; the file's bytes are not serialized back. */
   | { op: "install_driver"; filename: string; source: string }
   /** Only ever produced by `load_backup`; the XML is not serialized back. */
@@ -591,3 +624,80 @@ export interface Events {
   "mcp-auth-decided": { id: string; approve: boolean };
   identity: { unlocked: boolean };
 }
+
+// ---- built-in agents' own views (app/src/agent_views.rs, crates/c4/src/agents.rs) --------------
+
+export type Weekday = "sunday" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday";
+export type Frequency = "once" | "daily" | "weekly" | "monthly" | "yearly";
+export type TimeBase = "clock" | "sunrise" | "sunset";
+export type Nth = "first" | "second" | "third" | "fourth" | "last";
+
+/** What can be set on a scheduled event (Composer's "Edit Entry" dialog). */
+export interface ScheduleSpec {
+  name: string;
+  enabled: boolean;
+  time_base: TimeBase;
+  /** clock: minutes after midnight; sunrise/sunset: offset, negative = before. */
+  minutes: number;
+  randomize_minutes: number;
+  /** YYYY-MM-DD */
+  start_date: string;
+  /** Start on the Nth weekday of the start date's month instead; no weekday with "last" = last day. */
+  start_on: { nth: Nth; weekday: Weekday | null } | null;
+  repeat: Frequency;
+  every: number;
+  days: Weekday[];
+  end_date: string | null;
+}
+
+export interface NamedRef { id: number; name: string; room: string | null }
+
+export interface ScheduleRow {
+  id: number;
+  name: string;
+  enabled: boolean;
+  locked: boolean;
+  hidden: boolean;
+  /** The agent that made it (Update Manager…); null for people's own. */
+  creator: NamedRef | null;
+  category: string;
+  time: string;
+  repeat: string;
+  start: string;
+  end: string | null;
+  /** Controller-local `YYYY-MM-DDTHH:MM`; null when disabled or expired. */
+  next: { at: string; timezone: string } | null;
+  spec: ScheduleSpec;
+  programming: CodeLineView[];
+}
+
+export interface LightingSceneView {
+  id: number; name: string; active: boolean; ramp_capable: boolean;
+  members: { device: NamedRef; steps: { delay_ms: number; level: number | null; rate_ms: number; color_temperature: number | null; color_hs: [number, number] | null }[] }[];
+}
+
+export interface AnnouncementView {
+  id: number; name: string; audio: string | null; text: string | null; image: string | null;
+  rooms: { room: NamedRef; volume: number | null }[];
+  screens: { device: NamedRef; room: NamedRef | null; volume: number | null; onscreen: boolean | null }[];
+}
+
+export interface WakeSleepPartView { enabled: boolean; device: NamedRef | null; detail: string | null }
+export interface WakeSleepRoomView {
+  id: number; room: NamedRef; wake_time: string; wake_days: string; sleep_minutes: number;
+  lights: WakeSleepPartView | null; media: WakeSleepPartView | null; blinds: WakeSleepPartView | null; temperature: WakeSleepPartView | null;
+}
+
+export interface NotificationTemplateView {
+  id: number; name: string; subject?: string; message?: string; timestamp?: boolean;
+  category?: string | null; severity?: string | null; attachments?: NamedRef[];
+}
+
+interface AgentViewBase { id: number; title: string; agent: { id: number; name: string } }
+export type AgentView =
+  | { id: number; view: null }
+  | (AgentViewBase & { view: "scheduler"; data: { sun: { sunrise: string; sunset: string; timezone: string } | null; entries: ScheduleRow[] } })
+  | (AgentViewBase & { view: "advanced_lighting"; data: { scenes: LightingSceneView[] } })
+  | (AgentViewBase & { view: "announcements"; data: { announcements: AnnouncementView[] } })
+  | (AgentViewBase & { view: "wake_sleep"; data: { rooms: WakeSleepRoomView[] } })
+  | (AgentViewBase & { view: "push_notification" | "email_notification"; data: { templates: NotificationTemplateView[] } });

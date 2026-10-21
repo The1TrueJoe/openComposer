@@ -1,6 +1,6 @@
-import { AppWindow, FolderInput, Gamepad2, Lock, Pencil, Plus, RefreshCw, Trash2, Wifi } from "lucide-react";
+import { AppWindow, FolderInput, SquareCode, Gamepad2, Lock, Pencil, Plus, RefreshCw, Trash2, Wifi } from "lucide-react";
 import { useEffect, useState } from "react";
-import { api, type ItemDetail, type KindLabel, type PropertyView } from "../../api";
+import { api, errText, type AgentView, type ItemDetail, type KindLabel, type PropertyView } from "../../api";
 import { CodeRow } from "../../components/DiffView";
 import { Tip, useDialog } from "../../components/Dialogs";
 import { Select, Spinner, Tabs } from "../../components/controls";
@@ -9,6 +9,7 @@ import { Failure, Loading } from "../../components/shell";
 import type { InspectorTab, Shell } from "../../lib/shell";
 import { cx, useLoad } from "../../lib/ui";
 import { Connections } from "./Connections";
+import { AgentPanel, type NativeAgentView } from "./agents/AgentPanel";
 
 export interface ItemActions {
   rename: (id: number, name: string) => void;
@@ -35,22 +36,58 @@ export function Inspector({ id, shell, onSelect, actions }: {
   const item = useLoad(() => api.item(id), [id, shell.rev]);
   // The driver's own web pages (driver.xml <tabs>). Most drivers have none; one that can't be
   // asked (no web API) just shows none rather than an error on every selection.
-  const web = useLoad(() => api.driverTabs(id).catch(() => ({ tabs: [] })), [id]);
+  const web = useLoad(() => api.driverTabs(id).then((r) => ({ id, tabs: r.tabs }), () => ({ id, tabs: [] as { name: string; url: string }[] })), [id]);
   // The app holds the built-in tab: an assistant can switch it, and it says which one you're
   // looking at. A web tab is local: it means nothing to anyone else.
   const { inspectorTab: tab, setInspectorTab: setTab } = shell;
   const [webTab, setWebTab] = useState<string | null>(null);
   // Web tabs once opened stay loaded (hidden) so switching back doesn't reload the page.
   const [visited, setVisited] = useState<string[]>([]);
-  useEffect(() => { setWebTab(null); setVisited([]); }, [id]);
+  useEffect(() => { setWebTab(null); setVisited([]); setAgentOn(false); }, [id]);
+  // Built-in agents Composer edits with its own plugin (Scheduler, Advanced Lighting…) get
+  // that editor as their first tab, like a driver's web pages.
+  const isAgent = item.data?.id === id && item.data.kind === "agent";
+  const native = useLoad<{ id: number; v: AgentView | null; error: string | null }>(
+    () => (isAgent ? api.agentView(id).then((v) => ({ id, v, error: null }), (e) => ({ id, v: null, error: errText(e) })) : Promise.resolve({ id, v: null, error: null })),
+    [id, isAgent, shell.rev],
+  );
+  const [agentOn, setAgentOn] = useState(false);
+  const nv = native.data?.id === id && native.data.v?.view ? (native.data.v as NativeAgentView) : null;
+  const nativeError = native.data?.id === id ? native.data.error : null;
+  const hasNative = !!nv || !!nativeError;
   const d = item.data?.id === id ? item.data : undefined;
-  const webTabs = web.data?.tabs ?? [];
+  const webTabs = web.data?.id === id ? web.data.tabs : [];
+  const open = (name: string) => {
+    setAgentOn(false);
+    setWebTab(name);
+    setVisited((v) => (v.includes(name) ? v : [...v, name]));
+  };
+  // A driver's own pages are what it wants you to see first; open the first one unless you
+  // had picked a specific built-in tab.
+  useEffect(() => {
+    if (webTabs.length && tab === "properties" && !agentOn) open(webTabs[0].name);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [web.data]);
+  useEffect(() => {
+    if (hasNative && tab === "properties" && !webTab) setAgentOn(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [native.data?.id, hasNative]);
 
   if (!d) return item.error ? <Failure error={item.error} retry={item.reload} /> : <Loading what="Reading the item" />;
 
   const w = shell.writable;
   const why = w ? undefined : `${shell.director?.name ?? "This Director"} is read-only`;
   const controllable = d.kind === "device" || d.kind === "proxy";
+  // Only the tabs that mean something for this item: a driver with no connections (or that
+  // isn't on the network) has nothing to show there.
+  const has: Record<InspectorTab, boolean> = {
+    properties: true,
+    connections: d.connections.length > 0 || d.children.some((c) => c.connections.length > 0),
+    network: d.network.length > 0 || d.network_connections.length > 0 || !!d.device?.search_type,
+    variables: true,
+    events: true,
+  };
+  const shown = has[tab] ? tab : "properties";
 
   return (
     <div className="panel insp">
@@ -84,24 +121,32 @@ export function Inspector({ id, shell, onSelect, actions }: {
           </>}
         </div>
       </div>
-      <Tabs<string> tabs={[...TABS, ...webTabs.map((t) => ({ id: `web:${t.name}`, label: <><AppWindow size={12} strokeWidth={1.8} />{t.name}</> }))]}
-            value={webTab ? `web:${webTab}` : tab}
+      <Tabs<string> tabs={[
+              ...(hasNative ? [{ id: "agent:", label: <>{nv?.title ?? d.name}</> }] : []),
+              ...webTabs.map((t) => ({ id: `web:${t.name}`, label: <><AppWindow size={12} strokeWidth={1.8} />{t.name}</> })),
+              ...TABS.filter((t) => has[t.id]),
+            ]}
+            value={agentOn && hasNative ? "agent:" : webTab ? `web:${webTab}` : shown}
             onChange={(t) => {
-              if (t.startsWith("web:")) {
-                const name = t.slice(4);
-                setWebTab(name);
-                setVisited((v) => (v.includes(name) ? v : [...v, name]));
+              if (t === "agent:") {
+                setWebTab(null);
+                setAgentOn(true);
+              } else if (t.startsWith("web:")) {
+                open(t.slice(4));
               } else {
                 setWebTab(null);
+                setAgentOn(false);
                 setTab(t as InspectorTab);
               }
             }} />
-      <div className={cx("panel-body", (webTab || tab === "connections") && "fill")}>
-        {!webTab && tab === "properties" && <Properties d={d} shell={shell} />}
-        {!webTab && tab === "connections" && <Connections d={d} shell={shell} onSelect={onSelect} />}
-        {!webTab && tab === "network" && <Network d={d} shell={shell} />}
-        {!webTab && tab === "variables" && <Variables d={d} />}
-        {!webTab && tab === "events" && <Events d={d} />}
+      <div className={cx("panel-body", (webTab || shown === "connections") && !(agentOn && hasNative) && "fill")}>
+        {agentOn && nv && <AgentPanel v={nv} shell={shell} onSelect={onSelect} reload={native.reload} />}
+        {agentOn && !nv && nativeError && <Failure error={nativeError} retry={native.reload} />}
+        {!webTab && !(agentOn && hasNative) && shown === "properties" && <Properties d={d} shell={shell} />}
+        {!webTab && !(agentOn && hasNative) && shown === "connections" && <Connections d={d} shell={shell} onSelect={onSelect} />}
+        {!webTab && !(agentOn && hasNative) && shown === "network" && <Network d={d} shell={shell} />}
+        {!webTab && !(agentOn && hasNative) && shown === "variables" && <Variables d={d} />}
+        {!webTab && !(agentOn && hasNative) && shown === "events" && <Events d={d} shell={shell} />}
         {webTabs.filter((t) => visited.includes(t.name)).map((t) => (
           <WebTab key={`${d.id}:${t.name}`} name={t.name} url={t.url} shown={webTab === t.name} />
         ))}
@@ -335,7 +380,7 @@ function Variables({ d }: { d: ItemDetail }) {
       <thead><tr><th>Name</th><th>Value</th><th>ID</th><th /></tr></thead>
       <tbody>
         {d.variables.map((v) => (
-          <tr key={v.id} className={cx(v.hidden && "dimmed")}>
+          <tr key={`${v.device}:${v.id}`} className={cx(v.hidden && "dimmed")}>
             <td className="mono">{v.name}{v.description && <div className="dim small">{v.description}</div>}</td>
             <td className="mono">{v.value === "" ? <i className="dim">empty</i> : v.value}</td>
             <td className="mono dim">{v.id}</td>
@@ -347,14 +392,18 @@ function Variables({ d }: { d: ItemDetail }) {
   );
 }
 
-function Events({ d }: { d: ItemDetail }) {
+/** The driver's events; each opens in Programming, where it can be programmed. */
+function Events({ d, shell }: { d: ItemDetail; shell: Shell }) {
   if (!d.events.length) return <p className="empty pad">This driver declares no events.</p>;
   return (
     <div className="events">
       {d.events.map((e) => (
-        <div key={e.id} className={cx("event", !e.programming.length && "bare")}>
+        <div key={`${e.device ?? d.id}:${e.id}`} className={cx("event link-event", !e.programming.length && "bare")} role="button" tabIndex={0}
+             title="Program this event" onClick={() => shell.program({ device: e.device ?? d.id, event: e.id })}
+             onKeyDown={(k) => { if (k.key === "Enter") shell.program({ device: e.device ?? d.id, event: e.id }); }}>
           <div className="event-head"><b>{e.name}</b><span className="dim mono small">#{e.id}</span>
-            <span className="spread dim small">{e.programming.length ? `${e.programming.length} lines` : "no programming"}</span></div>
+            <span className="spread dim small">{e.programming.length ? `${e.programming.length} lines` : "no programming"}</span>
+            <SquareCode size={13} strokeWidth={1.8} className="event-go" /></div>
           {!!e.programming.length && <div className="code">{e.programming.map((l) => <CodeRow key={l.id} line={l} />)}</div>}
         </div>
       ))}

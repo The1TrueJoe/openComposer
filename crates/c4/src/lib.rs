@@ -3,6 +3,7 @@
 //!
 //! Nothing here knows about the desktop app or MCP; `app/` builds on it.
 
+pub mod agents;
 pub mod broker;
 pub mod c4p;
 pub mod dialect;

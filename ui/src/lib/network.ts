@@ -31,6 +31,10 @@ export interface Unidentified {
 
 /** Director's "discovered, not in project" and a live scan, merged by IP address. Controllers
  *  and anything already identified are left out. */
+/** Generic UPnP answers ("urn:schemas-upnp-org:device:…") to the SDDP query: routers, media
+ *  renderers and the like that no Control4 driver identifies by. */
+const isUpnp = (t: string) => t.toLowerCase().startsWith("urn:");
+
 export function unidentified(net: NetworkView | undefined, scan: Announcement[] | undefined): Unidentified[] {
   const physical = net?.discovered ?? [];
   const bound = new Set((net?.identified ?? []).flatMap((x) => [x.uuid, x.address]).filter(Boolean));
@@ -39,12 +43,12 @@ export function unidentified(net: NetworkView | undefined, scan: Announcement[] 
   const boundIps = new Set(physical.filter((p) => !free.has(p.address)).map((p) => p.address));
   const out = new Map<string, Unidentified>();
   for (const p of net?.discovered_not_in_project ?? []) {
-    if (isController(p.device_type) || bound.has(p.uuid) || bound.has(p.address)) continue;
+    if (isController(p.device_type) || isUpnp(p.device_type) || bound.has(p.uuid) || bound.has(p.address)) continue;
     out.set(p.address, { address: p.address, device_type: p.device_type, host: null, manufacturer: "", model: "", driver: "",
       identity: { address: p.uuid, search_type: p.device_type }, seenBy: ["director"] });
   }
   for (const a of scan ?? []) {
-    if (isController(a.device_type) || boundIps.has(a.address)) continue;
+    if (isController(a.device_type) || isUpnp(a.device_type) || boundIps.has(a.address)) continue;
     const identity = identityFor(a, physical);
     if (bound.has(identity.address) || bound.has(a.host) || bound.has(a.address)) continue;
     const d = out.get(a.address);

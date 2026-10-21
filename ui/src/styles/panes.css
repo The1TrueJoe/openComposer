@@ -4,10 +4,43 @@
 .pane-cell { min-width: 0; min-height: 0; overflow: hidden; }
 .pane-cell > .panel { height: 100%; }
 
-/* One pixel to see, nine to grab. */
-.grip { position: relative; flex: none; width: 1px; background: var(--line); cursor: col-resize; }
-.grip::after { content: ""; position: absolute; top: 0; left: -4px; width: 9px; height: 100%; }
-.grip:hover, .grip[data-separator="active"], .grip[data-active] { background: var(--accent); }
+.panes.vertical { flex-direction: column; }
+/* A vertical split inside a flex column (a pane body, the Items pane): it takes what is left. */
+.panes.with-detail { flex: 1; min-height: 0; height: auto; }
+.pane-stack { height: 100%; min-height: 0; display: flex; flex-direction: column; }
+.pane-cell > .drv-detail { height: 100%; max-height: none; border-top: 0; }
+
+/* One pixel to see, nine to grab; on hover or drag it thickens to 3px of accent so you can see
+   what you have hold of. A grip in a horizontal row is vertical (aria-orientation="vertical") and
+   resizes columns; one in a vertical stack is horizontal and resizes rows. */
+.grip { position: relative; flex: none; background: var(--line); z-index: 3; outline: none; transition: background-color .12s; }
+.grip[aria-orientation="vertical"] { width: 1px; cursor: col-resize; }
+.grip[aria-orientation="horizontal"] { height: 1px; cursor: row-resize; }
+.grip::after { content: ""; position: absolute; }
+.grip[aria-orientation="vertical"]::after { top: 0; bottom: 0; left: -4px; width: 9px; }
+.grip[aria-orientation="horizontal"]::after { left: 0; right: 0; top: -4px; height: 9px; }
+.grip::before { content: ""; position: absolute; background: transparent; border-radius: 2px; transition: background-color .12s; pointer-events: none; }
+.grip[aria-orientation="vertical"]::before { top: 0; bottom: 0; left: -1px; width: 3px; }
+.grip[aria-orientation="horizontal"]::before { left: 0; right: 0; top: -1px; height: 3px; }
+.grip:hover, .grip[data-separator="hover"], .grip[data-separator="active"], .grip[data-separator="focus"], .grip:focus-visible { background: var(--accent); }
+.grip:hover::before, .grip[data-separator="hover"]::before, .grip[data-separator="active"]::before, .grip:focus-visible::before {
+  background: color-mix(in srgb, var(--accent) 70%, transparent); }
+
+/* A grip on the edge of something outside a pane group (components/Panes.tsx `EdgeGrip`). */
+.edge-grip { position: absolute; z-index: 5; outline: none; touch-action: none; }
+.edge-grip.left, .edge-grip.right { top: 0; bottom: 0; width: 9px; cursor: col-resize; }
+.edge-grip.left { left: -4px; }
+.edge-grip.right { right: -4px; }
+.edge-grip.top, .edge-grip.bottom { left: 0; right: 0; height: 9px; cursor: row-resize; }
+.edge-grip.top { top: -4px; }
+.edge-grip.bottom { bottom: -4px; }
+.edge-grip::before { content: ""; position: absolute; background: transparent; transition: background-color .12s; }
+.edge-grip.left::before, .edge-grip.right::before { top: 0; bottom: 0; left: 3px; width: 3px; }
+.edge-grip.top::before, .edge-grip.bottom::before { left: 0; right: 0; top: 3px; height: 3px; }
+/* The assistant's panel clips its overflow, so its grip sits just inside the top edge. */
+.ask-panel { position: relative; }
+.ask-panel > .edge-grip.top { top: 0; }
+.edge-grip:hover::before, .edge-grip[data-separator="active"]::before, .edge-grip:focus-visible::before { background: color-mix(in srgb, var(--accent) 70%, transparent); }
 
 /* A collapsed pane: its name down a strip, which is also the way back. */
 .rail { display: flex; flex-direction: column; align-items: center; gap: 9px; width: 100%; height: 100%; padding: 11px 0; border: 0;

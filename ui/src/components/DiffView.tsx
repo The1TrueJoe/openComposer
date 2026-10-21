@@ -301,6 +301,26 @@ const Row = memo(function Row({ change: c }: { change: Change }) {
       );
     case "programming_changed":
       return <CodeDiff owner={c.owner} event={c.event_name ?? `Event #${c.event}`} lines={c.lines} />;
+    case "schedule_added":
+    case "schedule_removed":
+      return (
+        <div className={cls}>
+          <Gutter effect={effect} />
+          <Name item={c.owner} />
+          <span className={cx("dv-prop", c.kind === "schedule_removed" && "strike")}>{c.name}</span>
+          <span className="dim">{c.when}</span>
+          {c.kind === "schedule_removed" && c.cascade && <span className="tag warn">removed with agent</span>}
+        </div>
+      );
+    case "schedule_changed":
+      return (
+        <div className={cls}>
+          <Gutter effect={effect} />
+          <Name item={c.owner} />
+          <span className="dv-prop">{c.name} · {c.field}</span>
+          <ValueChange from={c.from} to={c.to} />
+        </div>
+      );
     case "property_changed":
       return null; // drawn by PropertyRows, grouped under their item
   }

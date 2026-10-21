@@ -8,7 +8,7 @@ import { ConnectScreen } from "./components/connect";
 import { McpAuthPrompt } from "./components/McpAuth";
 import { DirectorPicker, Failure, Loading, Logo, StatusBar } from "./components/shell";
 import { resetDriverIcons } from "./lib/driverIcons";
-import { INSPECTOR_TABS, type FocusItem, type InspectorTab, type Shell, type View } from "./lib/shell";
+import { INSPECTOR_TABS, type FocusItem, type InspectorTab, type ProgramFocus, type Shell, type View } from "./lib/shell";
 import { useBackendEvent } from "./lib/ui";
 
 // One chunk per tab: only one is on screen, and the agent's markdown and the settings forms
@@ -138,6 +138,8 @@ export default function App() {
   const propose = useCallback((ops: Op[], reason?: string) => settle(api.propose(ops, reason)), [settle]);
   const addDriver = useCallback((a: AddDriverArgs) => settle(api.addDriver(a)), [settle]);
   const openChat = useCallback((id: string) => { setChat(id); setView("agent"); }, []);
+  const [programFocus, setProgramFocus] = useState<ProgramFocus | null>(null);
+  const program = useCallback((f: ProgramFocus) => { setProgramFocus(f); setView("programming"); }, []);
 
   const pending = approvals.filter((a) => a.status === "pending").length;
 
@@ -152,9 +154,9 @@ export default function App() {
       rev, approvals, propose, addDriver, refreshStatus,
       openApprovals: () => setDrawer(true),
       go: setView,
-      selected, select: setSelected, inspectorTab, setInspectorTab, reportFocus: setFocus, chat, openChat,
+      selected, select: setSelected, inspectorTab, setInspectorTab, reportFocus: setFocus, chat, openChat, programFocus, program,
     };
-  }, [status, info, rev, approvals, propose, addDriver, refreshStatus, selected, inspectorTab, chat, openChat]);
+  }, [status, info, rev, approvals, propose, addDriver, refreshStatus, selected, inspectorTab, chat, openChat, programFocus, program]);
 
   // Tell the backend what is on screen, so "this device" means something to an assistant.
   // Debounced: arrowing down the tree shouldn't be a call per row.
