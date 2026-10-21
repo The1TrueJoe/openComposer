@@ -3,6 +3,7 @@ import type {
   DirectorInfo, DriverDoc, Events, ItemDetail, McpStatus, NetworkView, Op, Outcome, Overview,
   ProgrammingEvent, VariableRow, Provider, ProviderStatus, SavedDirector, AccessMode, TreeNode, ZigbeeQuery, BackupResult,
   AddDriverArgs, ControllerDriver, LibraryDriver, UiContext, CommandParam, DeviceState, Effort, AuthRequest, McpGrant, DriverTab, AgentView,
+  TakeoverStatus, TakeoverParams, TakeoverReport, RevertParams,
 } from "./types";
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -133,4 +134,14 @@ export const api = {
 
   /** Tell the backend what the window shows (for the agent's `ui_context`). */
   setUiContext: (context: UiContext) => call<void>("set_ui_context", { context }),
+
+  // Controller takeover (SSH + cert swap). Not part of the agent/MCP surface — a user action.
+  /** Whether openComposer has a takeover CA yet, and where it came from. */
+  takeoverStatus: () => call<TakeoverStatus>("takeover_status"),
+  /** Adopt an existing "Gary tool" Certs folder's CA (its public.pem + private.key). */
+  adoptGaryCa: (folder: string) => call<string>("adopt_gary_ca", { folder }),
+  /** Take over a controller. `confirm` is sent true: the UI must confirm before calling. */
+  takeOver: (params: TakeoverParams) => call<TakeoverReport>("take_over_controller", { params, confirm: true }),
+  /** Undo a takeover on a controller. `confirm` is sent true: the UI must confirm first. */
+  revert: (params: RevertParams) => call<TakeoverReport>("revert_takeover", { params, confirm: true }),
 };

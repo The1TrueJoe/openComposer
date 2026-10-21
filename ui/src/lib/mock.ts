@@ -64,6 +64,8 @@ const installed = new Set([...project.items.values()].flatMap((i) => (i.driver ?
 let library: LibraryDriver[] = fresh ? [] : seedLibrary();
 /** MCP sign-ins: `?auth` in the URL has a client ask a few seconds after load. */
 const authPending: AuthRequest[] = [];
+/** The takeover CA, once generated or adopted (mock only). */
+let takeoverCa: { label: string; cn: string } | null = null;
 let grants: McpGrant[] = fresh ? [] : [
   { id: "g-1", client_name: "Claude Code", created: new Date(Date.now() - 6 * 86_400_000).toISOString(), last_used: new Date(Date.now() - 20 * 60_000).toISOString() },
 ];
@@ -1534,6 +1536,58 @@ async function handle(cmd: string, a: Args): Promise<unknown> {
       const i = conversations.findIndex((x) => x.id === a.id);
       if (i >= 0) conversations.splice(i, 1);
       return null;
+    }
+    case "takeover_status":
+      return takeoverCa
+        ? { has_ca: true, ca_label: takeoverCa.label, ca_cn: takeoverCa.cn }
+        : { has_ca: false, ca_label: null, ca_cn: null };
+    case "adopt_gary_ca":
+      await sleep(300);
+      takeoverCa = { label: `adopted from ${a.folder}`, cn: "Composer_tech@control4.com_dev" };
+      return takeoverCa.cn;
+    case "take_over_controller": {
+      if (!a.confirm) throw "the takeover changes the controller and reboots it — confirm it first";
+      const p = (a.params ?? {}) as Args;
+      const ver = String(p.os_version ?? "");
+      const modern = /^(4\.[2-9]|[5-9])/.test(ver);
+      if (modern && (!p.account_email || !p.account_password))
+        throw "this controller (OS 4.2+) needs your Control4 account email and password to re-enable SSH for the takeover";
+      await sleep(1400);
+      takeoverCa ??= { label: "generated", cn: "openComposer CA" };
+      identity = { loaded: true, unlocked: true, label: `issued by ${takeoverCa.cn}`, fingerprint: "b7:3c:91:de:04:2a:11:22", error: null };
+      return {
+        era: modern ? "Modern" : "Derived",
+        patched: modern
+          ? ["/opt/control4/etc/ssl/certs/clientca-prod.pem", "/etc/openvpn/clientca-prod.pem", "/etc/mosquitto/certs/ca-chain.pem"]
+          : ["/etc/openvpn/clientca-prod.pem"],
+        already_patched: [],
+        missing: [],
+        rebooted: !!p.reboot,
+        issued_cn: "Composer_openComposer",
+        ca_label: takeoverCa.label,
+        mqtt_patched: modern && !!p.mqtt,
+      };
+    }
+    case "revert_takeover": {
+      if (!a.confirm) throw "reverting changes the controller and reboots it — confirm it first";
+      const p = (a.params ?? {}) as Args;
+      const ver = String(p.os_version ?? "");
+      const modern = /^(4\.[2-9]|[5-9])/.test(ver);
+      if (modern && (!p.account_email || !p.account_password))
+        throw "this controller (OS 4.2+) needs your Control4 account email and password to re-enable SSH for the revert";
+      await sleep(1200);
+      return {
+        era: modern ? "Modern" : "Derived",
+        patched: modern
+          ? ["/opt/control4/etc/ssl/certs/clientca-prod.pem", "/etc/openvpn/clientca-prod.pem", "/etc/mosquitto/certs/ca-chain.pem"]
+          : ["/etc/openvpn/clientca-prod.pem"],
+        already_patched: [],
+        missing: [],
+        rebooted: !!p.reboot,
+        issued_cn: "",
+        ca_label: takeoverCa?.label ?? "",
+        mqtt_patched: false,
+      };
     }
   }
   throw `unknown command ${cmd}`;

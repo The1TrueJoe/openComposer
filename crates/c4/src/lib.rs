@@ -17,6 +17,7 @@ pub mod ops;
 pub mod program;
 pub mod sddp;
 pub mod soap;
+pub mod takeover;
 pub mod xml;
 
 pub use director::{Catalog, Director, DirectorError, DirectorInfo, Snapshot};

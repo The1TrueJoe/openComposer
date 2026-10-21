@@ -854,3 +854,35 @@ export type AgentView =
   | (AgentViewBase & { view: "email_notification"; data: EmailData })
   /** Read-only: the touchscreens' photo screen saver. */
   | (AgentViewBase & { view: "screen_saver"; data: { device: NamedRef | null; picture_path: string; photo_seconds: number } });
+
+// Controller takeover (SSH + cert swap). Params fields keep the Rust snake_case names
+// serde reads; the UI gates the call behind a confirmation.
+export interface TakeoverStatus {
+  has_ca: boolean;
+  ca_label: string | null;
+  ca_cn: string | null;
+}
+export interface TakeoverParams {
+  host: string;
+  os_version: string;
+  account_email?: string | null;
+  account_password?: string | null;
+  dealer_password?: string | null;
+  mac?: string | null;
+  reboot: boolean;
+  /** Also set up the OS-4.2 MQTT bus (patch api.pem). Off unless asked. */
+  mqtt?: boolean;
+}
+/** Undoing a takeover needs the same way back in; no cert is issued. */
+export type RevertParams = Omit<TakeoverParams, "mqtt">;
+export interface TakeoverReport {
+  era: string;
+  patched: string[];
+  already_patched: string[];
+  missing: string[];
+  rebooted: boolean;
+  /** Empty on a revert (no cert issued). */
+  issued_cn: string;
+  ca_label: string;
+  mqtt_patched?: boolean;
+}

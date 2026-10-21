@@ -61,3 +61,7 @@ details.advanced { margin-top: 10px; }
 details.advanced summary { cursor: pointer; color: var(--dim); font-size: 12px; padding: 4px 0; }
 details.advanced summary:hover { color: var(--text); }
 details.advanced[open] summary { margin-bottom: 6px; }
+
+/* Takeover: vertical lists of patched/backed-up file paths in the result grid. */
+.kv > .col { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.kv > .col .mono { overflow-wrap: anywhere; }

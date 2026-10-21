@@ -47,13 +47,28 @@ fn keychain_key(create: bool) -> anyhow::Result<[u8; 32]> {
 pub fn save(path: &Path, id: &StoredIdentity) -> anyhow::Result<()> {
     // Refuse to store something Director can't use.
     id.identity()?;
+    seal(path, &serde_json::to_vec(id)?)
+}
+
+pub fn load(path: &Path) -> anyhow::Result<Option<StoredIdentity>> {
+    match unseal(path)? {
+        Some(plain) => Ok(Some(serde_json::from_slice(&plain)?)),
+        None => Ok(None),
+    }
+}
+
+/// Seal arbitrary bytes under the same keychain-held key the identity uses (ChaCha20-
+/// Poly1305, 12-byte nonce prefix), and write them owner-only. Used for the identity and
+/// for the takeover CA's private key — anything too large or too sensitive for the OS
+/// keychain itself.
+pub fn seal(path: &Path, plain: &[u8]) -> anyhow::Result<()> {
     let key = keychain_key(true)?;
     let cipher = ChaCha20Poly1305::new(&Key::from(key));
     let mut nonce = [0u8; 12];
     rand::fill(&mut nonce);
     let sealed = cipher
-        .encrypt(&Nonce::from(nonce), serde_json::to_vec(id)?.as_slice())
-        .map_err(|_| anyhow::anyhow!("could not encrypt the identity"))?;
+        .encrypt(&Nonce::from(nonce), plain)
+        .map_err(|_| anyhow::anyhow!("could not encrypt the data"))?;
     let mut out = nonce.to_vec();
     out.extend(sealed);
     std::fs::write(path, out)?;
@@ -61,17 +76,18 @@ pub fn save(path: &Path, id: &StoredIdentity) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn load(path: &Path) -> anyhow::Result<Option<StoredIdentity>> {
+/// Unseal bytes written by [`seal`]; `Ok(None)` when the file is absent.
+pub fn unseal(path: &Path) -> anyhow::Result<Option<Vec<u8>>> {
     let Ok(bytes) = std::fs::read(path) else { return Ok(None) };
     if bytes.len() < 13 {
-        anyhow::bail!("identity file is damaged");
+        anyhow::bail!("sealed file is damaged");
     }
     let key = keychain_key(false)?;
     let cipher = ChaCha20Poly1305::new(&Key::from(key));
     let plain = cipher
         .decrypt(&Nonce::from(<[u8; 12]>::try_from(&bytes[..12])?), &bytes[12..])
-        .map_err(|_| anyhow::anyhow!("identity can't be decrypted with this keychain's key; import it again"))?;
-    Ok(Some(serde_json::from_slice(&plain)?))
+        .map_err(|_| anyhow::anyhow!("can't be decrypted with this keychain's key; import it again"))?;
+    Ok(Some(plain))
 }
 
 pub fn from_pem_files(cert: &Path, key: &Path) -> anyhow::Result<StoredIdentity> {

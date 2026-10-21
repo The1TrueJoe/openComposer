@@ -425,3 +425,54 @@ pub async fn mcp_grants(app: S<'_>) -> R<Vec<GrantView>> {
 pub async fn mcp_revoke(app: S<'_>, id: String) -> R<()> {
     app.update_config(|c| c.mcp.grants.retain(|g| g.id != id)).map(|_| ()).map_err(err)
 }
+
+// --- Controller takeover (SSH + cert swap) ---------------------------------------------
+// Deliberately not exposed to the agent or MCP: a takeover writes to a controller and
+// reboots it, so it runs only from an explicit, confirmed user action in the app.
+
+/// Whether openComposer has a takeover CA yet, and where it came from.
+#[tauri::command]
+pub async fn takeover_status(app: S<'_>) -> R<Value> {
+    let ca = crate::takeover::stored_ca(&app).map_err(err)?;
+    Ok(json!({
+        "has_ca": ca.is_some(),
+        "ca_label": ca.as_ref().map(|c| c.label.clone()),
+        "ca_cn": ca.and_then(|c| c4::takeover::ca::common_name_of(&c.cert_pem)),
+    }))
+}
+
+/// Adopt an existing "Gary tool" `Certs` folder's CA (`public.pem` + `private.key`), so
+/// certs openComposer issues chain to a CA the controller already trusts.
+#[tauri::command]
+pub async fn adopt_gary_ca(app: S<'_>, folder: String) -> R<String> {
+    crate::takeover::adopt_gary_ca(&app, &PathBuf::from(folder)).map_err(err)
+}
+
+/// Take over a controller: install the CA into its trust chains and import a client cert.
+/// `confirm` must be true — this writes to the controller and may reboot it.
+#[tauri::command]
+pub async fn take_over_controller(
+    app: S<'_>,
+    params: crate::takeover::Params,
+    confirm: bool,
+) -> R<crate::takeover::Report> {
+    if !confirm {
+        return Err("the takeover changes the controller and reboots it — confirm it first".into());
+    }
+    crate::takeover::run(app.inner(), params).await.map_err(err)
+}
+
+/// Undo a takeover: remove the CA from the controller's trust chains (and the MQTT signing
+/// cert), turn password SSH back off on OS 4.2+, and reboot if anything changed. `confirm`
+/// must be true.
+#[tauri::command]
+pub async fn revert_takeover(
+    app: S<'_>,
+    params: crate::takeover::RevertParams,
+    confirm: bool,
+) -> R<crate::takeover::Report> {
+    if !confirm {
+        return Err("reverting changes the controller and reboots it — confirm it first".into());
+    }
+    crate::takeover::revert(app.inner(), params).await.map_err(err)
+}

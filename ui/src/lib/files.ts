@@ -22,4 +22,12 @@ export async function pickFiles(o: PickOpts): Promise<string[]> {
   return Array.isArray(r) ? r : [r];
 }
 
+/** A single directory the user picked, or null if they cancelled. */
+export async function pickDir(title: string): Promise<string | null> {
+  if (isMock) return "/Users/you/Desktop/Control4/Control4 Gary";
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const r = await open({ title, directory: true, multiple: false });
+  return typeof r === "string" ? r : null;
+}
+
 export const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p;

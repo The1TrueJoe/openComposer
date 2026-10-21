@@ -16,6 +16,7 @@ pub mod mcp;
 pub mod oauth;
 pub mod proc;
 pub mod state;
+pub mod takeover;
 pub mod views;
 pub mod webui;
 
@@ -85,6 +86,10 @@ pub fn run() {
             commands::agent_configure,
             commands::agent_stop,
             commands::agent_delete,
+            commands::takeover_status,
+            commands::adopt_gary_ca,
+            commands::take_over_controller,
+            commands::revert_takeover,
         ])
         .build(tauri::generate_context!())
         .expect("error while building openComposer")
