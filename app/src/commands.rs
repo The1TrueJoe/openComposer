@@ -261,6 +261,7 @@ pub async fn action(app: S<'_>, name: String, args: Option<Value>) -> R<Value> {
         "get_item" => actions::get_item(app, req(a)?).await,
         "list_connections" => actions::connections(app, self::args(a)?).await,
         "get_programming" => actions::programming(app, self::args(a)?).await,
+        "get_variables" => actions::variables(app, self::args(a)?).await,
         "network_status" => actions::network(app, self::args(a)?).await,
         "discover_sddp" => actions::discover_sddp(self::args(a)?).await,
         "zigbee" => actions::zigbee(app, req(a)?).await,

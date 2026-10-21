@@ -99,6 +99,13 @@ pub enum Change {
     ScheduleAdded { owner: ItemRef, id: u32, name: String, when: String },
     ScheduleRemoved { owner: ItemRef, id: u32, name: String, when: String, cascade: bool },
     ScheduleChanged { owner: ItemRef, id: u32, name: String, field: String, from: String, to: String },
+    /// Something another built-in agent keeps: a lighting scene, an announcement, a Wake/Sleep
+    /// room, a notification. `what` names it ("lighting scene"); `details` are its settings.
+    AgentRecordAdded { owner: ItemRef, what: String, id: u32, name: String, details: Vec<(String, String)> },
+    AgentRecordRemoved { owner: ItemRef, what: String, id: u32, name: String, details: Vec<(String, String)>, cascade: bool },
+    /// One setting of it changed; `from`/`to` are "none" when the setting (a light in a
+    /// scene, say) was added or removed.
+    AgentRecordChanged { owner: ItemRef, what: String, id: u32, name: String, field: String, from: String, to: String },
 }
 
 impl Change {
@@ -108,12 +115,14 @@ impl Change {
             | Change::ConnectionAdded { .. }
             | Change::NetworkAdded { .. }
             | Change::VariableAdded { .. }
-            | Change::ScheduleAdded { .. } => s.added += 1,
+            | Change::ScheduleAdded { .. }
+            | Change::AgentRecordAdded { .. } => s.added += 1,
             Change::ItemRemoved { .. }
             | Change::ConnectionRemoved { .. }
             | Change::NetworkRemoved { .. }
             | Change::VariableRemoved { .. }
-            | Change::ScheduleRemoved { .. } => s.removed += 1,
+            | Change::ScheduleRemoved { .. }
+            | Change::AgentRecordRemoved { .. } => s.removed += 1,
             _ => s.changed += 1,
         }
     }
@@ -143,6 +152,15 @@ impl Change {
             Change::ScheduleAdded { owner, name, .. } => format!("sched+:{}:{name}", owner.id),
             Change::ScheduleRemoved { owner, id, .. } => format!("sched-:{}:{id}", owner.id),
             Change::ScheduleChanged { owner, id, field, .. } => format!("sched~:{}:{id}:{field}", owner.id),
+            // Agents number new records themselves; match those by name. Values are part of
+            // the key: an agent can accept a setting and keep another (a light that ties its
+            // colour ramp to its level ramp), and that should show as not having happened.
+            Change::AgentRecordAdded { owner, what, name, details, .. } => {
+                let d: Vec<String> = details.iter().map(|(k, v)| format!("{k}={v}")).collect();
+                format!("agent+:{}:{what}:{name}:{}", owner.id, d.join(";"))
+            }
+            Change::AgentRecordRemoved { owner, what, id, .. } => format!("agent-:{}:{what}:{id}", owner.id),
+            Change::AgentRecordChanged { owner, what, id, field, to, .. } => format!("agent~:{}:{what}:{id}:{field}={to}", owner.id),
         }
     }
 }
@@ -390,11 +408,73 @@ pub fn diff(before: &Project, after: &Project, names: &Names, opts: DiffOptions)
         }
     }
 
+    agent_records(&cx, &removed, &mut changes);
+
     let mut summary = Summary::default();
     for c in &changes {
         c.tally(&mut summary);
     }
     Diff { changes, summary }
+}
+
+/// Other agents' records (scenes, announcements…), compared setting by setting.
+fn agent_records(cx: &Ctx<'_>, removed: &BTreeSet<u32>, changes: &mut Vec<Change>) {
+    let (before, after) = (cx.before, cx.after);
+    let agents: BTreeSet<u32> = before.agent_data.keys().chain(after.agent_data.keys()).copied().collect();
+    for agent in agents {
+        let recs = |p: &Project| -> BTreeMap<(&'static str, u32), crate::agents::Record> {
+            p.agent_data.get(&agent).map(|d| d.records(p)).unwrap_or_default().into_iter().map(|r| ((r.what, r.id), r)).collect()
+        };
+        let (b, a) = (recs(before), recs(after));
+        for (k, r) in &b {
+            match a.get(k) {
+                None => changes.push(Change::AgentRecordRemoved {
+                    owner: cx.item_in(before, agent),
+                    what: r.what.into(),
+                    id: r.id,
+                    name: r.name.clone(),
+                    details: r.fields.clone(),
+                    cascade: removed.contains(&agent),
+                }),
+                Some(n) => {
+                    let mut push = |field: &str, from: &str, to: &str| {
+                        changes.push(Change::AgentRecordChanged {
+                            owner: cx.item(agent),
+                            what: r.what.into(),
+                            id: r.id,
+                            name: n.name.clone(),
+                            field: field.into(),
+                            from: from.into(),
+                            to: to.into(),
+                        })
+                    };
+                    if r.name != n.name {
+                        push("name", &r.name, &n.name);
+                    }
+                    let get = |fs: &[(String, String)], f: &str| fs.iter().find(|(k, _)| k == f).map(|(_, v)| v.clone());
+                    let mut fields: Vec<&String> = r.fields.iter().map(|(k, _)| k).collect();
+                    fields.extend(n.fields.iter().map(|(k, _)| k).filter(|k| !r.fields.iter().any(|(o, _)| o == *k)));
+                    for f in fields {
+                        let (from, to) = (get(&r.fields, f), get(&n.fields, f));
+                        if from != to {
+                            push(f, from.as_deref().unwrap_or("none"), to.as_deref().unwrap_or("none"));
+                        }
+                    }
+                }
+            }
+        }
+        for (k, r) in &a {
+            if !b.contains_key(k) {
+                changes.push(Change::AgentRecordAdded {
+                    owner: cx.item_in(after, agent),
+                    what: r.what.into(),
+                    id: r.id,
+                    name: r.name.clone(),
+                    details: r.fields.clone(),
+                });
+            }
+        }
+    }
 }
 
 fn schedule_when(s: &ScheduleSpec) -> String {

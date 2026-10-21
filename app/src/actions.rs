@@ -72,6 +72,18 @@ pub struct ProgrammingArgs {
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct VariablesArgs {
+    #[serde(default)]
+    pub director: Option<String>,
+    /// Only this item's variables (100001 is the project's own, the Variables agent).
+    #[serde(default)]
+    pub device: Option<u32>,
+    /// Include variables drivers mark hidden.
+    #[serde(default)]
+    pub hidden: bool,
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct SddpArgs {
     /// How long to listen, 1–15 seconds (default 4).
     #[serde(default)]
@@ -270,6 +282,12 @@ pub async fn programming(app: &Arc<App>, a: ProgrammingArgs) -> AppResult<Value>
     let s = app.session(a.director.as_deref()).await?;
     let (snap, cat) = (s.snapshot(false).await?, s.catalog(false).await?);
     Ok(views::programming(&snap.project, &cat, a.device))
+}
+
+pub async fn variables(app: &Arc<App>, a: VariablesArgs) -> AppResult<Value> {
+    let s = app.session(a.director.as_deref()).await?;
+    let snap = s.snapshot(false).await?;
+    Ok(views::variables(&snap.project, a.device, a.hidden))
 }
 
 /// What Director knows about the network: identified devices and everything it has

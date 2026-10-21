@@ -1,8 +1,12 @@
-/** The browser preview's built-in agents: a Scheduler with a week of events and an
- *  Announcements agent, answering `agent_view` and the scheduler ops the way
- *  app/src/agent_views.rs and crates/c4/src/agents.rs do. Fixture data only. */
+/** The browser preview's built-in agents: a Scheduler with a week of events, Advanced
+ *  Lighting scenes, announcements, a Wake/Sleep room and notifications, answering
+ *  `agent_view` and the agents' ops roughly the way app/src/agent_views.rs and
+ *  crates/c4/src/agent_ops.rs do. Fixture data only. */
 
-import type { AgentView, Change, CodeLineView, ItemRef, NamedRef, Op, ScheduleRow, ScheduleSpec, Weekday } from "../api/types.ts";
+import type {
+  AgentView, AnnouncementSpec, Change, CodeLineView, EmailTemplateSpec, ItemRef, LightStep, NamedRef, Op, PushTemplateSpec, ScheduleRow, ScheduleSpec,
+  WakeSleepSpec, Weekday,
+} from "../api/types.ts";
 
 type Ctx = {
   ref: (id: number) => NamedRef;
@@ -91,21 +95,243 @@ function row(e: Entry, ctx: Ctx): ScheduleRow {
   };
 }
 
+// ---- the other agents (Advanced Lighting, Announcements, Wake/Sleep, notifications) --------------
+
+const LIGHTING = 92, ANNOUNCE = 91;
+let lightingNext = 3, announceNext = 3, wakeNext = 2, pushNext = 3, emailNext = 2;
+
+const scenes: { id: number; name: string; members: { device: number; steps: LightStep[] }[] }[] = [
+  { id: 0, name: "Kitchen Cooking", members: [{ device: 31, steps: [{ delay_ms: 0, level: 100, rate_ms: 1000, color: { kelvin: 4000 } }] }] },
+  { id: 1, name: "Kitchen Evening", members: [{ device: 31, steps: [{ delay_ms: 0, level: 40, rate_ms: 3000, color: { kelvin: 2700 } },
+    { delay_ms: 600_000, level: 20, rate_ms: 60_000, color: null }] }] },
+  { id: 2, name: "All Off", members: [{ device: 31, steps: [{ delay_ms: 0, level: 0, rate_ms: 750, color: null }] }] },
+];
+const announcements: { id: number; spec: AnnouncementSpec }[] = [
+  { id: 1, spec: { name: "Good Morning", audio: "chime.mp3", text: "Good morning!", image: null, display_seconds: 30, ok_button: true,
+    rooms: [{ id: 11, volume: 30 }, { id: 13, volume: null }], screens: [], touchscreen_audio: [] } },
+  { id: 2, spec: { name: "Doorbell", audio: "bell.mp3", text: "Someone is at the front door",
+    image: "http://10.0.0.50/cgi/jpg/image.cgi?camera=1&username=viewer&password=••••", display_seconds: 60, ok_button: true,
+    rooms: [{ id: 11, volume: null }, { id: 12, volume: 45 }], screens: [], touchscreen_audio: [] } },
+];
+const WAKE_DEFAULT = (): WakeSleepSpec => ({
+  wake_time: "06:30", wake_days: [], sleep_minutes: 15,
+  lights: { visible: true, enabled: true, light: 0, ramp_minutes: 1 },
+  media: { visible: true, enabled: true, source: 0, kind: "", item: 0, tv_only: false },
+  blinds: { visible: true, enabled: true, blind: 0 },
+  temperature: { visible: false, enabled: true, mode: "Cool", setpoint_f: 72 },
+});
+const wakeRooms: { id: number; room: number; settings: WakeSleepSpec }[] = [
+  { id: 1, room: 13, settings: { ...WAKE_DEFAULT(), wake_time: "07:00", wake_days: ["monday", "tuesday", "wednesday", "thursday", "friday"], sleep_minutes: 30,
+    media: { visible: true, enabled: false, source: 0, kind: "watch", item: 0, tv_only: true } } },
+];
+const CATEGORIES = [{ id: 1, name: "Lighting" }, { id: 2, name: "Security" }, { id: 9, name: "Comfort" }];
+const SEVERITIES = [{ id: 2, name: "Alarms" }, { id: 3, name: "Alerts" }, { id: 4, name: "Informational" }];
+const pushes: { id: number; spec: PushTemplateSpec }[] = [
+  { id: 1, spec: { name: "Garage left open", category: 2, severity: 3, subject: "The garage door is still open", message: "", timestamp: true, attachments: [] } },
+  { id: 2, spec: { name: "Too warm", category: 9, severity: 4, subject: "The bedroom is above 78°", message: "", timestamp: true, attachments: [] } },
+];
+const emails: { id: number; spec: EmailTemplateSpec }[] = [
+  { id: 1, spec: { name: "Daily summary", to: "owner@example.com", subject: "House summary", body: "All quiet.", timestamp: true } },
+];
+
+const stepText = (st: LightStep) => {
+  const parts = [st.level == null ? null : st.level === 0 ? "off" : `${st.level}%`,
+    st.color == null ? null : "kelvin" in st.color ? `${st.color.kelvin} K` : `hue ${st.color.hue}°, saturation ${st.color.saturation}%`].filter(Boolean);
+  const ms = (n: number) => (n >= 1000 ? `${+(n / 1000).toFixed(1)} s` : `${n} ms`);
+  return `${st.delay_ms ? `after ${ms(st.delay_ms)}: ` : ""}${parts.join(", ")} over ${ms(st.rate_ms)}`;
+};
+
+const lights = (ctx: Ctx) => [31].map((id) => ctx.ref(id));
+
 export function agentView(id: number, driver: string | null, name: string, ctx: Ctx): AgentView {
   const agent = { id, name };
-  if (driver?.includes("scheduler")) {
+  const d = driver ?? "";
+  if (d.includes("scheduler")) {
     return { id, view: "scheduler", title: "Scheduler", agent, data: { sun: SUN, entries: entries.map((e) => row(e, ctx)) } };
   }
-  if (driver?.includes("announcement")) {
-    return { id, view: "announcements", title: "Announcements", agent, data: { announcements: [
-      { id: 1, name: "Good Morning", audio: "chime.mp3", text: "Good morning!", image: null,
-        rooms: [{ room: ctx.ref(11), volume: 30 }, { room: ctx.ref(13), volume: null }], screens: [] },
-      { id: 2, name: "Doorbell", audio: "bell.mp3", text: "Someone is at the front door",
-        image: "http://10.0.0.50/cgi/jpg/image.cgi?camera=1&username=viewer&password=••••",
-        rooms: [{ room: ctx.ref(11), volume: null }, { room: ctx.ref(12), volume: 45 }], screens: [] },
-    ] } };
+  if (d.includes("adv_lighting")) {
+    return { id, view: "advanced_lighting", title: "Advanced Lighting", agent, data: {
+      lights: lights(ctx),
+      scenes: scenes.map((s) => ({ id: s.id, name: s.name, active: s.id === 2, ramp_capable: true, toggle: null,
+        programmed: [0, 1, 4].reduce((n, e) => n + ctx.programming(LIGHTING, s.id * 5 + e).length, 0),
+        members: s.members.map((m) => ({ device: ctx.ref(m.device), steps: m.steps.map((st) => ({ ...st, text: stepText(st) })) })) })),
+    } };
+  }
+  if (d.includes("announcements")) {
+    return { id, view: "announcements", title: "Announcements", agent, data: {
+      announcements: announcements.map(({ id: aid, spec }) => ({
+        id: aid, name: spec.name, audio: spec.audio, text: spec.text || null, image: spec.image, display_seconds: spec.display_seconds, ok_button: spec.ok_button,
+        rooms: spec.rooms.map((r) => ({ room: ctx.ref(r.id), volume: r.volume })), screens: spec.screens.map((s) => ({ device: ctx.ref(s), onscreen: true })),
+        touchscreen_audio: spec.touchscreen_audio.map((t) => ({ device: ctx.ref(t.id), volume: t.volume })),
+        programmed: ctx.programming(ANNOUNCE, aid).length, spec: structuredClone(spec) })),
+      rooms: [10, 11, 12, 13].map((r) => ctx.ref(r)), screens: [ctx.ref(44)], touchscreens: [],
+      sounds: ["bell.mp3", "chime.mp3"], display_seconds: [5, 10, 15, 20, 25, 30, 60, 300, 600],
+    } };
+  }
+  if (d.includes("wakeup_goodnight")) {
+    return { id, view: "wake_sleep", title: "Wake/Sleep", agent, data: {
+      rooms: wakeRooms.map((w) => ({ id: w.id, room: ctx.ref(w.room), settings: structuredClone(w.settings),
+        light: w.settings.lights.light ? ctx.ref(w.settings.lights.light) : { id: 0, name: "All lights in the room", room: null },
+        blind: w.settings.blinds.blind ? ctx.ref(w.settings.blinds.blind) : { id: 0, name: "All blinds in the room", room: null },
+        source: w.settings.media.source ? ctx.ref(w.settings.media.source).name : w.settings.media.kind === "watch" ? "TV" : null, item: null,
+        sources: [{ id: 53, name: "Bedroom TV", kind: "watch" }], items: [], temperature_modes: ["Heat", "Cool", "Auto"] })),
+      available_rooms: [10, 11, 12, 13].filter((r) => !wakeRooms.some((w) => w.room === r)).map((r) => ctx.ref(r)),
+      hospitality: false, lights: lights(ctx), blinds: [],
+    } };
+  }
+  if (d.includes("emailnotification")) {
+    return { id, view: "email_notification", title: "Email Notification", agent, data: {
+      templates: emails.map((t) => ({ id: t.id, name: t.spec.name, subject: t.spec.subject, message: t.spec.body, to: t.spec.to, spec: { ...t.spec } })),
+    } };
+  }
+  if (d.includes("agent_notification")) {
+    const named = (l: { id: number; name: string }[], v: number) => l.find((x) => x.id === v)?.name ?? null;
+    return { id, view: "push_notification", title: "Push Notification", agent, data: {
+      templates: pushes.map((t) => ({ id: t.id, name: t.spec.name, subject: t.spec.subject, message: t.spec.message, timestamp: t.spec.timestamp,
+        category: named(CATEGORIES, t.spec.category), severity: named(SEVERITIES, t.spec.severity),
+        attachments: t.spec.attachments.map((a) => ctx.ref(a.owner)), spec: structuredClone(t.spec) })),
+      categories: CATEGORIES, severities: SEVERITIES, attachment_providers: [],
+    } };
   }
   return { id, view: null };
+}
+
+type OtherAgentOp = Extract<Op, { op:
+  | "add_lighting_scene" | "rename_lighting_scene" | "remove_lighting_scene" | "set_scene_light" | "remove_scene_light"
+  | "add_announcement" | "modify_announcement" | "remove_announcement"
+  | "add_wake_sleep_room" | "modify_wake_sleep_room" | "remove_wake_sleep_room"
+  | "add_push_notification" | "modify_push_notification" | "remove_push_notification"
+  | "add_email_template" | "modify_email_template" | "remove_email_template" }>;
+
+const OTHER = new Set<string>(["add_lighting_scene", "rename_lighting_scene", "remove_lighting_scene", "set_scene_light", "remove_scene_light",
+  "add_announcement", "modify_announcement", "remove_announcement", "add_wake_sleep_room", "modify_wake_sleep_room", "remove_wake_sleep_room",
+  "add_push_notification", "modify_push_notification", "remove_push_notification", "add_email_template", "modify_email_template", "remove_email_template"]);
+export const isOtherAgentOp = (op: Op): op is OtherAgentOp => OTHER.has(op.op);
+
+const sceneOf = (id: number) => {
+  const s = scenes.find((x) => x.id === id);
+  if (!s) throw `Advanced Lighting has no scene #${id}`;
+  return s;
+};
+const byId = <T extends { id: number }>(list: T[], id: number, what: string) => {
+  const x = list.find((y) => y.id === id);
+  if (!x) throw `there is no ${what} #${id}`;
+  return x;
+};
+const uniqueName = (names: string[], name: string, what: string) => {
+  if (!name.trim()) throw "a name can't be empty";
+  if (names.some((n) => n.trim().toLowerCase() === name.trim().toLowerCase())) throw `there is already ${what} named “${name.trim()}”`;
+};
+
+export function describeAgentOp(op: OtherAgentOp, ctx: Ctx): string {
+  const n = (id: number) => `“${ctx.ref(id).name}”`;
+  switch (op.op) {
+    case "add_lighting_scene": return `Add Advanced Lighting scene “${op.name}”`;
+    case "rename_lighting_scene": return `Rename lighting scene “${sceneOf(op.scene).name}” to “${op.name}”`;
+    case "remove_lighting_scene": return `Remove lighting scene “${sceneOf(op.scene).name}”`;
+    case "set_scene_light": return `Set ${n(op.light)} in lighting scene “${sceneOf(op.scene).name}”: ${op.steps.map(stepText).join(" → ")}`;
+    case "remove_scene_light": return `Remove ${n(op.light)} from lighting scene “${sceneOf(op.scene).name}”`;
+    case "add_announcement": return `Add announcement “${op.announcement.name}”`;
+    case "modify_announcement": return `Change announcement “${byId(announcements, op.id, "announcement").spec.name}”`;
+    case "remove_announcement": return `Remove announcement “${byId(announcements, op.id, "announcement").spec.name}”`;
+    case "add_wake_sleep_room": return `Set up Wake/Sleep in ${n(op.room)}`;
+    case "modify_wake_sleep_room": return `Change the Wake/Sleep defaults of ${n(byId(wakeRooms, op.id, "Wake/Sleep room").room)}`;
+    case "remove_wake_sleep_room": return `Remove Wake/Sleep from ${n(byId(wakeRooms, op.id, "Wake/Sleep room").room)}`;
+    case "add_push_notification": return `Add push notification “${op.template.name}”`;
+    case "modify_push_notification": return `Change push notification “${byId(pushes, op.id, "push notification").spec.name}”`;
+    case "remove_push_notification": return `Remove push notification “${byId(pushes, op.id, "push notification").spec.name}”`;
+    case "add_email_template": return `Add email notification “${op.template.name}”`;
+    case "modify_email_template": return `Change email notification “${byId(emails, op.id, "email notification").spec.name}”`;
+    case "remove_email_template": return `Remove email notification “${byId(emails, op.id, "email notification").spec.name}”`;
+  }
+}
+
+/** The preview's diff for an agent op: whole records added/removed, a "settings" field changed. */
+export function predictAgentOp(op: OtherAgentOp, ctx: Ctx): Change[] {
+  const owner = ctx.itemRef(op.agent);
+  const added = (what: string, id: number, name: string): Change => ({ kind: "agent_record_added", owner, what, id, name, details: [] });
+  const removed = (what: string, id: number, name: string): Change => ({ kind: "agent_record_removed", owner, what, id, name, details: [], cascade: false });
+  const changed = (what: string, id: number, name: string, field: string, from: string, to: string): Change =>
+    ({ kind: "agent_record_changed", owner, what, id, name, field, from, to });
+  switch (op.op) {
+    case "add_lighting_scene":
+      uniqueName(scenes.map((s) => s.name), op.name, "a lighting scene");
+      return [added("lighting scene", lightingNext, op.name)];
+    case "rename_lighting_scene": { const s = sceneOf(op.scene); return [changed("lighting scene", s.id, op.name, "name", s.name, op.name)]; }
+    case "remove_lighting_scene": { const s = sceneOf(op.scene); return [removed("lighting scene", s.id, s.name)]; }
+    case "set_scene_light": {
+      const s = sceneOf(op.scene);
+      const was = s.members.find((m) => m.device === op.light);
+      return [changed("lighting scene", s.id, s.name, ctx.ref(op.light).name, was ? was.steps.map(stepText).join(" → ") : "none", op.steps.map(stepText).join(" → "))];
+    }
+    case "remove_scene_light": {
+      const s = sceneOf(op.scene);
+      const was = s.members.find((m) => m.device === op.light);
+      if (!was) throw `#${op.light} isn't in scene “${s.name}”`;
+      return [changed("lighting scene", s.id, s.name, ctx.ref(op.light).name, was.steps.map(stepText).join(" → "), "none")];
+    }
+    case "add_announcement":
+      uniqueName(announcements.map((a) => a.spec.name), op.announcement.name, "an announcement");
+      return [added("announcement", announceNext, op.announcement.name)];
+    case "modify_announcement": {
+      const a = byId(announcements, op.id, "announcement");
+      return [changed("announcement", a.id, op.announcement.name, "settings", a.spec.text, op.announcement.text)];
+    }
+    case "remove_announcement": { const a = byId(announcements, op.id, "announcement"); return [removed("announcement", a.id, a.spec.name)]; }
+    case "add_wake_sleep_room":
+      if (wakeRooms.some((w) => w.room === op.room)) throw "that room already has Wake/Sleep";
+      return [added("Wake/Sleep room", wakeNext, ctx.ref(op.room).name)];
+    case "modify_wake_sleep_room": {
+      const w = byId(wakeRooms, op.id, "Wake/Sleep room");
+      return [changed("Wake/Sleep room", w.id, ctx.ref(w.room).name, "wake-up", w.settings.wake_time, op.settings.wake_time)];
+    }
+    case "remove_wake_sleep_room": { const w = byId(wakeRooms, op.id, "Wake/Sleep room"); return [removed("Wake/Sleep room", w.id, ctx.ref(w.room).name)]; }
+    case "add_push_notification":
+      uniqueName(pushes.map((t) => t.spec.name), op.template.name, "a push notification");
+      return [added("push notification", pushNext, op.template.name)];
+    case "modify_push_notification": {
+      const t = byId(pushes, op.id, "push notification");
+      return [changed("push notification", t.id, op.template.name, "title", t.spec.subject, op.template.subject)];
+    }
+    case "remove_push_notification": { const t = byId(pushes, op.id, "push notification"); return [removed("push notification", t.id, t.spec.name)]; }
+    case "add_email_template":
+      uniqueName(emails.map((t) => t.spec.name), op.template.name, "an email notification");
+      return [added("email notification", emailNext, op.template.name)];
+    case "modify_email_template": {
+      const t = byId(emails, op.id, "email notification");
+      return [changed("email notification", t.id, op.template.name, "subject", t.spec.subject, op.template.subject)];
+    }
+    case "remove_email_template": { const t = byId(emails, op.id, "email notification"); return [removed("email notification", t.id, t.spec.name)]; }
+  }
+}
+
+export function applyAgentOp(op: OtherAgentOp, ctx: Ctx): void {
+  const drop = <T extends { id: number }>(list: T[], id: number) => list.splice(list.findIndex((x) => x.id === id), 1);
+  switch (op.op) {
+    case "add_lighting_scene": scenes.push({ id: lightingNext++, name: op.name.trim(), members: [] }); return;
+    case "rename_lighting_scene": sceneOf(op.scene).name = op.name.trim(); return;
+    case "remove_lighting_scene": drop(scenes, op.scene); [0, 1, 4].forEach((e) => ctx.dropProgramming(LIGHTING, op.scene * 5 + e)); return;
+    case "set_scene_light": {
+      const s = sceneOf(op.scene);
+      const m = s.members.find((x) => x.device === op.light);
+      if (m) m.steps = op.steps;
+      else s.members.push({ device: op.light, steps: op.steps });
+      return;
+    }
+    case "remove_scene_light": { const s = sceneOf(op.scene); s.members = s.members.filter((m) => m.device !== op.light); return; }
+    case "add_announcement": announcements.push({ id: announceNext++, spec: op.announcement }); return;
+    case "modify_announcement": byId(announcements, op.id, "announcement").spec = op.announcement; return;
+    case "remove_announcement": drop(announcements, op.id); ctx.dropProgramming(ANNOUNCE, op.id); return;
+    case "add_wake_sleep_room": wakeRooms.push({ id: wakeNext++, room: op.room, settings: WAKE_DEFAULT() }); return;
+    case "modify_wake_sleep_room": byId(wakeRooms, op.id, "Wake/Sleep room").settings = op.settings; return;
+    case "remove_wake_sleep_room": drop(wakeRooms, op.id); return;
+    case "add_push_notification": pushes.push({ id: pushNext++, spec: op.template }); return;
+    case "modify_push_notification": byId(pushes, op.id, "push notification").spec = op.template; return;
+    case "remove_push_notification": drop(pushes, op.id); return;
+    case "add_email_template": emails.push({ id: emailNext++, spec: op.template }); return;
+    case "modify_email_template": byId(emails, op.id, "email notification").spec = op.template; return;
+    case "remove_email_template": drop(emails, op.id); return;
+  }
 }
 
 const find = (id: number) => {

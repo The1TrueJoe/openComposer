@@ -4,7 +4,7 @@
 
 import type { Change, ItemKind, ItemRef } from "../api/types.ts";
 
-export type SectionId = "items" | "properties" | "connections" | "network" | "variables" | "schedule" | "programming";
+export type SectionId = "items" | "properties" | "connections" | "network" | "variables" | "schedule" | "agents" | "programming";
 export type Effect = "added" | "removed" | "changed";
 
 export const SECTIONS: readonly { id: SectionId; title: string }[] = [
@@ -14,6 +14,7 @@ export const SECTIONS: readonly { id: SectionId; title: string }[] = [
   { id: "network", title: "Network" },
   { id: "variables", title: "Variables" },
   { id: "schedule", title: "Scheduler" },
+  { id: "agents", title: "Agents" },
   { id: "programming", title: "Programming" },
 ];
 
@@ -31,6 +32,8 @@ export function sectionOf(c: Change): SectionId {
       return "variables";
     case "schedule_added": case "schedule_removed": case "schedule_changed":
       return "schedule";
+    case "agent_record_added": case "agent_record_removed": case "agent_record_changed":
+      return "agents";
     case "programming_changed":
       return "programming";
   }

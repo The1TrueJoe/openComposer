@@ -77,13 +77,15 @@
 .sl[draggable="true"] { cursor: grab; }
 .sl .icon-btn:disabled { opacity: .4; cursor: not-allowed; }
 
-/* Between lines: a thin strip that takes a click (or a drop) and shows where new lines go. */
-.sl-gap { position: relative; height: 7px; margin: 0 16px 0 calc(16px + 38px + var(--d, 0) * 20px); cursor: pointer; }
-.sl-gap::before { content: ""; position: absolute; left: 0; right: 0; top: 3px; height: 1px; background: transparent; transition: background-color .1s; }
+/* Between lines: a thin strip that takes a click (or a drop) and shows where new lines go. It
+   spans the whole width (left and right pick how deep); only the marker is indented. */
+.sl-gap { position: relative; height: 7px; margin: 0 16px; cursor: pointer; }
+.sl-gap::before { content: ""; position: absolute; left: calc(38px + var(--d, 0) * 20px); right: 0; top: 3px; height: 1px; background: transparent;
+  transition: background-color .1s; }
 .sl-gap:hover::before { background: color-mix(in srgb, var(--accent) 45%, transparent); }
 .sl-gap.on { height: 20px; }
 .sl-gap.on::before { top: 9px; height: 2px; border-radius: 2px; background: var(--accent); }
-.sl-gap-tag { position: absolute; left: 0; top: 2px; display: inline-flex; align-items: center; gap: 4px; padding: 0 7px 0 5px; line-height: 16px;
+.sl-gap-tag { position: absolute; left: calc(38px + var(--d, 0) * 20px); top: 2px; display: inline-flex; align-items: center; gap: 4px; padding: 0 7px 0 5px; line-height: 16px;
   font-size: 10.5px; font-weight: 600; border-radius: 99px; color: var(--on-accent); background: var(--accent); pointer-events: none; }
 .script.dropping .sl-gap { height: 10px; }
 .script.dropping .sl-gap.on { height: 22px; }
@@ -133,3 +135,25 @@
 .pp-preview { display: flex; align-items: center; gap: 8px; margin-top: 16px; padding: 8px 11px; border-radius: 8px; border: 1px solid var(--line);
   background: var(--bg); font-size: 12.5px; }
 .pp-why { margin-right: auto; align-self: center; }
+
+/* ---- control flow: Composer's programming controls, drop rules, line roles ---- */
+.prog-ctl { flex: none; display: flex; flex-wrap: wrap; gap: 4px; padding: 6px 8px; border-bottom: 1px solid var(--line); background: var(--bar); }
+.prog-ctl-b { display: inline-flex; align-items: center; gap: 4px; font: inherit; font-size: 11px; padding: 1px 7px; border-radius: 99px;
+  border: 1px solid var(--line); background: var(--btn); color: var(--text-2); cursor: grab; }
+.prog-ctl-b:hover:not(:disabled) { border-color: color-mix(in srgb, var(--accent) 60%, transparent); color: var(--accent-text); }
+.prog-ctl-b:disabled { opacity: .5; cursor: not-allowed; }
+.pc.off { opacity: .55; cursor: not-allowed; }
+.pc-asks::after { content: ""; }
+.prog-var-acts { flex: none; display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-top: 1px solid var(--line); background: var(--bar); }
+.prog-var-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 600; }
+.prog-var-acts .dim { flex: 1; }
+.prog-note { color: var(--text-2); }
+.prog-note .icon-btn { margin-left: auto; }
+
+.sl-gap.bad::before { background: var(--bad) !important; }
+.sl-gap.bad .sl-gap-tag { background: var(--bad); }
+.sl.r-comment .sl-text { color: var(--dim); font-style: italic; }
+.sl.r-comment .sl-ic { color: var(--faint); }
+.sl.r-else .sl-text { font-weight: 600; color: var(--syn-bool); }
+.sl.r-variable .sl-ic { color: var(--accent-text); }
+.sl.sel.r-else .sl-text, .sl.sel.r-comment .sl-text { color: inherit; }

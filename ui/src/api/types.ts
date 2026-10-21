@@ -206,15 +206,64 @@ export interface CodeLineView {
   /** The device the line sends to or tests (app/src/views.rs `code_lines`); 0 for lines that
    *  aren't about a device. */
   target?: number;
-  /** Director's code item type: 1 is a device command (the only kind seen in real projects so
-   *  far); conditionals and loops use others. */
+  /** Director's code item type: 1 command, 2 If, 3 While, 4 Else, 5 comment, 6 AND/OR. */
   kind?: number;
+  /** What the line is (crates/c4/src/program.rs `role`). */
+  role?: LineRole;
   /** The line's template as stored (NAME for the target), its command and parameters — what
    *  `add_code` needs to put the same line somewhere else. */
   display?: string;
   command?: string | null;
   params?: { name: string; type: string; value: string }[];
 }
+
+export type LineRole = "command" | "if" | "while" | "else" | "comment" | "delay" | "stop" | "break" | "variable" | "operator";
+
+export type Logic = "equal" | "not_equal" | "less_than" | "less_than_or_equal" | "greater_than" | "greater_than_or_equal";
+
+/** What an If or While can test on a device (app/src/views.rs `conditionals`). */
+export interface ConditionalView {
+  id: number | null;
+  name: string;
+  /** SIMPLE, BOOL, NUMBER, STRING, LIST, ROOM, DEVICE; empty for Control4's built-in proxies. */
+  type: string;
+  /** The line template: NAME for the device, LOGIC for the comparison. */
+  description: string;
+  statement: string;
+  /** The comparisons it takes; empty when it takes none. */
+  logic: Logic[];
+  params: ParamDef[];
+  /** Why openComposer can't add it, when it can't. */
+  unsupported: string | null;
+}
+
+/** `get_variables` (app/src/views.rs `variables`). */
+export interface VariableRow {
+  device: number;
+  id: number;
+  name: string;
+  owner: string;
+  type: number;
+  type_name: string;
+  readonly: boolean;
+  hidden: boolean;
+  value: string;
+  /** Whether openComposer can write lines for its type (String, Number, Float, Boolean). */
+  programmable: boolean;
+}
+
+export interface VarRef { device: number; id: number }
+
+/** What an If or While tests (crates/c4/src/program.rs `Condition`). */
+export type Condition =
+  | { type: "device"; target: number; name: string; logic?: Logic | null; params?: CommandParam[] }
+  | { type: "variable"; variable: VarRef; logic: Logic; value?: string | null; other?: VarRef | null };
+
+export type Control = { type: "delay"; ms: number } | { type: "stop" } | { type: "break" } | { type: "comment"; text: string };
+
+export type VarAction =
+  | { type: "set"; value: string } | { type: "copy"; from: VarRef } | { type: "toggle" }
+  | { type: "add" | "subtract" | "multiply" | "divide"; value: string } | { type: "random"; min: string; max: string };
 
 export interface ItemDetail {
   id: number;
@@ -244,6 +293,8 @@ export interface ItemDetail {
   /** What the driver says it can be sent (Composer's device-specific commands); null when the
    *  item has no driver definition. */
   commands: CommandDef[] | null;
+  /** What an If or While can test on it; null when the item has no driver definition. */
+  conditionals?: ConditionalView[] | null;
   children: { id: number; name: string; kind: KindLabel; driver: string | null; connections: ConnectionDef[] }[];
 }
 
@@ -458,7 +509,13 @@ export type Change =
   /** A Scheduler event; `when` reads like "Every day at Sunset, from 2024-06-16". */
   | { kind: "schedule_added"; owner: ItemRef; id: number; name: string; when: string }
   | { kind: "schedule_removed"; owner: ItemRef; id: number; name: string; when: string; cascade: boolean }
-  | { kind: "schedule_changed"; owner: ItemRef; id: number; name: string; field: string; from: string; to: string };
+  | { kind: "schedule_changed"; owner: ItemRef; id: number; name: string; field: string; from: string; to: string }
+  /** Something another built-in agent keeps (a lighting scene, an announcement, a Wake/Sleep
+   *  room, a notification); `details` are its settings as [setting, value]. */
+  | { kind: "agent_record_added"; owner: ItemRef; what: string; id: number; name: string; details: [string, string][] }
+  | { kind: "agent_record_removed"; owner: ItemRef; what: string; id: number; name: string; details: [string, string][]; cascade: boolean }
+  /** One setting changed; "none" for a setting (a light in a scene) that was added or removed. */
+  | { kind: "agent_record_changed"; owner: ItemRef; what: string; id: number; name: string; field: string; from: string; to: string };
 
 export interface Diff {
   changes: Change[];
@@ -489,10 +546,36 @@ export type Op =
   | { op: "add_code"; device: number; event: number; parent?: number; before?: number; target: number;
       command: string; params?: { name: string; type?: string; value: string }[]; display: string }
   | { op: "remove_code"; device: number; event: number; id: number }
+  /** `display` is filled in by the backend when empty. */
+  | { op: "add_conditional"; device: number; event: number; parent: number; before: number; loop: boolean; condition: Condition; display?: string }
+  | { op: "add_else"; device: number; event: number; parent: number; before: number }
+  | { op: "add_control"; device: number; event: number; parent: number; before: number; control: Control }
+  | { op: "add_variable_command"; device: number; event: number; parent: number; before: number; variable: VarRef; action: VarAction; display?: string }
+  | { op: "move_code"; device: number; event: number; id: number; parent: number; before: number }
+  | { op: "set_code_enabled"; device: number; event: number; id: number; enabled: boolean }
   /** Scheduler events (Composer's Scheduler agent). Modify keeps the entry's creator/category. */
   | { op: "add_schedule_entry"; agent: number; entry: ScheduleSpec }
   | { op: "modify_schedule_entry"; agent: number; id: number; entry: ScheduleSpec; creator: number; category: string }
   | { op: "remove_schedule_entry"; agent: number; id: number }
+  /** Other built-in agents (crates/c4/src/agent_ops.rs); ids come from `agent_view`. */
+  | { op: "add_lighting_scene"; agent: number; name: string }
+  | { op: "rename_lighting_scene"; agent: number; scene: number; name: string }
+  | { op: "remove_lighting_scene"; agent: number; scene: number }
+  /** Adds the light to the scene if it isn't in it; replaces its steps if it is. */
+  | { op: "set_scene_light"; agent: number; scene: number; light: number; steps: LightStep[] }
+  | { op: "remove_scene_light"; agent: number; scene: number; light: number }
+  | { op: "add_announcement"; agent: number; announcement: AnnouncementSpec }
+  | { op: "modify_announcement"; agent: number; id: number; announcement: AnnouncementSpec }
+  | { op: "remove_announcement"; agent: number; id: number }
+  | { op: "add_wake_sleep_room"; agent: number; room: number }
+  | { op: "modify_wake_sleep_room"; agent: number; id: number; settings: WakeSleepSpec }
+  | { op: "remove_wake_sleep_room"; agent: number; id: number }
+  | { op: "add_push_notification"; agent: number; template: PushTemplateSpec }
+  | { op: "modify_push_notification"; agent: number; id: number; template: PushTemplateSpec }
+  | { op: "remove_push_notification"; agent: number; id: number }
+  | { op: "add_email_template"; agent: number; template: EmailTemplateSpec }
+  | { op: "modify_email_template"; agent: number; id: number; template: EmailTemplateSpec }
+  | { op: "remove_email_template"; agent: number; id: number }
   /** Only ever produced by `install_driver`; the file's bytes are not serialized back. */
   | { op: "install_driver"; filename: string; source: string }
   /** Only ever produced by `load_backup`; the XML is not serialized back. */
@@ -671,33 +754,103 @@ export interface ScheduleRow {
   programming: CodeLineView[];
 }
 
+/** A white by colour temperature, or a colour by hue (0–359) and saturation (0–100). */
+export type LightColor = { kelvin: number } | { hue: number; saturation: number };
+
+/** One step of a light in an Advanced Lighting scene: after `delay_ms`, go to `level` (0–100)
+ *  and/or `color`, ramping over `rate_ms`. null = leave it alone in this step. */
+export interface LightStep { delay_ms: number; level: number | null; rate_ms: number; color: LightColor | null }
+
 export interface LightingSceneView {
   id: number; name: string; active: boolean; ramp_capable: boolean;
-  members: { device: NamedRef; steps: { delay_ms: number; level: number | null; rate_ms: number; color_temperature: number | null; color_hs: [number, number] | null }[] }[];
+  /** Its "(Toggle)" companion scene. */
+  toggle: { id: number; name: string } | null;
+  /** Programming lines under its events. */
+  programmed: number;
+  members: { device: NamedRef; steps: (LightStep & { text: string })[] }[];
+}
+
+export interface AnnouncementVolume { id: number; volume: number | null }
+
+/** What add/modify_announcement take. An image or sound still containing "••••" keeps the
+ *  current one's hidden login. */
+export interface AnnouncementSpec {
+  name: string; audio: string | null; text: string; image: string | null;
+  display_seconds: number; ok_button: boolean;
+  rooms: AnnouncementVolume[]; screens: number[]; touchscreen_audio: AnnouncementVolume[];
 }
 
 export interface AnnouncementView {
   id: number; name: string; audio: string | null; text: string | null; image: string | null;
+  display_seconds: number; ok_button: boolean;
   rooms: { room: NamedRef; volume: number | null }[];
-  screens: { device: NamedRef; room: NamedRef | null; volume: number | null; onscreen: boolean | null }[];
+  screens: { device: NamedRef; onscreen: boolean | null }[];
+  touchscreen_audio: { device: NamedRef; volume: number | null }[];
+  programmed: number;
+  spec: AnnouncementSpec;
 }
 
-export interface WakeSleepPartView { enabled: boolean; device: NamedRef | null; detail: string | null }
+/** A room's Wake/Sleep defaults. `visible`: offered on touchscreens; `enabled`: on by default. */
+export interface WakeSleepSpec {
+  /** HH:MM, 24-hour. */
+  wake_time: string;
+  /** Empty = every day. */
+  wake_days: Weekday[];
+  sleep_minutes: number;
+  /** light 0 = all the room's lights. */
+  lights: { visible: boolean; enabled: boolean; light: number; ramp_minutes: number };
+  /** source 0 = the room's TV; item 0 = none. */
+  media: { visible: boolean; enabled: boolean; source: number; kind: string; item: number; tv_only: boolean };
+  /** blind 0 = all the room's blinds. */
+  blinds: { visible: boolean; enabled: boolean; blind: number };
+  /** Setpoint in °F whatever the display scale. */
+  temperature: { visible: boolean; enabled: boolean; mode: string; setpoint_f: number };
+}
+
+export interface MediaChoice { id: number; name: string; kind: string }
+
 export interface WakeSleepRoomView {
-  id: number; room: NamedRef; wake_time: string; wake_days: string; sleep_minutes: number;
-  lights: WakeSleepPartView | null; media: WakeSleepPartView | null; blinds: WakeSleepPartView | null; temperature: WakeSleepPartView | null;
+  id: number; room: NamedRef; settings: WakeSleepSpec;
+  /** The ids resolved: "All lights in the room" for 0. */
+  light: NamedRef; blind: NamedRef; source: string | null; item: string | null;
+  sources: MediaChoice[]; items: MediaChoice[]; temperature_modes: string[];
 }
 
-export interface NotificationTemplateView {
-  id: number; name: string; subject?: string; message?: string; timestamp?: boolean;
-  category?: string | null; severity?: string | null; attachments?: NamedRef[];
+export interface PushTemplateSpec {
+  name: string; category: number; severity: number; subject: string; message: string; timestamp: boolean;
+  attachments: { owner: number; id: number }[];
 }
+
+export interface EmailTemplateSpec { name: string; to: string; subject: string; body: string; timestamp: boolean }
+
+export interface PushTemplateView {
+  id: number; name: string; subject: string; message: string; timestamp: boolean;
+  category: string | null; severity: string | null; attachments: NamedRef[]; spec: PushTemplateSpec;
+}
+
+export interface EmailTemplateView { id: number; name: string; subject: string; message: string; to: string; spec: EmailTemplateSpec }
+
+export interface LightingData { scenes: LightingSceneView[]; lights: NamedRef[] }
+export interface AnnouncementsData {
+  announcements: AnnouncementView[]; rooms: NamedRef[]; screens: NamedRef[]; touchscreens: NamedRef[];
+  /** Sound files other announcements use (the controller's list is only reachable over SMB). */
+  sounds: string[]; display_seconds: number[];
+}
+export interface WakeSleepData { rooms: WakeSleepRoomView[]; available_rooms: NamedRef[]; hospitality: boolean; lights: NamedRef[]; blinds: NamedRef[] }
+export interface PushData {
+  templates: PushTemplateView[]; categories: { id: number; name: string }[]; severities: { id: number; name: string }[];
+  attachment_providers: { owner: NamedRef; id: number; label: string }[];
+}
+export interface EmailData { templates: EmailTemplateView[] }
 
 interface AgentViewBase { id: number; title: string; agent: { id: number; name: string } }
 export type AgentView =
   | { id: number; view: null }
   | (AgentViewBase & { view: "scheduler"; data: { sun: { sunrise: string; sunset: string; timezone: string } | null; entries: ScheduleRow[] } })
-  | (AgentViewBase & { view: "advanced_lighting"; data: { scenes: LightingSceneView[] } })
-  | (AgentViewBase & { view: "announcements"; data: { announcements: AnnouncementView[] } })
-  | (AgentViewBase & { view: "wake_sleep"; data: { rooms: WakeSleepRoomView[] } })
-  | (AgentViewBase & { view: "push_notification" | "email_notification"; data: { templates: NotificationTemplateView[] } });
+  | (AgentViewBase & { view: "advanced_lighting"; data: LightingData })
+  | (AgentViewBase & { view: "announcements"; data: AnnouncementsData })
+  | (AgentViewBase & { view: "wake_sleep"; data: WakeSleepData })
+  | (AgentViewBase & { view: "push_notification"; data: PushData })
+  | (AgentViewBase & { view: "email_notification"; data: EmailData })
+  /** Read-only: the touchscreens' photo screen saver. */
+  | (AgentViewBase & { view: "screen_saver"; data: { device: NamedRef | null; picture_path: string; photo_seconds: number } });

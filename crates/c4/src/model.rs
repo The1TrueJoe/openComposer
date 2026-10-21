@@ -162,9 +162,10 @@ impl CodeItem {
         Some((name, params))
     }
 
-    /// The line as Composer shows it: `NAME` replaced by the device it acts on.
+    /// The line as Composer shows it: `NAME` replaced by the device it acts on, and Composer's
+    /// `#!` templates (variable lines) expanded.
     pub fn text(&self, p: &Project) -> String {
-        if self.display.contains("NAME") { self.display.replace("NAME", &p.name_of(self.device)) } else { self.display.clone() }
+        crate::program::render(&self.display, self.device, p)
     }
 }
 
@@ -198,6 +199,10 @@ pub struct Project {
     /// id is also an event id of the agent in `programming`.
     #[serde(default)]
     pub schedules: BTreeMap<u32, Vec<crate::agents::ScheduleEntry>>,
+    /// Advanced Lighting, Announcements, Wake/Sleep and notification agents' stored data,
+    /// by agent id.
+    #[serde(default)]
+    pub agent_data: BTreeMap<u32, crate::agents::AgentData>,
 }
 
 /// Programming is keyed `"device:event"` so the map serialises as a JSON object.
@@ -318,6 +323,9 @@ impl Project {
         self.items.insert(id, item);
         if let Some(entries) = crate::agents::schedule_from_item(node) {
             self.schedules.insert(id, entries);
+        }
+        if let Some(data) = crate::agents::data_from_item(node) {
+            self.agent_data.insert(id, data);
         }
         if let Some(p) = parent.and_then(|p| self.items.get_mut(&p)) {
             p.children.push(id);

@@ -122,7 +122,7 @@ pub fn redact(mut d: Diff) -> Diff {
 pub async fn propose(
     app: &Arc<App>,
     director: Option<&str>,
-    ops: Vec<Op>,
+    mut ops: Vec<Op>,
     reason: Option<String>,
     source: &str,
 ) -> AppResult<Approval> {
@@ -136,6 +136,12 @@ pub async fn propose(
 
     let before = session.snapshot(true).await?;
     let catalog = session.catalog(false).await?;
+    // Programming lines get their text and variable types from the project and drivers.
+    let n = ops.len();
+    for (i, op) in ops.iter_mut().enumerate() {
+        c4::program::complete(op, &before.project, &catalog)
+            .map_err(|e| AppError::Other(if n > 1 { format!("change {} of {n}: {e}", i + 1) } else { e }))?;
+    }
     check_connections(&ops, &catalog, &before.project)?;
     check_properties(&ops, &catalog, &before.project)?;
     check_actions(&ops, &catalog, &before.project)?;
@@ -144,10 +150,11 @@ pub async fn propose(
     let names = catalog.names();
     let mut predicted = before.project.clone();
     let mut descriptions = Vec::new();
-    for (i, op) in ops.iter().enumerate() {
+    for (i, op) in ops.iter_mut().enumerate() {
+        // Against the project as the earlier changes leave it, as they will be applied.
+        op.prepare(&predicted);
         descriptions.push(op.describe(&predicted));
-        op.predict(&mut predicted)
-            .map_err(|e| AppError::Other(format!("change {} of {} can't be applied: {e}", i + 1, ops.len())))?;
+        op.predict(&mut predicted).map_err(|e| AppError::Other(format!("change {} of {n} can't be applied: {e}", i + 1)))?;
     }
     let predicted_diff = redact(diff(&before.project, &predicted, &names, DiffOptions { runtime: true }));
 
@@ -300,7 +307,14 @@ fn check_properties(ops: &[Op], cat: &c4::Catalog, p: &c4::Project) -> AppResult
 /// target declares (when it declares any — proxies' built-in commands aren't listed).
 fn check_code(ops: &[Op], cat: &c4::Catalog, p: &c4::Project) -> AppResult<()> {
     for op in ops {
-        let Op::AddCode { device, event, target, command, .. } = op else { continue };
+        let (device, event) = match op {
+            Op::AddCode { device, event, .. }
+            | Op::AddConditional { device, event, .. }
+            | Op::AddElse { device, event, .. }
+            | Op::AddControl { device, event, .. }
+            | Op::AddVariableCommand { device, event, .. } => (device, event),
+            _ => continue,
+        };
         if let Some(d) = cat.devices.get(device) {
             if !d.events.is_empty() && !d.events.contains_key(event) {
                 let have: Vec<String> = d.events.iter().map(|(id, n)| format!("{id} {n}")).collect();
@@ -311,6 +325,7 @@ fn check_code(ops: &[Op], cat: &c4::Catalog, p: &c4::Project) -> AppResult<()> {
                 )));
             }
         }
+        let Op::AddCode { target, command, .. } = op else { continue };
         if let Some(t) = cat.devices.get(target) {
             if !t.commands.is_empty() && !t.commands.iter().any(|c| c.name == *command) {
                 let have: Vec<&str> = t.commands.iter().map(|c| c.name.as_str()).collect();
@@ -454,9 +469,20 @@ fn verify(predicted: &Diff, actual: Diff) -> Verification {
         !want.contains(&c.key()) && !matches!(c, Change::PropertyChanged { property, .. } if is_sensitive_property(property))
     });
     side_effects.summary = Default::default();
-    Verification {
-        matched: want.intersection(&got).count(),
-        missing: want.difference(&got).cloned().collect(),
-        side_effects,
+    let mut missing: Vec<String> = want.difference(&got).cloned().collect();
+    // An event's programming is checked line by line: Director can answer a call and store
+    // something else, or nothing (an Else it won't take still says result="1").
+    let result = |lines: &[c4::diff::CodeLine]| -> Vec<(usize, String, bool)> {
+        lines.iter().filter(|l| l.op != c4::diff::LineOp::Removed).map(|l| (l.depth, l.text.clone(), l.enabled)).collect()
+    };
+    for p in &predicted.changes {
+        let Change::ProgrammingChanged { lines, .. } = p else { continue };
+        let got = actual.changes.iter().find(|a| a.key() == p.key());
+        if let Some(Change::ProgrammingChanged { lines: actual_lines, .. }) = got {
+            if result(lines) != result(actual_lines) {
+                missing.push(format!("{} (its lines came out differently than predicted)", p.key()));
+            }
+        }
     }
+    Verification { matched: want.len() - missing.len(), missing, side_effects }
 }

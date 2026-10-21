@@ -3,7 +3,8 @@
  *  the backend's own model so the mock can derive every view from it the same way. */
 
 import type {
-  Approval, BackupInfo, SavedDirector, CodeLineView, CommandDef, ConversationInfo, DriverDoc, ItemKind, ItemRef, KindLabel, LibraryDriver, NetworkBinding, Variable,
+  Approval, BackupInfo, SavedDirector, CodeLineView, CommandDef, ConditionalView, ConversationInfo, DriverDoc, ItemKind, ItemRef, KindLabel, LibraryDriver,
+  NetworkBinding, Variable,
 } from "../api/types";
 
 export interface MItem {
@@ -41,6 +42,8 @@ export interface MDevice {
   /** What the driver declares it can be sent; proxies without any fall back to Control4's
    *  standard proxy commands in the control panel (as the TV proxies here do). */
   commands?: CommandDef[];
+  /** What an If or While can test on it, as get_item shapes them (app/src/views.rs). */
+  conditionals?: ConditionalView[];
 }
 
 export interface MBinding {
@@ -93,7 +96,11 @@ const ROWS: Row[] = [
   [52, "Bedroom TV", "device", 13, "lg_webos_tv.c4z"],
   [53, "Bedroom TV", "proxy", 52, "tv.c4i"],
   [90, "Scheduler", "agent", 1, "control4_agent_scheduler.c4i"],
-  [91, "Announcements", "agent", 1, "control4_agent_announcement.c4i"],
+  [91, "Announcements", "agent", 1, "control4_agent_announcements.c4i"],
+  [92, "Advanced Lighting", "agent", 1, "control4_agent_adv_lighting.c4i"],
+  [93, "Wake/Sleep", "agent", 1, "control4_agent_wakeup_goodnight.c4i"],
+  [94, "Push Notification", "agent", 1, "control4_agent_notification.c4i"],
+  [95, "Email Notification", "agent", 1, "control4_agent_emailnotification.c4i"],
 ];
 
 const hdmiIn = (id: number, name: string) => ({ id, name, consumer: true, classes: ["HDMI"] });
@@ -105,6 +112,8 @@ const DEBUG: MPropDef = { name: "Debug Mode", prop_type: "LIST", default: "Off",
 const param = (name: string, prop_type: string, extra: Partial<CommandDef["params"][number]> = {}): CommandDef["params"][number] =>
   ({ name, prop_type, default: null, readonly: false, items: [], minimum: null, maximum: null, ...extra });
 const cmd = (name: string, description: string, ...params: CommandDef["params"]): CommandDef => ({ name, description, params });
+const cond = (id: number, name: string, description: string, extra: Partial<ConditionalView> = {}): ConditionalView =>
+  ({ id, name, type: "", description, statement: "", logic: [], params: [], unsupported: null, ...extra });
 const POWER = [cmd("ON", "Turn on NAME"), cmd("OFF", "Turn off NAME")];
 const level = (name: string) => param(name, "RANGED_INTEGER", { minimum: "0", maximum: "100" });
 
@@ -189,7 +198,12 @@ const CATALOG: [number, MDevice][] = [
     commands: [cmd("SET_LED_COLOR", "Set NAME LED to COLOR", param("COLOR", "LIST", { items: ["Blue", "White", "Off"] }))],
   }],
   [31, { manufacturer: "Control4", model: "Light", driver_name: "Light V2", version: "1", control_method: "", search_type: "", proxies: [],
-    connections: [], events: {}, properties: [], actions: [], commands: LIGHT }],
+    connections: [], events: {}, properties: [], actions: [], commands: LIGHT,
+    // light_v2's own: the first two take nothing; the brightness one takes values Control4's
+    // proxy expects in a form openComposer doesn't know (the backend says so, as here).
+    conditionals: [cond(0, "LOAD_ON", "NAME is on"), cond(1, "LOAD_OFF", "NAME is off"),
+      cond(2, "IS_BRIGHTNESS_CURRENT", "NAME current brightness LOGIC VALUE TYPE", {
+        unsupported: "“NAME current brightness LOGIC VALUE TYPE” takes values (LOGIC, VALUE, TYPE) that Control4's built-in proxy expects in a form openComposer doesn't know yet" })] }],
   [32, {
     manufacturer: "Control4", model: "C4-KD120", driver_name: "Keypad Dimmer", version: "1031",
     control_method: "ZigBee", search_type: "", proxies: ["keypad_proxy"], connections: [],
@@ -226,6 +240,14 @@ const CATALOG: [number, MDevice][] = [
     properties: [{ name: "API Key", prop_type: "STRING" }, { name: "Scale", prop_type: "LIST", items: ["Fahrenheit", "Celsius"] },
       { name: "Polling Interval (s)", prop_type: "RANGED_INTEGER", minimum: "15", maximum: "600", default: "60" }],
     actions: [["Refresh Token", "REFRESH"]],
+    // A DriverWorks driver's own, typed: they take LOGIC and VALUE.
+    conditionals: [
+      cond(0, "TEMPERATURE", "NAME temperature is LOGIC INTEGER", { type: "NUMBER", logic: ["equal", "not_equal", "less_than", "less_than_or_equal", "greater_than", "greater_than_or_equal"],
+        params: [param("VALUE", "INTEGER", { minimum: "40", maximum: "100" })] }),
+      cond(1, "COMFORT", "NAME comfort setting is LOGIC STRING", { type: "LIST", logic: ["equal", "not_equal"],
+        params: [param("VALUE", "LIST", { items: ["Home", "Away", "Sleep"] })] }),
+      cond(2, "OCCUPIED", "NAME is occupied", { type: "SIMPLE" }),
+    ],
   }],
   [51, { manufacturer: "Control4", model: "Thermostat", driver_name: "Thermostat V2", version: "1", control_method: "", search_type: "", proxies: [],
     connections: [], events: {}, properties: [], actions: [],
@@ -265,6 +287,9 @@ const NETWORK: NetworkBinding[] = [
 
 const v = (device: number, id: number, name: string, value: string): Variable =>
   ({ device, id, name, var_type: 1, readonly: true, hidden: false, description: "", value });
+/** The project's own variables (the Variables agent, 100001): String 1, Number 2, Boolean 4. */
+const uv = (id: number, name: string, var_type: number, value: string): Variable =>
+  ({ device: 100001, id, name, var_type, readonly: false, hidden: false, description: "", value });
 
 const VARIABLES: Variable[] = [
   v(20, 1000, "POWER_STATE", "On"), v(20, 1001, "CURRENT_INPUT", "HDMI 1"),
@@ -274,6 +299,7 @@ const VARIABLES: Variable[] = [
   v(30, 1000, "LIGHT_LEVEL", "65"), v(30, 1001, "LIGHT_STATE", "1"),
   v(50, 1000, "TEMPERATURE_F", "71"), v(50, 1001, "HEAT_SETPOINT_F", "68"), v(50, 1002, "COOL_SETPOINT_F", "75"),
   v(50, 1003, "HVAC_MODE", "Auto"), v(52, 1000, "POWER_STATE", "On"),
+  uv(1100, "Movie Mode", 4, "0"), uv(1101, "Guests", 2, "0"), uv(1102, "House Mode", 1, "Home"),
 ];
 
 let lineId = 500;
@@ -286,7 +312,10 @@ type Cmd = [target: number, command: string, params?: Param[]];
 const code = (...lines: [depth: number, text: string, what?: Cmd | "flow", enabled?: boolean][]): CodeLineView[] =>
   lines.map(([depth, text, what, enabled = true]) => {
     const base = { depth, text, enabled, id: lineId++ };
-    if (what === "flow") return { ...base, kind: 2, target: 0, command: null, params: [] };
+    if (what === "flow") {
+      const [kind, role] = /^Else\b/.test(text) ? [4, "else" as const] : /^While\b/.test(text) ? [3, "while" as const] : [2, "if" as const];
+      return { ...base, kind, role, target: kind === 4 ? 100000 : 0, command: null, params: [] };
+    }
     if (!what) return base;
     const [target, command, params = []] = what;
     const name = ROWS.find((r) => r[0] === target)?.[1] ?? "";

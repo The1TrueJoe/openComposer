@@ -1,7 +1,7 @@
 import type {
   Activity, Announcement, AppStatus, Approval, BackupInfo, ConnectionRow, ConversationInfo, Diff,
   DirectorInfo, DriverDoc, Events, ItemDetail, McpStatus, NetworkView, Op, Outcome, Overview,
-  ProgrammingEvent, Provider, ProviderStatus, SavedDirector, AccessMode, TreeNode, ZigbeeQuery, BackupResult,
+  ProgrammingEvent, VariableRow, Provider, ProviderStatus, SavedDirector, AccessMode, TreeNode, ZigbeeQuery, BackupResult,
   AddDriverArgs, ControllerDriver, LibraryDriver, UiContext, CommandParam, DeviceState, Effort, AuthRequest, McpGrant, DriverTab, AgentView,
 } from "./types";
 
@@ -96,6 +96,7 @@ export const api = {
   item: (id: number) => action<ItemDetail>("get_item", { id }),
   connections: (f: ConnectionsFilter = {}) => action<{ connections: ConnectionRow[] }>("list_connections", { ...f }),
   programming: (device?: number) => action<{ events: ProgrammingEvent[] }>("get_programming", { device }),
+  variables: (device?: number, hidden = false) => action<{ variables: VariableRow[] }>("get_variables", { device, hidden }),
   network: () => action<NetworkView>("network_status"),
   sddp: (seconds?: number, pattern?: string) => action<{ devices: Announcement[] }>("discover_sddp", { seconds, pattern }),
   zigbee: (query: ZigbeeQuery) => action<unknown>("zigbee", { query }),

@@ -29,6 +29,7 @@ pub enum AgentKind {
     WakeSleep,
     PushNotification,
     EmailNotification,
+    ScreenSaver,
 }
 
 impl AgentKind {
@@ -42,6 +43,7 @@ impl AgentKind {
             "control4_agent_wakeup_goodnight" => Self::WakeSleep,
             "control4_agent_notification" => Self::PushNotification,
             "control4_agent_emailnotification" => Self::EmailNotification,
+            "control4_agent_screensaver" => Self::ScreenSaver,
             _ => return None,
         })
     }
@@ -55,6 +57,7 @@ impl AgentKind {
             Self::WakeSleep => "Wake/Sleep",
             Self::PushNotification => "Push Notification",
             Self::EmailNotification => "Email Notification",
+            Self::ScreenSaver => "Screen Saver",
         }
     }
 }
@@ -533,7 +536,317 @@ pub fn parse_sun(xml: &str) -> Option<SunTimes> {
     })
 }
 
+// ---- Stored agent data -------------------------------------------------------------------------
+
+/// What the project download stores for the agents openComposer edits besides the Scheduler:
+/// each keeps its whole configuration in its item's `<state>` (escaped XML), so a snapshot
+/// has it current, predictions apply to it and verification reads it back like anything else.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AgentData {
+    Lighting { scenes: Vec<LightingScene> },
+    Announcements { announcements: Vec<Announcement> },
+    WakeSleep { rooms: Vec<WakeSleepScene> },
+    Push { templates: Vec<NotificationTemplate>, categories: Vec<(u32, String)>, severities: Vec<(u32, String)> },
+    Email { templates: Vec<EmailTemplate> },
+    ScreenSaver(ScreenSaver),
+}
+
+impl AgentData {
+    /// Empty data for an agent whose `<state>` has nothing yet.
+    pub fn empty(kind: AgentKind) -> Option<Self> {
+        Some(match kind {
+            AgentKind::AdvancedLighting => Self::Lighting { scenes: vec![] },
+            AgentKind::Announcements => Self::Announcements { announcements: vec![] },
+            AgentKind::WakeSleep => Self::WakeSleep { rooms: vec![] },
+            AgentKind::PushNotification => Self::Push { templates: vec![], categories: vec![], severities: vec![] },
+            AgentKind::EmailNotification => Self::Email { templates: vec![] },
+            AgentKind::ScreenSaver => Self::ScreenSaver(ScreenSaver::default()),
+            AgentKind::Scheduler => return None,
+        })
+    }
+
+    /// Parse an agent's stored `<state>` text.
+    pub fn parse(kind: AgentKind, state: &str) -> Option<Self> {
+        Some(match kind {
+            AgentKind::AdvancedLighting => Self::Lighting { scenes: parse_scenes(state) },
+            AgentKind::Announcements => Self::Announcements { announcements: parse_announcements(state) },
+            AgentKind::WakeSleep => Self::WakeSleep { rooms: parse_wake_sleep(state) },
+            AgentKind::PushNotification => Self::Push {
+                templates: parse_templates(state),
+                categories: parse_named_list(state, "category"),
+                severities: parse_named_list(state, "severity"),
+            },
+            AgentKind::EmailNotification => Self::Email { templates: parse_email_templates(state) },
+            AgentKind::ScreenSaver => Self::ScreenSaver(parse_screensaver(state)),
+            AgentKind::Scheduler => return None,
+        })
+    }
+
+    /// The agent's events, for programming (Composer's plugins report them the same way).
+    pub fn events(&self) -> Vec<(u32, String)> {
+        match self {
+            Self::Lighting { scenes } => scenes
+                .iter()
+                .flat_map(|s| {
+                    let base = s.id * 5;
+                    [
+                        (base, format!("When “{}” activates", s.name)),
+                        (base + 1, format!("When “{}” deactivates", s.name)),
+                        (base + 4, format!("When “{}” is invoked", s.name)),
+                    ]
+                })
+                .collect(),
+            Self::Announcements { announcements } => {
+                let mut ev = vec![(0, "When any announcement executes".to_string()), (ANNOUNCEMENT_COMPLETE, "When any announcement completes".to_string())];
+                for a in announcements {
+                    ev.push((a.id, format!("When “{}” executes", a.name)));
+                    ev.push((a.id + ANNOUNCEMENT_COMPLETE, format!("When “{}” completes", a.name)));
+                }
+                ev
+            }
+            Self::Push { .. } => vec![(1, "When a push notification is sent".into())],
+            Self::Email { .. } => vec![(1, "When an email notification is sent".into())],
+            Self::WakeSleep { .. } | Self::ScreenSaver(_) => vec![],
+        }
+    }
+
+    /// The agent's records worded for a diff: what each is, and its settings as people read them.
+    pub fn records(&self, p: &crate::Project) -> Vec<Record> {
+        match self {
+            Self::Lighting { scenes } => scenes.iter().map(|s| s.record(p)).collect(),
+            Self::Announcements { announcements } => announcements.iter().map(|a| a.record(p)).collect(),
+            Self::WakeSleep { rooms } => rooms.iter().map(|w| w.record(p)).collect(),
+            Self::Push { templates, categories, severities } => templates.iter().map(|t| t.record(p, categories, severities)).collect(),
+            Self::Email { templates } => templates.iter().map(EmailTemplate::record).collect(),
+            Self::ScreenSaver(s) => vec![s.record(p)],
+        }
+    }
+}
+
+/// One thing an agent keeps (a scene, an announcement…), for the semantic diff.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Record {
+    /// "lighting scene", "announcement"…
+    pub what: &'static str,
+    pub id: u32,
+    pub name: String,
+    /// (setting, value), in the order an editor shows them.
+    pub fields: Vec<(String, String)>,
+}
+
+/// The agent data stored in a project `<item>`, for the agents that have any.
+pub fn data_from_item(item: Node<'_, '_>) -> Option<AgentData> {
+    let driver = child(item, "itemdata").and_then(|d| child_text(d, "config_data_file"))?;
+    let kind = AgentKind::from_driver(driver)?;
+    match child_text(item, "state").filter(|s| !s.is_empty()) {
+        Some(state) => AgentData::parse(kind, state),
+        None => AgentData::empty(kind),
+    }
+}
+
+/// The reason an agent gave for refusing a command, if it did. Agents answer `<success/>`,
+/// `<failure>why</failure>` (Advanced Lighting) or `<fail>why</fail>` (Announcements); an
+/// empty `<failure/>` beside a `<success>` (ADD_MEMBERS) is not a refusal.
+pub fn reply_failure(xml: &str) -> Option<String> {
+    let doc = parse(xml)?;
+    let n = doc.descendants().find(|n| (n.has_tag_name("failure") || n.has_tag_name("fail")) && n.has_children())?;
+    let why: Vec<&str> = n.descendants().filter(|t| t.is_text()).filter_map(|t| t.text()).map(str::trim).filter(|t| !t.is_empty()).collect();
+    (!why.is_empty()).then(|| why.join(", "))
+}
+
+fn ms_text(ms: i64) -> String {
+    if ms >= 60_000 && ms % 60_000 == 0 {
+        format!("{} min", ms / 60_000)
+    } else if ms >= 1000 {
+        let s = ms as f64 / 1000.0;
+        if s.fract() == 0.0 { format!("{s:.0} s") } else { format!("{s:.1} s") }
+    } else {
+        format!("{ms} ms")
+    }
+}
+
+/// A device as a diff names it: "Left Lamp (Office)".
+fn device_text(p: &crate::Project, id: u32) -> String {
+    match p.room_of(id).filter(|r| r.id != id) {
+        Some(r) => format!("{} ({})", p.name_of(id), r.name),
+        None => p.name_of(id),
+    }
+}
+
+// ---- Colour ------------------------------------------------------------------------------------
+//
+// Advanced Lighting stores colours as CIE 1931 xy plus a mode (0 = colour, 1 = a white on
+// the Planckian locus). Composer's colour picker works in kelvin or hue/saturation; these
+// convert between the two with published formulas, so a value written here reads back the
+// same, and one Composer wrote reads back within a few kelvin.
+
+/// A light's colour in a scene step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum LightColor {
+    /// A white, by colour temperature in kelvin (1000–20000).
+    Temperature { kelvin: u32 },
+    /// A colour, by hue (0–359°) and saturation (0–100%).
+    Hue { hue: u32, saturation: u32 },
+}
+
+pub const KELVIN_MIN: u32 = 1000;
+pub const KELVIN_MAX: u32 = 20000;
+
+/// The Planckian locus at `kelvin` (Krystek 1985, in CIE 1960 uv, valid 1000–15000 K and
+/// close enough beyond).
+pub fn kelvin_to_xy(kelvin: u32) -> (f64, f64) {
+    let t = kelvin.clamp(KELVIN_MIN, KELVIN_MAX) as f64;
+    let u = (0.860117757 + 1.54118254e-4 * t + 1.28641212e-7 * t * t) / (1.0 + 8.42420235e-4 * t + 7.08145163e-7 * t * t);
+    let v = (0.317398726 + 4.22806245e-5 * t + 4.20481691e-8 * t * t) / (1.0 - 2.89741816e-5 * t + 1.61456053e-7 * t * t);
+    let d = 2.0 * u - 8.0 * v + 4.0;
+    (3.0 * u / d, 2.0 * v / d)
+}
+
+/// The nearest colour temperature (10 K steps) on the locus, as Composer's picker shows it.
+pub fn xy_to_kelvin(x: f64, y: f64) -> u32 {
+    (KELVIN_MIN..=KELVIN_MAX)
+        .step_by(10)
+        .map(|k| {
+            let (lx, ly) = kelvin_to_xy(k);
+            (k, (x - lx).powi(2) + (y - ly).powi(2))
+        })
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(k, _)| k)
+        .unwrap_or(KELVIN_MIN)
+}
+
+/// Linear RGB → XYZ for ITU-R BT.2020 primaries (D65), the gamut Composer's picker uses
+/// with OS 3.3.1 and later.
+// ponytail: older controllers' Composer used sRGB primaries here; a hue picked on one of
+// those would land slightly elsewhere. Only matters if pre-3.3.1 Directors are supported.
+const RGB_TO_XYZ: [[f64; 3]; 3] = [[0.636958, 0.1446169, 0.168881], [0.2627002, 0.6779981, 0.0593017], [0.0, 0.0280727, 1.0609851]];
+
+fn invert3(m: [[f64; 3]; 3]) -> [[f64; 3]; 3] {
+    let det = m[0][0] * (m[1][1] * m[2][2] - m[1][2] * m[2][1]) - m[0][1] * (m[1][0] * m[2][2] - m[1][2] * m[2][0])
+        + m[0][2] * (m[1][0] * m[2][1] - m[1][1] * m[2][0]);
+    let c = |a: usize, b: usize, c: usize, d: usize| m[a][b] * m[c][d];
+    [
+        [(c(1, 1, 2, 2) - c(1, 2, 2, 1)) / det, (c(0, 2, 2, 1) - c(0, 1, 2, 2)) / det, (c(0, 1, 1, 2) - c(0, 2, 1, 1)) / det],
+        [(c(1, 2, 2, 0) - c(1, 0, 2, 2)) / det, (c(0, 0, 2, 2) - c(0, 2, 2, 0)) / det, (c(0, 2, 1, 0) - c(0, 0, 1, 2)) / det],
+        [(c(1, 0, 2, 1) - c(1, 1, 2, 0)) / det, (c(0, 1, 2, 0) - c(0, 0, 2, 1)) / det, (c(0, 0, 1, 1) - c(0, 1, 1, 0)) / det],
+    ]
+}
+
+fn srgb_decode(c: f64) -> f64 {
+    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+}
+fn srgb_encode(c: f64) -> f64 {
+    if c <= 0.0031308 { c * 12.92 } else { 1.055 * c.powf(1.0 / 2.4) - 0.055 }
+}
+
+/// Hue (degrees) and saturation (0–100) at full brightness → xy.
+pub fn hs_to_xy(hue: u32, saturation: u32) -> (f64, f64) {
+    let (h, s) = ((hue % 360) as f64, saturation.min(100) as f64 / 100.0);
+    let x = s * (1.0 - ((h / 60.0) % 2.0 - 1.0).abs());
+    let (r, g, b) = match (h / 60.0) as u32 {
+        0 => (s, x, 0.0),
+        1 => (x, s, 0.0),
+        2 => (0.0, s, x),
+        3 => (0.0, x, s),
+        4 => (x, 0.0, s),
+        _ => (s, 0.0, x),
+    };
+    let m = 1.0 - s;
+    let lin = [srgb_decode(r + m), srgb_decode(g + m), srgb_decode(b + m)];
+    let xyz: Vec<f64> = RGB_TO_XYZ.iter().map(|row| row.iter().zip(lin).map(|(a, b)| a * b).sum()).collect();
+    let sum: f64 = xyz.iter().sum();
+    if sum == 0.0 { (0.0, 0.0) } else { (xyz[0] / sum, xyz[1] / sum) }
+}
+
+/// xy → hue (degrees) and saturation (0–100) at full brightness; colours outside the gamut
+/// come back at its edge.
+pub fn xy_to_hs(x: f64, y: f64) -> (u32, u32) {
+    if y <= 0.0 {
+        return (0, 0);
+    }
+    let xyz = [x / y, 1.0, (1.0 - x - y) / y];
+    let inv = invert3(RGB_TO_XYZ);
+    let lin: Vec<f64> = inv.iter().map(|row| row.iter().zip(xyz).map(|(a, b)| a * b).sum::<f64>().max(0.0)).collect();
+    let max = lin.iter().cloned().fold(0.0, f64::max);
+    if max == 0.0 {
+        return (0, 0);
+    }
+    let [r, g, b] = [srgb_encode(lin[0] / max), srgb_encode(lin[1] / max), srgb_encode(lin[2] / max)];
+    let (hi, lo) = (r.max(g).max(b), r.min(g).min(b));
+    let d = hi - lo;
+    let s = if hi == 0.0 { 0.0 } else { d / hi * 100.0 };
+    let h = if d == 0.0 {
+        0.0
+    } else if hi == r {
+        (60.0 * ((g - b) / d) + 360.0) % 360.0
+    } else if hi == g {
+        60.0 * ((b - r) / d) + 120.0
+    } else {
+        60.0 * ((r - g) / d) + 240.0
+    };
+    let s = s.round() as u32;
+    (if s == 0 { 0 } else { (h.round() as u32) % 360 }, s)
+}
+
+impl LightColor {
+    /// Read from a stored element: xy plus `colorMode` (1 = white).
+    pub fn from_xy(x: f64, y: f64, mode: i64) -> Self {
+        if mode == 1 {
+            Self::Temperature { kelvin: xy_to_kelvin(x, y) }
+        } else {
+            let (hue, saturation) = xy_to_hs(x, y);
+            Self::Hue { hue, saturation }
+        }
+    }
+
+    /// (x, y, colorMode) to store.
+    pub fn to_xy(self) -> (f64, f64, i64) {
+        match self {
+            Self::Temperature { kelvin } => {
+                let (x, y) = kelvin_to_xy(kelvin);
+                (x, y, 1)
+            }
+            Self::Hue { hue, saturation } => {
+                let (x, y) = hs_to_xy(hue, saturation);
+                (x, y, 0)
+            }
+        }
+    }
+
+    pub fn validate(self) -> Result<(), String> {
+        match self {
+            Self::Temperature { kelvin } if !(KELVIN_MIN..=KELVIN_MAX).contains(&kelvin) => {
+                Err(format!("a colour temperature is {KELVIN_MIN}–{KELVIN_MAX} K (got {kelvin})"))
+            }
+            Self::Hue { hue, saturation } if hue >= 360 || saturation > 100 => {
+                Err(format!("hue is 0–359° and saturation 0–100% (got {hue}°, {saturation}%)"))
+            }
+            _ => Ok(()),
+        }
+    }
+
+    pub fn text(self) -> String {
+        match self {
+            Self::Temperature { kelvin } => format!("{kelvin} K"),
+            Self::Hue { hue, saturation } => format!("hue {hue}°, saturation {saturation}%"),
+        }
+    }
+}
+
+/// Six decimals, as the agent stores coordinates.
+pub fn coord(v: f64) -> String {
+    format!("{v:.6}")
+}
+
 // ---- Advanced Lighting -------------------------------------------------------------------------
+
+/// The lighting proxies Composer offers for Advanced Lighting scenes.
+pub const SCENE_LIGHT_DRIVERS: [&str; 5] = ["light_v2.c4i", "fan.c4i", "light.c4i", "outlet_light.c4i", "blindV2.c4i"];
+
+/// "No scene" in toggle ids and the like.
+pub const NO_SCENE: u32 = 65535;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LightingSceneInfo {
@@ -557,22 +870,70 @@ pub fn parse_scene_list(xml: &str) -> Vec<LightingSceneInfo> {
         .collect()
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct LightingStep {
-    pub delay_ms: i64,
-    /// Level 0–100 when the step sets one.
-    pub level: Option<i64>,
-    pub rate_ms: i64,
-    /// Colour temperature in kelvin when the step sets a colour in that mode.
-    pub color_temperature: Option<i64>,
-    /// Hue/saturation when the step sets a colour (hue 0–360, saturation 0–100).
-    pub color_hs: Option<(i64, i64)>,
+/// One step of a light in a scene (Composer's "element"): after `delay_ms`, go to `level`
+/// and/or `color`, ramping over `rate_ms`. Composer's editor ramps the colour at the level's
+/// rate and the agent holds it there, so there is one rate.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct LightStep {
+    /// Wait this long (ms) after the previous step before starting this one.
+    #[serde(default)]
+    pub delay_ms: u32,
+    /// Brightness 0–100 (0 = off); omit to leave the level alone in this step.
+    #[serde(default)]
+    pub level: Option<u32>,
+    /// How long (ms) the level and colour take to get there.
+    #[serde(default = "default_rate")]
+    pub rate_ms: u32,
+    /// The colour to go to; omit to leave the colour alone.
+    #[serde(default)]
+    pub color: Option<LightColor>,
+}
+
+fn default_rate() -> u32 {
+    1000
+}
+
+/// One hour: longer ramps and delays than this are mistakes rather than intent.
+pub const MAX_STEP_MS: u32 = 3_600_000;
+
+impl LightStep {
+    pub fn validate(&self) -> Result<(), String> {
+        if self.level.is_some_and(|l| l > 100) {
+            return Err(format!("a level is 0–100% (got {})", self.level.unwrap_or_default()));
+        }
+        if self.level.is_none() && self.color.is_none() {
+            return Err("a step needs a level, a colour or both".into());
+        }
+        for (what, v) in [("delay", self.delay_ms), ("ramp", self.rate_ms)] {
+            if v > MAX_STEP_MS {
+                return Err(format!("the {what} is at most one hour ({MAX_STEP_MS} ms; got {v})"));
+            }
+        }
+        if let Some(c) = self.color {
+            c.validate()?;
+        }
+        Ok(())
+    }
+
+    /// "after 1 s: 40% over 3 s, 3200 K"
+    pub fn text(&self) -> String {
+        let mut parts = Vec::new();
+        if let Some(l) = self.level {
+            parts.push(if l == 0 { "off".to_string() } else { format!("{l}%") });
+        }
+        if let Some(c) = self.color {
+            parts.push(c.text());
+        }
+        let body = format!("{} over {}", parts.join(", "), ms_text(self.rate_ms as i64));
+        if self.delay_ms > 0 { format!("after {}: {body}", ms_text(self.delay_ms as i64)) } else { body }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LightingMember {
+    /// The light (a lighting proxy).
     pub device: u32,
-    pub steps: Vec<LightingStep>,
+    pub steps: Vec<LightStep>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -581,14 +942,26 @@ pub struct LightingScene {
     pub name: String,
     /// The scene's "(Toggle)" companion, if it has one.
     pub toggle_id: Option<u32>,
+    /// Runtime state, only meaningful in live reads.
     pub active: bool,
     pub members: Vec<LightingMember>,
 }
 
-/// A `GET_SCENE` reply (`<AdvScene>`).
-pub fn parse_scene(xml: &str) -> Option<LightingScene> {
-    let doc = parse(xml)?;
-    let s = doc.descendants().find(|n| n.has_tag_name("AdvScene"))?;
+impl LightingScene {
+    fn record(&self, p: &crate::Project) -> Record {
+        let mut fields: Vec<(String, String)> = self
+            .members
+            .iter()
+            .map(|m| (device_text(p, m.device), m.steps.iter().map(LightStep::text).collect::<Vec<_>>().join(" → ")))
+            .collect();
+        if let Some(t) = self.toggle_id {
+            fields.push(("toggle scene".into(), format!("#{t}")));
+        }
+        Record { what: "lighting scene", id: self.id, name: self.name.clone(), fields }
+    }
+}
+
+fn scene_from_node(s: Node<'_, '_>) -> LightingScene {
     let members = s
         .descendants()
         .filter(|n| n.has_tag_name("AdvSceneMember"))
@@ -598,32 +971,48 @@ pub fn parse_scene(xml: &str) -> Option<LightingScene> {
                 .descendants()
                 .filter(|e| e.has_tag_name("element"))
                 .map(|e| {
-                    let color = flag(e, "colorEnabled");
-                    // colorMode 1 is a white (temperature) colour, otherwise hue/saturation.
-                    let temp = color && int(e, "colorMode") == 1;
-                    LightingStep {
-                        delay_ms: int(e, "delay"),
-                        level: flag(e, "levelEnabled").then(|| int(e, "level")),
-                        rate_ms: int(e, "levelRate"),
-                        color_temperature: temp.then(|| int(e, "colorTemperature")),
-                        color_hs: (color && !temp).then(|| (int(e, "colorHue"), int(e, "colorSaturation"))),
+                    let xy = |t: &str| text(e, t).parse::<f64>().unwrap_or(0.0);
+                    LightStep {
+                        delay_ms: int(e, "delay").max(0) as u32,
+                        level: flag(e, "levelEnabled").then(|| int(e, "level").clamp(0, 100) as u32),
+                        rate_ms: int(e, "levelRate").max(0) as u32,
+                        color: flag(e, "colorEnabled").then(|| LightColor::from_xy(xy("colorX"), xy("colorY"), int(e, "colorMode"))),
                     }
                 })
                 .collect(),
         })
         .collect();
     let toggle = int(s, "toggle_id");
-    Some(LightingScene {
+    LightingScene {
         id: int(s, "scene_id") as u32,
         name: text(s, "name"),
         // 65535 is "none"; a toggle scene names itself or none.
-        toggle_id: (child(s, "toggle_id").is_some() && toggle >= 0 && toggle != 65535 && toggle != int(s, "scene_id")).then_some(toggle as u32),
+        toggle_id: (child(s, "toggle_id").is_some() && toggle >= 0 && toggle != NO_SCENE as i64 && toggle != int(s, "scene_id"))
+            .then_some(toggle as u32),
         active: flag(s, "is_active"),
         members,
-    })
+    }
+}
+
+/// A `GET_SCENE` reply (`<AdvScene>`).
+pub fn parse_scene(xml: &str) -> Option<LightingScene> {
+    let doc = parse(xml)?;
+    doc.descendants().find(|n| n.has_tag_name("AdvScene")).map(scene_from_node)
+}
+
+/// Every `<AdvScene>`: the agent's stored `<State><all_scenes>`.
+pub fn parse_scenes(xml: &str) -> Vec<LightingScene> {
+    let Some(doc) = parse(xml) else { return vec![] };
+    doc.descendants().filter(|n| n.has_tag_name("AdvScene")).map(scene_from_node).collect()
 }
 
 // ---- Announcements -----------------------------------------------------------------------------
+
+/// Announcement event ids: N when announcement N executes, this plus N when it completes.
+pub const ANNOUNCEMENT_COMPLETE: u32 = 50000;
+
+/// How long Composer lets an announcement stay on screens, in seconds.
+pub const DISPLAY_SECONDS: [u32; 9] = [5, 10, 15, 20, 25, 30, 60, 300, 600];
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AnnouncementTarget {
@@ -638,15 +1027,23 @@ pub struct AnnouncementTarget {
 pub struct Announcement {
     pub id: u32,
     pub name: String,
-    /// The sound played (a file on the controller, or a URL).
+    /// The sound played (a file on the controller, or a URL), with any credentials masked.
     pub audio: Option<String>,
     /// Text shown on screens.
     pub text: Option<String>,
     /// The image or camera shown on screens, with any credentials in it masked.
     pub image: Option<String>,
+    /// How long it stays on screens, ms.
+    pub display_ms: i64,
+    /// Whether screens show an OK button to dismiss it.
+    pub ok_button: bool,
     pub rooms: Vec<AnnouncementTarget>,
     pub navigators: Vec<AnnouncementTarget>,
     pub touchscreens: Vec<AnnouncementTarget>,
+    /// The `<announcement>` exactly as stored, unmasked: changes keep what they don't touch
+    /// (camera logins, delays, variable displays) from here. Never serialized.
+    #[serde(skip)]
+    pub raw: String,
 }
 
 /// `user:pass@` and `password=`-style query values replaced with `••••`: announcement
@@ -657,7 +1054,7 @@ pub fn mask_url_credentials(url: &str) -> String {
         let rest = scheme + 3;
         let end = out[rest..].find(['/', '?', '#']).map(|e| rest + e).unwrap_or(out.len());
         if let Some(at) = out[rest..end].rfind('@') {
-            out.replace_range(rest..rest + at, "••••");
+            out.replace_range(rest..rest + at, MASK);
         }
     }
     let lower = out.to_ascii_lowercase();
@@ -672,7 +1069,7 @@ pub fn mask_url_credentials(url: &str) -> String {
             i += k.len();
             let end = out[i..].find(['&', '#', ';']).map(|e| i + e).unwrap_or(out.len());
             if end > i {
-                masked.push_str("••••");
+                masked.push_str(MASK);
             }
             i = end;
         } else {
@@ -684,10 +1081,12 @@ pub fn mask_url_credentials(url: &str) -> String {
     masked
 }
 
-/// A `get_announcements` reply.
-pub fn parse_announcements(xml: &str) -> Vec<Announcement> {
-    let Some(doc) = parse(xml) else { return vec![] };
-    let targets = |a: Node<'_, '_>, list: &str, one: &str| -> Vec<AnnouncementTarget> {
+/// What masked credentials are replaced with. A changed URL still containing it means
+/// "keep the hidden parts of the current one".
+pub const MASK: &str = "••••";
+
+fn announcement_from_node(a: Node<'_, '_>, src: &str) -> Announcement {
+    let targets = |list: &str, one: &str| -> Vec<AnnouncementTarget> {
         child(a, list)
             .map(|l| {
                 l.children()
@@ -702,128 +1101,663 @@ pub fn parse_announcements(xml: &str) -> Vec<Announcement> {
             })
             .unwrap_or_default()
     };
+    let audio = child(a, "audio").map(|x| attr(x, "file")).filter(|s| !s.is_empty());
+    let video = child(a, "video");
+    Announcement {
+        id: attr(a, "id").parse().unwrap_or(0),
+        name: attr(a, "name"),
+        audio: audio.map(|s| mask_url_credentials(&s)),
+        text: video.map(|v| attr(v, "text")).filter(|s| !s.is_empty()),
+        image: video.map(|v| attr(v, "file")).filter(|s| !s.is_empty()).map(|s| mask_url_credentials(&s)),
+        display_ms: video.and_then(|v| v.attribute("timeout")).and_then(|t| t.parse().ok()).unwrap_or(30000),
+        ok_button: video.and_then(|v| v.attribute("OKButton")).is_none_or(truthy),
+        rooms: targets("rooms", "room"),
+        navigators: targets("navigators", "navigator"),
+        touchscreens: targets("touchscreens", "touchscreen"),
+        raw: src[a.range()].to_string(),
+    }
+}
+
+/// A `get_announcements` reply, or the agent's stored `<announcements>`.
+pub fn parse_announcements(xml: &str) -> Vec<Announcement> {
+    let Some(doc) = parse(xml) else { return vec![] };
     doc.descendants()
         .filter(|n| n.has_tag_name("announcement") && n.attribute("id").is_some())
-        .map(|a| {
-            let audio = child(a, "audio").map(|x| attr(x, "file")).filter(|s| !s.is_empty());
-            let video = child(a, "video");
-            Announcement {
-                id: attr(a, "id").parse().unwrap_or(0),
-                name: attr(a, "name"),
-                audio: audio.map(|s| mask_url_credentials(&s)),
-                text: video.map(|v| attr(v, "text")).filter(|s| !s.is_empty()),
-                image: video.map(|v| attr(v, "file")).filter(|s| !s.is_empty()).map(|s| mask_url_credentials(&s)),
-                rooms: targets(a, "rooms", "room"),
-                navigators: targets(a, "navigators", "navigator"),
-                touchscreens: targets(a, "touchscreens", "touchscreen"),
-            }
-        })
+        .map(|a| announcement_from_node(a, xml))
         .collect()
 }
 
+impl Announcement {
+    fn record(&self, p: &crate::Project) -> Record {
+        let vol = |v: Option<i64>| match v {
+            Some(v) if v >= 0 => format!(" at {v}%"),
+            _ => String::new(),
+        };
+        // The agent keeps these in its own order (by id); the order means nothing.
+        let list = |mut v: Vec<String>| {
+            v.sort();
+            if v.is_empty() { "none".to_string() } else { v.join(", ") }
+        };
+        let fields = vec![
+            ("sound".to_string(), self.audio.clone().unwrap_or_else(|| "none".into())),
+            ("text".to_string(), self.text.clone().unwrap_or_else(|| "none".into())),
+            ("image".to_string(), self.image.clone().unwrap_or_else(|| "none".into())),
+            ("on screen for".to_string(), format!("{}{}", ms_text(self.display_ms), if self.ok_button { ", with OK button" } else { "" })),
+            ("plays in".to_string(), list(self.rooms.iter().map(|r| format!("{}{}", p.name_of(r.id), vol(r.volume))).collect())),
+            ("shows on".to_string(), list(self.navigators.iter().map(|n| device_text(p, n.id)).collect())),
+            ("touchscreen sound".to_string(), list(self.touchscreens.iter().map(|t| format!("{}{}", device_text(p, t.id), vol(t.volume))).collect())),
+        ];
+        Record { what: "announcement", id: self.id, name: self.name.clone(), fields }
+    }
+}
+
+/// A room or touchscreen an announcement plays on, and how loud.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AnnouncementVolume {
+    /// The room (for `rooms`) or touchscreen (for `touchscreen_audio`).
+    pub id: u32,
+    /// 0–100; omit to play at the current volume.
+    #[serde(default)]
+    pub volume: Option<u32>,
+}
+
+/// What can be set on an announcement (Composer's Announcements editor).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct AnnouncementSpec {
+    /// Unique among the announcements.
+    pub name: String,
+    /// The sound: a file on the controller (e.g. `bell.mp3`) or an http(s) URL; omit for none.
+    #[serde(default)]
+    pub audio: Option<String>,
+    /// Text shown on screens.
+    #[serde(default)]
+    pub text: String,
+    /// An image or camera snapshot URL shown on screens; omit for none. One that still
+    /// contains `••••` (as views show logins) keeps the current image's hidden parts.
+    #[serde(default)]
+    pub image: Option<String>,
+    /// Seconds it stays on screens: 5, 10, 15, 20, 25, 30, 60, 300 or 600.
+    #[serde(default = "thirty")]
+    pub display_seconds: u32,
+    /// Show an OK button to dismiss it.
+    #[serde(default = "yes")]
+    pub ok_button: bool,
+    /// Rooms whose speakers play the sound.
+    #[serde(default)]
+    pub rooms: Vec<AnnouncementVolume>,
+    /// Navigators that show it: controllers' on-screen navigators and touchscreens (their proxies).
+    #[serde(default)]
+    pub screens: Vec<u32>,
+    /// Touchscreens that play the sound through their own speaker.
+    #[serde(default)]
+    pub touchscreen_audio: Vec<AnnouncementVolume>,
+}
+
+fn thirty() -> u32 {
+    30
+}
+
+impl AnnouncementSpec {
+    /// The spec an existing announcement has, as an editor starts from it.
+    pub fn of(a: &Announcement) -> Self {
+        let vol = |v: Option<i64>| v.filter(|v| *v >= 0).map(|v| v as u32);
+        Self {
+            name: a.name.clone(),
+            audio: a.audio.clone(),
+            text: a.text.clone().unwrap_or_default(),
+            image: a.image.clone(),
+            display_seconds: (a.display_ms / 1000).max(0) as u32,
+            ok_button: a.ok_button,
+            rooms: a.rooms.iter().map(|r| AnnouncementVolume { id: r.id, volume: vol(r.volume) }).collect(),
+            screens: a.navigators.iter().map(|n| n.id).collect(),
+            touchscreen_audio: a.touchscreens.iter().map(|t| AnnouncementVolume { id: t.id, volume: vol(t.volume) }).collect(),
+        }
+    }
+
+    /// The `<announcement>` Composer sends in `add_announcement` / `modify_announcement`
+    /// (its `Announcement.ToXml`). Settings this spec doesn't cover (delays, variable
+    /// displays) and masked credentials are kept from `current`'s stored XML; `room_of` and
+    /// `onscreen` describe the screens as Composer would.
+    pub fn to_xml(&self, id: u32, current: Option<&Announcement>, room_of: impl Fn(u32) -> u32, onscreen: impl Fn(u32) -> bool) -> String {
+        let doc = current.and_then(|c| roxmltree::Document::parse(&c.raw).ok());
+        let root = doc.as_ref().map(|d| d.root_element());
+        let keep = |tag: Option<&str>, a: &str, default: &str| -> String {
+            let n = match tag {
+                None => root,
+                Some(t) => root.and_then(|r| child(r, t)),
+            };
+            n.and_then(|n| n.attribute(a)).unwrap_or(default).to_string()
+        };
+        // A value still showing the mask keeps the stored one.
+        let unmask = |v: &Option<String>, tag: &str| -> String {
+            match v {
+                Some(v) if v.contains(MASK) => keep(Some(tag), "file", ""),
+                Some(v) => v.clone(),
+                None => String::new(),
+            }
+        };
+        let audio = unmask(&self.audio, "audio");
+        let tf = |b: bool| if b { "True" } else { "False" };
+        let e = |s: &str| escape(s);
+        let vol = |v: Option<u32>| v.map(|v| v.to_string()).unwrap_or_else(|| "-1".into());
+        let rooms: String = self.rooms.iter().map(|r| format!(r#"<room id="{}" volume="{}" />"#, r.id, vol(r.volume))).collect();
+        let navs: String = self
+            .screens
+            .iter()
+            .map(|n| {
+                // A navigator kept from before keeps what Composer decided about it.
+                let was = current.and_then(|c| c.navigators.iter().find(|x| x.id == *n)).and_then(|x| x.onscreen);
+                format!(r#"<navigator id="{n}" room_id="{}" onscreen="{}" />"#, room_of(*n), tf(was.unwrap_or_else(|| onscreen(*n))))
+            })
+            .collect();
+        let touch: String = self
+            .touchscreen_audio
+            .iter()
+            .map(|t| format!(r#"<touchscreen id="{}" room_id="{}" volume="{}" />"#, t.id, room_of(t.id), vol(t.volume)))
+            .collect();
+        format!(
+            r#"<announcement id="{id}" name="{}" dynamic="{}" advanced="{}"><video file="{}" text="{}" delay="{}" timeout="{}" displayID="{}" variableID="{}" variableName="{}" OKButton="{}" /><audio isurl="{}" file="{}" delay="{}" delayStop="{}" /><rooms>{rooms}</rooms><navigators>{navs}</navigators><touchscreens>{touch}</touchscreens></announcement>"#,
+            e(&self.name),
+            e(&keep(None, "dynamic", "False")),
+            e(&keep(None, "advanced", "True")),
+            e(&unmask(&self.image, "video")),
+            e(&self.text),
+            e(&keep(Some("video"), "delay", "0")),
+            self.display_seconds * 1000,
+            e(&keep(Some("video"), "displayID", "0")),
+            e(&keep(Some("video"), "variableID", "0")),
+            e(&keep(Some("video"), "variableName", "")),
+            tf(self.ok_button),
+            tf(audio.starts_with("http://") || audio.starts_with("https://")),
+            e(&audio),
+            e(&keep(Some("audio"), "delay", "500")),
+            e(&keep(Some("audio"), "delayStop", "0")),
+        )
+    }
+}
+
 // ---- Wake/Sleep --------------------------------------------------------------------------------
+
+/// A room's Wake/Sleep defaults: what its wake-ups and goodnights start from when someone
+/// sets one on a touchscreen (Composer's Wake/Sleep editor).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct WakeSleepSpec {
+    /// Default wake-up time, `HH:MM` (24-hour).
+    pub wake_time: String,
+    /// The days a wake-up repeats on by default; all seven (or none given) = every day.
+    #[serde(default)]
+    pub wake_days: Vec<Weekday>,
+    /// Minutes the goodnight fade takes by default.
+    pub sleep_minutes: u32,
+    pub lights: WakeLights,
+    pub media: WakeMedia,
+    pub blinds: WakeBlinds,
+    pub temperature: WakeTemperature,
+}
+
+/// `visible`: offered on touchscreens; `enabled`: on by default when someone sets a wake-up.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct WakeLights {
+    pub visible: bool,
+    pub enabled: bool,
+    /// One light proxy, or 0 for all the room's lights.
+    #[serde(default)]
+    pub light: u32,
+    /// Minutes the lights take to come up.
+    pub ramp_minutes: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct WakeMedia {
+    pub visible: bool,
+    pub enabled: bool,
+    /// The source device, or 0 for the room's TV.
+    #[serde(default)]
+    pub source: u32,
+    /// The source's kind as the agent lists it (`watch`, `listen`), or empty for none.
+    #[serde(default)]
+    pub kind: String,
+    /// A channel/station/playlist id from the source, 0 for none.
+    #[serde(default)]
+    pub item: u32,
+    /// Offer only the TV's broadcast channels.
+    #[serde(default)]
+    pub tv_only: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct WakeBlinds {
+    pub visible: bool,
+    pub enabled: bool,
+    /// One blind, or 0 for all the room's blinds.
+    #[serde(default)]
+    pub blind: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct WakeTemperature {
+    pub visible: bool,
+    pub enabled: bool,
+    /// Thermostat mode (`Heat`, `Cool`, … as the room's thermostat names them).
+    #[serde(default)]
+    pub mode: String,
+    /// Setpoint in °F (the agent stores Fahrenheit whatever the display scale).
+    pub setpoint_f: i32,
+}
+
+impl Default for WakeSleepSpec {
+    /// What Composer's "Add" gives a room.
+    fn default() -> Self {
+        Self {
+            wake_time: "06:30".into(),
+            wake_days: vec![],
+            sleep_minutes: 15,
+            lights: WakeLights { visible: true, enabled: true, light: 0, ramp_minutes: 1 },
+            media: WakeMedia { visible: true, enabled: true, source: 0, kind: String::new(), item: 0, tv_only: false },
+            blinds: WakeBlinds { visible: true, enabled: true, blind: 0 },
+            // Only hospitality systems show temperature.
+            temperature: WakeTemperature { visible: false, enabled: true, mode: "Cool".into(), setpoint_f: 72 },
+        }
+    }
+}
+
+fn hhmm(s: &str) -> Option<(u32, u32)> {
+    let (h, m) = s.trim().split_once(':')?;
+    let (h, m) = (h.parse().ok()?, m.parse().ok()?);
+    (h < 24 && m < 60).then_some((h, m))
+}
+
+impl WakeSleepSpec {
+    pub fn validate(&self) -> Result<(), String> {
+        hhmm(&self.wake_time).ok_or_else(|| format!("the wake-up time is HH:MM, 00:00–23:59 (got “{}”)", self.wake_time))?;
+        if self.sleep_minutes > 240 {
+            return Err(format!("the goodnight fade is at most 240 minutes (got {})", self.sleep_minutes));
+        }
+        if self.lights.ramp_minutes > 240 {
+            return Err(format!("the lights' ramp is at most 240 minutes (got {})", self.lights.ramp_minutes));
+        }
+        if !(40..=99).contains(&self.temperature.setpoint_f) {
+            return Err(format!("the setpoint is in °F, 40–99 (got {})", self.temperature.setpoint_f));
+        }
+        Ok(())
+    }
+
+    fn days_text(&self) -> String {
+        let mut d = self.wake_days.clone();
+        d.sort();
+        d.dedup();
+        if d.is_empty() || d.len() == 7 { "all".into() } else { d.iter().map(|w| w.short().to_ascii_lowercase()).collect::<Vec<_>>().join(",") }
+    }
+
+    /// The `<scene>` Composer sends in `ADD_`/`MODIFY_WAKEUPGOODNIGHTSCENE` (its `Scene.ToXml`).
+    pub fn to_xml(&self, id: u32, room: u32, with_days: bool) -> String {
+        let (h, m) = hhmm(&self.wake_time).unwrap_or((6, 30));
+        let b = |v: bool| if v { "1" } else { "0" };
+        let days = if with_days { format!(r#" days_default="{}""#, self.days_text()) } else { String::new() };
+        let (l, md, bl, t) = (&self.lights, &self.media, &self.blinds, &self.temperature);
+        format!(
+            r#"<scene id="{id}" roomid="{room}"><wakeuptime_default hour="{h}" min="{m}"{days} /><goodnighttime_default min="{}" /><lights visible="{}" enabled_default="{}" lightid_default="{}" ramprate_default="{}" /><media visible="{}" enabled_default="{}" mediaid_default="{}" sourceid_default="{}" tvonly="{}" type_default="{}" /><blinds visible="{}" enabled_default="{}" blindid_default="{}" /><temp visible="{}" enabled_default="{}" mode_default="{}" setpoint_default="{}" /></scene>"#,
+            self.sleep_minutes,
+            b(l.visible), b(l.enabled), l.light, l.ramp_minutes,
+            b(md.visible), b(md.enabled), md.item, md.source, if md.tv_only { "True" } else { "False" }, escape(&md.kind),
+            b(bl.visible), b(bl.enabled), bl.blind,
+            b(t.visible), b(t.enabled), escape(&t.mode), t.setpoint_f,
+        )
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WakeSleepScene {
     pub id: u32,
     pub room: u32,
-    /// `HH:MM`
-    pub wake_time: String,
-    /// "all", or the days as the agent stores them.
-    pub wake_days: String,
-    /// Minutes the goodnight fade takes.
-    pub sleep_minutes: i64,
-    pub lights: Option<WakeSleepPart>,
-    pub media: Option<WakeSleepPart>,
-    pub blinds: Option<WakeSleepPart>,
-    pub temperature: Option<WakeSleepPart>,
+    pub settings: WakeSleepSpec,
 }
 
-/// One part of a wake-up (lights, media, blinds, temperature), when shown to users.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct WakeSleepPart {
-    /// On by default when someone sets a wake-up.
-    pub enabled: bool,
-    /// The light, source or blind it uses (0 = none chosen).
-    pub device: Option<u32>,
-    pub detail: Option<String>,
+impl WakeSleepScene {
+    fn record(&self, p: &crate::Project) -> Record {
+        let s = &self.settings;
+        let part = |visible: bool, enabled: bool, what: String| {
+            if !visible { "not offered".to_string() } else { format!("{what}{}", if enabled { ", on by default" } else { ", off by default" }) }
+        };
+        let all = |id: u32, what: &str| if id == 0 { format!("all {what}") } else { device_text(p, id) };
+        let media = if s.media.source == 0 { "TV".to_string() } else { device_text(p, s.media.source) };
+        let media = if s.media.item != 0 { format!("{media}, item #{}", s.media.item) } else { media };
+        let days = s.days_text();
+        let fields = vec![
+            ("wake-up".to_string(), format!("{} {}", s.wake_time, if days == "all" { "every day".to_string() } else { days })),
+            ("goodnight fade".to_string(), format!("{} min", s.sleep_minutes)),
+            ("lights".to_string(), part(s.lights.visible, s.lights.enabled, format!("{} over {} min", all(s.lights.light, "lights"), s.lights.ramp_minutes))),
+            ("media".to_string(), part(s.media.visible, s.media.enabled, media)),
+            ("blinds".to_string(), part(s.blinds.visible, s.blinds.enabled, all(s.blinds.blind, "blinds"))),
+            ("temperature".to_string(), part(s.temperature.visible, s.temperature.enabled, format!("{} {}°F", s.temperature.mode, s.temperature.setpoint_f).trim().to_string())),
+        ];
+        Record { what: "Wake/Sleep room", id: self.id, name: p.name_of(self.room), fields }
+    }
 }
 
-/// A `GET_WAKEUPGOODNIGHTSCENE_LIST` reply.
+/// A `GET_WAKEUPGOODNIGHTSCENE_LIST` reply, or the agent's stored state.
 pub fn parse_wake_sleep(xml: &str) -> Vec<WakeSleepScene> {
     let Some(doc) = parse(xml) else { return vec![] };
     doc.descendants()
         .filter(|n| n.has_tag_name("scene") && n.attribute("roomid").is_some())
         .map(|s| {
-            let part = |tag: &str, dev: &str, detail: Option<String>| {
-                child(s, tag).filter(|p| p.attribute("visible").is_some_and(truthy)).map(|p| WakeSleepPart {
-                    enabled: p.attribute("enabled_default").is_some_and(truthy),
-                    device: p.attribute(dev).and_then(|v| v.parse().ok()).filter(|v| *v != 0),
-                    detail: detail.filter(|d| !d.is_empty()),
-                })
+            let at = |tag: &str, a: &str| child(s, tag).and_then(|n| n.attribute(a)).unwrap_or_default().trim().to_string();
+            let num = |tag: &str, a: &str| at(tag, a).parse::<i64>().unwrap_or(0);
+            let yes = |tag: &str, a: &str| {
+                let v = at(tag, a);
+                truthy(&v) || v.parse::<i64>().is_ok_and(|n| n != 0)
             };
-            let w = child(s, "wakeuptime_default");
-            let lights = child(s, "lights").and_then(|l| l.attribute("ramprate_default")).map(|r| format!("ramp {r} min"));
-            let media = child(s, "media").and_then(|m| m.attribute("type_default")).map(String::from);
-            let temp = child(s, "temp").map(|t| format!("{} {}", attr(t, "mode_default"), attr(t, "setpoint_default")).trim().to_string());
+            let days = at("wakeuptime_default", "days_default");
+            let wake_days = if days.is_empty() || days.eq_ignore_ascii_case("all") {
+                vec![]
+            } else {
+                Weekday::ALL.into_iter().filter(|w| days.split(',').any(|d| d.trim().eq_ignore_ascii_case(w.short()))).collect()
+            };
             WakeSleepScene {
                 id: attr(s, "id").parse().unwrap_or(0),
                 room: attr(s, "roomid").parse().unwrap_or(0),
-                wake_time: w
-                    .map(|w| format!("{:02}:{:02}", attr(w, "hour").parse::<u32>().unwrap_or(0), attr(w, "min").parse::<u32>().unwrap_or(0)))
-                    .unwrap_or_default(),
-                wake_days: w.map(|w| attr(w, "days_default")).unwrap_or_default(),
-                sleep_minutes: child(s, "goodnighttime_default").and_then(|g| g.attribute("min")).and_then(|m| m.parse().ok()).unwrap_or(0),
-                lights: part("lights", "lightid_default", lights),
-                media: part("media", "sourceid_default", media),
-                blinds: part("blinds", "blindid_default", None),
-                temperature: part("temp", "", temp),
+                settings: WakeSleepSpec {
+                    wake_time: format!("{:02}:{:02}", num("wakeuptime_default", "hour"), num("wakeuptime_default", "min")),
+                    wake_days,
+                    sleep_minutes: num("goodnighttime_default", "min").max(0) as u32,
+                    lights: WakeLights {
+                        visible: yes("lights", "visible"),
+                        enabled: yes("lights", "enabled_default"),
+                        light: num("lights", "lightid_default").max(0) as u32,
+                        ramp_minutes: num("lights", "ramprate_default").max(0) as u32,
+                    },
+                    media: WakeMedia {
+                        visible: yes("media", "visible"),
+                        enabled: yes("media", "enabled_default"),
+                        source: num("media", "sourceid_default").max(0) as u32,
+                        kind: at("media", "type_default"),
+                        item: num("media", "mediaid_default").max(0) as u32,
+                        // Composer reads a missing tvonly as true.
+                        tv_only: child(s, "media").and_then(|m| m.attribute("tvonly")).is_none_or(truthy),
+                    },
+                    blinds: WakeBlinds {
+                        visible: yes("blinds", "visible"),
+                        enabled: yes("blinds", "enabled_default"),
+                        blind: num("blinds", "blindid_default").max(0) as u32,
+                    },
+                    temperature: WakeTemperature {
+                        visible: yes("temp", "visible"),
+                        enabled: yes("temp", "enabled_default"),
+                        mode: at("temp", "mode_default"),
+                        setpoint_f: num("temp", "setpoint_default") as i32,
+                    },
+                },
             }
         })
         .collect()
 }
 
+/// A media source or item the Wake/Sleep agent offers for a room
+/// (`GET_MEDIA_SOURCES` → `<source>`, `GET_MEDIA_ITEMS_FOR_SOURCE` → `<item>`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MediaChoice {
+    pub id: u32,
+    pub name: String,
+    /// `watch`, `listen`…
+    pub kind: String,
+}
+
+pub fn parse_media_choices(xml: &str, tag: &str) -> Vec<MediaChoice> {
+    let Some(doc) = parse(xml) else { return vec![] };
+    let kind = attr(doc.root_element(), "type");
+    doc.descendants()
+        .filter(|n| n.has_tag_name(tag))
+        .map(|n| MediaChoice {
+            id: attr(n, "id").parse().unwrap_or(0),
+            name: attr(n, "name"),
+            kind: n.attribute("type").map(String::from).unwrap_or_else(|| kind.clone()),
+        })
+        .collect()
+}
+
+/// `GET_TEMPERATURE_MODES`: the room thermostat's modes.
+pub fn parse_temperature_modes(xml: &str) -> Vec<String> {
+    let Some(doc) = parse(xml) else { return vec![] };
+    doc.descendants().filter(|n| n.has_tag_name("mode")).filter_map(|n| n.text()).map(|t| t.trim().to_string()).collect()
+}
+
+/// `GET_AGENT_STATUS`: whether a hospitality agent runs Wake/Sleep (then temperature is offered
+/// and days aren't).
+pub fn parse_hospitality(xml: &str) -> bool {
+    parse(xml)
+        .and_then(|d| d.descendants().find(|n| n.has_tag_name("hospitality_mode")).and_then(|n| n.attribute("active")).map(|a| truthy(a) || a.parse::<i64>().is_ok_and(|v| v != 0)))
+        .unwrap_or(false)
+}
+
 // ---- Push / email notification ----------------------------------------------------------------
+
+/// A camera snapshot (or other attachment) a push notification carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Attachment {
+    /// The device that provides it (e.g. a camera).
+    pub owner: u32,
+    /// The attachment's id on that device (GET_ATTACHMENT_PROVIDER_LIST).
+    pub id: u32,
+}
+
+/// What can be set on a push notification (Composer's Push Notification editor).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct PushTemplateSpec {
+    pub name: String,
+    /// A category id from the agent's list (0 = none).
+    #[serde(default)]
+    pub category: u32,
+    /// A severity id from the agent's list (0 = none).
+    #[serde(default)]
+    pub severity: u32,
+    /// The notification's title.
+    #[serde(default)]
+    pub subject: String,
+    #[serde(default)]
+    pub message: String,
+    /// Add the time it was sent.
+    #[serde(default = "yes")]
+    pub timestamp: bool,
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct NotificationTemplate {
     pub id: u32,
-    pub name: String,
-    pub category: Option<u32>,
-    pub severity: Option<u32>,
-    pub subject: String,
-    pub message: String,
-    pub timestamp: bool,
-    /// (owner device, attachment id): e.g. a camera snapshot.
-    pub attachments: Vec<(u32, u32)>,
+    #[serde(flatten)]
+    pub spec: PushTemplateSpec,
 }
 
-/// A `GET_TEMPLATE_LIST` reply (push notification; email lists carry id and name only).
+impl PushTemplateSpec {
+    /// The `<template>` Composer sends in `ADD_TEMPLATE` / `MODIFY_TEMPLATE`.
+    pub fn to_xml(&self, id: u32) -> String {
+        let atts: String = self
+            .attachments
+            .iter()
+            .map(|a| format!("<attachment><owner>{}</owner><id>{}</id></attachment>", a.owner, a.id))
+            .collect();
+        format!(
+            "<template><templateid>{id}</templateid><name>{}</name><category>{}</category><severity>{}</severity><subject>{}</subject><message>{}</message><timestamp>{}</timestamp><attachments>{atts}</attachments></template>",
+            escape(&self.name),
+            self.category,
+            self.severity,
+            escape(&self.subject),
+            escape(&self.message),
+            if self.timestamp { 1 } else { 0 },
+        )
+    }
+}
+
+impl NotificationTemplate {
+    fn record(&self, p: &crate::Project, categories: &[(u32, String)], severities: &[(u32, String)]) -> Record {
+        let s = &self.spec;
+        let named = |l: &[(u32, String)], v: u32| {
+            if v == 0 { "none".to_string() } else { l.iter().find(|(i, _)| *i == v).map(|(_, n)| n.clone()).unwrap_or_else(|| format!("#{v}")) }
+        };
+        let fields = vec![
+            ("category".to_string(), named(categories, s.category)),
+            ("severity".to_string(), named(severities, s.severity)),
+            ("title".to_string(), s.subject.clone()),
+            ("message".to_string(), s.message.clone()),
+            ("timestamp".to_string(), if s.timestamp { "yes" } else { "no" }.to_string()),
+            ("snapshots".to_string(), if s.attachments.is_empty() { "none".into() } else { s.attachments.iter().map(|a| device_text(p, a.owner)).collect::<Vec<_>>().join(", ") }),
+        ];
+        Record { what: "push notification", id: self.id, name: s.name.clone(), fields }
+    }
+}
+
+/// A `GET_TEMPLATE_LIST` reply or the push agent's stored `<templates>`.
 pub fn parse_templates(xml: &str) -> Vec<NotificationTemplate> {
     let Some(doc) = parse(xml) else { return vec![] };
     doc.descendants()
         .filter(|n| n.has_tag_name("template"))
         .map(|t| NotificationTemplate {
             id: int(t, "templateid") as u32,
-            name: text(t, "name"),
-            category: child(t, "category").map(|_| int(t, "category") as u32),
-            severity: child(t, "severity").map(|_| int(t, "severity") as u32),
-            subject: text(t, "subject"),
-            message: text(t, "message"),
-            timestamp: flag(t, "timestamp"),
-            attachments: t
-                .descendants()
-                .filter(|a| a.has_tag_name("attachment"))
-                .map(|a| (int(a, "owner") as u32, int(a, "id") as u32))
-                .collect(),
+            spec: PushTemplateSpec {
+                name: text(t, "name"),
+                category: int(t, "category").max(0) as u32,
+                severity: int(t, "severity").max(0) as u32,
+                subject: text(t, "subject"),
+                message: text(t, "message"),
+                timestamp: child(t, "timestamp").is_none() || flag(t, "timestamp"),
+                attachments: t
+                    .descendants()
+                    .filter(|a| a.has_tag_name("attachment"))
+                    .map(|a| Attachment { owner: int(a, "owner") as u32, id: int(a, "id") as u32 })
+                    .collect(),
+            },
         })
         .collect()
 }
 
-/// `GET_CATEGORY_LIST` / `GET_SEVERITY_LIST`: id → name.
+/// What can be attached to a push notification (`GET_ATTACHMENT_PROVIDER_LIST`):
+/// (owner device, attachment id, label such as "Snapshot (URL)").
+pub fn parse_attachment_providers(xml: &str) -> Vec<(u32, u32, String)> {
+    let Some(doc) = parse(xml) else { return vec![] };
+    doc.descendants()
+        .filter(|n| n.has_tag_name("attachment_provider"))
+        .flat_map(|prov| {
+            let owner = int(prov, "id") as u32;
+            prov.children().filter(|t| t.has_tag_name("attachment_type")).map(move |t| {
+                let label = Some(text(t, "custom_description")).filter(|s| !s.is_empty()).unwrap_or_else(|| text(t, "description"));
+                (owner, int(t, "id") as u32, label)
+            })
+        })
+        .collect()
+}
+
+/// `GET_CATEGORY_LIST` / `GET_SEVERITY_LIST` or the stored lists: id → name.
 pub fn parse_named_list(xml: &str, tag: &str) -> Vec<(u32, String)> {
     let Some(doc) = parse(xml) else { return vec![] };
-    doc.descendants().filter(|n| n.has_tag_name(tag)).map(|n| (int(n, "id") as u32, text(n, "name"))).collect()
+    doc.descendants().filter(|n| n.has_tag_name(tag) && child(*n, "id").is_some()).map(|n| (int(n, "id") as u32, text(n, "name"))).collect()
+}
+
+/// What can be set on an email notification (Composer's Email Notification editor).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct EmailTemplateSpec {
+    pub name: String,
+    /// Recipients, comma-separated.
+    #[serde(default)]
+    pub to: String,
+    #[serde(default)]
+    pub subject: String,
+    #[serde(default)]
+    pub body: String,
+    /// Add the time it was sent.
+    #[serde(default = "yes")]
+    pub timestamp: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EmailTemplate {
+    pub id: u32,
+    #[serde(flatten)]
+    pub spec: EmailTemplateSpec,
+}
+
+impl EmailTemplateSpec {
+    /// The `<template>` Composer sends in `ADD_TEMPLATE` / `MODIFY_TEMPLATE`.
+    pub fn to_xml(&self, id: u32) -> String {
+        format!(
+            "<template><templateid>{id}</templateid><name>{}</name><email><timestamp>{}</timestamp><to>{}</to><subject>{}</subject><body>{}</body></email></template>",
+            escape(&self.name),
+            if self.timestamp { 1 } else { 0 },
+            escape(&self.to),
+            escape(&self.subject),
+            escape(&self.body),
+        )
+    }
+}
+
+impl EmailTemplate {
+    fn record(&self) -> Record {
+        let s = &self.spec;
+        let fields = vec![
+            ("to".to_string(), s.to.clone()),
+            ("subject".to_string(), s.subject.clone()),
+            ("body".to_string(), s.body.clone()),
+            ("timestamp".to_string(), if s.timestamp { "yes" } else { "no" }.to_string()),
+        ];
+        Record { what: "email notification", id: self.id, name: s.name.clone(), fields }
+    }
+}
+
+/// The email agent's `GET_TEMPLATE_LIST` reply or its stored templates (the same `<template>`s).
+pub fn parse_email_templates(xml: &str) -> Vec<EmailTemplate> {
+    let Some(doc) = parse(xml) else { return vec![] };
+    doc.descendants()
+        .filter(|n| n.has_tag_name("template"))
+        .map(|t| {
+            let e = child(t, "email");
+            let et = |tag: &str| e.map(|e| text(e, tag)).unwrap_or_default();
+            EmailTemplate {
+                id: int(t, "templateid") as u32,
+                spec: EmailTemplateSpec {
+                    name: text(t, "name"),
+                    to: et("to"),
+                    subject: et("subject"),
+                    body: et("body"),
+                    timestamp: e.is_none_or(|e| child(e, "timestamp").is_none() || flag(e, "timestamp")),
+                },
+            }
+        })
+        .collect()
+}
+
+// ---- Screen Saver ------------------------------------------------------------------------------
+
+/// The touchscreens' photo screen saver (Composer's Screen Saver agent); read-only here.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct ScreenSaver {
+    /// The storage device the photos come from (0 = none).
+    pub device: u32,
+    /// The folder on it.
+    pub picture_path: String,
+    /// Seconds each photo shows.
+    pub photo_seconds: u32,
+}
+
+impl ScreenSaver {
+    fn record(&self, p: &crate::Project) -> Record {
+        let fields = vec![
+            ("photos from".to_string(), if self.device == 0 { "none".into() } else { device_text(p, self.device) }),
+            ("folder".to_string(), if self.picture_path.is_empty() { "none".into() } else { self.picture_path.clone() }),
+            ("each photo".to_string(), format!("{} s", self.photo_seconds)),
+        ];
+        Record { what: "screen saver", id: 0, name: "Screen saver".into(), fields }
+    }
+}
+
+/// The agent's stored `<screensaver>`.
+pub fn parse_screensaver(xml: &str) -> ScreenSaver {
+    let Some(doc) = parse(xml) else { return ScreenSaver::default() };
+    let Some(n) = doc.descendants().find(|n| n.has_tag_name("screensaver")) else { return ScreenSaver::default() };
+    ScreenSaver {
+        device: int(n, "deviceid").max(0) as u32,
+        picture_path: text(n, "picturepath"),
+        photo_seconds: int(n, "phototimeoutintervalinseconds").max(0) as u32,
+    }
 }
 
 #[cfg(test)]
@@ -891,11 +1825,58 @@ mod tests {
 
     #[test]
     fn reads_other_agents() {
-        let s = parse_scene("<AdvScene><name>Joseph's Room On</name><scene_id>2</scene_id><toggle_id>3</toggle_id><is_active>False</is_active><all_members><AdvSceneMember><device_id>1248</device_id><all_elements><element><delay>0</delay><levelEnabled>True</levelEnabled><levelRate>250</levelRate><level>100</level><colorEnabled>True</colorEnabled><colorMode>1</colorMode><colorTemperature>3200</colorTemperature></element></all_elements></AdvSceneMember></all_members></AdvScene>").unwrap();
-        assert_eq!((s.toggle_id, s.members[0].device, s.members[0].steps[0].color_temperature), (Some(3), 1248, Some(3200)));
+        let s = parse_scene("<AdvScene><name>Bedroom On</name><scene_id>2</scene_id><toggle_id>3</toggle_id><is_active>False</is_active><all_members><AdvSceneMember><device_id>1248</device_id><all_elements><element><delay>0</delay><levelEnabled>True</levelEnabled><levelRate>250</levelRate><level>100</level><colorEnabled>True</colorEnabled><colorRate>250</colorRate><colorX>0.423358</colorX><colorY>0.398951</colorY><colorMode>1</colorMode></element></all_elements></AdvSceneMember></all_members></AdvScene>").unwrap();
+        // Composer's own 3200 K reads back as 3200 K.
+        assert_eq!((s.toggle_id, s.members[0].device, s.members[0].steps[0].color), (Some(3), 1248, Some(LightColor::Temperature { kelvin: 3200 })));
+        assert_eq!(s.members[0].steps[0].text(), "100%, 3200 K over 250 ms");
         let w = parse_wake_sleep(r#"<wakeupgoodnightscenes><scene id="1" roomid="71"><wakeuptime_default hour="7" min="30" days_default="all"/><goodnighttime_default min="60"/><lights visible="true" enabled_default="false" lightid_default="0" ramprate_default="1"/><blinds visible="false" enabled_default="false" blindid_default="0"/></scene></wakeupgoodnightscenes>"#);
-        assert_eq!((w[0].room, w[0].wake_time.as_str(), w[0].blinds.is_none()), (71, "07:30", true));
-        let t = parse_templates("<templates><template><templateid>2</templateid><name>Back Garage Stuck</name><category>2</category><severity>2</severity><subject>Open</subject><message/><timestamp>1</timestamp><attachments><attachment><owner>378</owner><id>1003</id></attachment></attachments></template></templates>");
-        assert_eq!((t[0].id, t[0].attachments[0]), (2, (378, 1003)));
+        assert_eq!((w[0].room, w[0].settings.wake_time.as_str(), w[0].settings.blinds.visible), (71, "07:30", false));
+        let t = parse_templates("<templates><template><templateid>2</templateid><name>Gate Open</name><category>2</category><severity>2</severity><subject>Open</subject><message/><timestamp>1</timestamp><attachments><attachment><owner>378</owner><id>1003</id></attachment></attachments></template></templates>");
+        assert_eq!((t[0].id, t[0].spec.attachments[0]), (2, Attachment { owner: 378, id: 1003 }));
+        assert_eq!(parse_templates(&t[0].spec.to_xml(2))[0], t[0]);
+    }
+
+    #[test]
+    fn colours_round_trip() {
+        for k in [1000, 2700, 3200, 4000, 6500, 15000, 20000] {
+            let (x, y) = kelvin_to_xy(k);
+            let (x, y) = (coord(x).parse().unwrap(), coord(y).parse().unwrap());
+            assert_eq!(xy_to_kelvin(x, y), k);
+        }
+        for (h, s) in [(0, 100), (30, 80), (120, 100), (200, 45), (300, 10), (0, 0)] {
+            let (x, y) = hs_to_xy(h, s);
+            let (x, y) = (coord(x).parse().unwrap(), coord(y).parse().unwrap());
+            assert_eq!(xy_to_hs(x, y), (h, s), "hue {h} saturation {s}");
+        }
+        assert!(LightColor::Temperature { kelvin: 500 }.validate().is_err());
+    }
+
+    #[test]
+    fn agent_refusals_are_read() {
+        assert_eq!(reply_failure("<failure>Name in use</failure>").as_deref(), Some("Name in use"));
+        assert_eq!(reply_failure("<added_members><success><MEMBER_ID>1</MEMBER_ID></success><failure/></added_members>"), None);
+        assert_eq!(reply_failure("<added_members><success/><failure><MEMBER_ID>14</MEMBER_ID></failure></added_members>").as_deref(), Some("14"));
+        assert_eq!(reply_failure("<fail>No such announcement</fail>").as_deref(), Some("No such announcement"));
+        assert_eq!(reply_failure("<success/>"), None);
+    }
+
+    #[test]
+    fn announcements_keep_what_they_mask() {
+        let x = r#"<announcements><announcement id="2" name="Doorbell" dynamic="false" advanced="true"><audio isurl="false" file="bell.mp3" delay="500" delayStop="0"/><video file="http://10.0.0.5/snap.cgi?user=view&amp;password=secret" text="Someone is at the door" delay="0" timeout="30000" displayID="0" variableID="0" variableName="" OKButton="true"/><rooms><room id="14" volume="-1"/></rooms><navigators><navigator id="31" room_id="95" onscreen="true"/></navigators><touchscreens/></announcement></announcements>"#;
+        let a = parse_announcements(x).remove(0);
+        assert_eq!(a.image.as_deref(), Some("http://10.0.0.5/snap.cgi?user=view&password=••••"));
+        assert!(a.raw.contains("password=secret") && !serde_json::to_string(&a).unwrap().contains("secret"));
+        assert_eq!((a.display_ms, a.ok_button, a.rooms[0].id), (30000, true, 14));
+    }
+
+    #[test]
+    fn wake_sleep_xml_round_trips() {
+        let mut s = WakeSleepSpec::default();
+        s.wake_days = vec![Weekday::Monday, Weekday::Friday];
+        s.media.kind = "watch".into();
+        s.validate().unwrap();
+        let back = parse_wake_sleep(&s.to_xml(3, 71, true)).remove(0);
+        assert_eq!((back.id, back.room, &back.settings), (3, 71, &s));
+        assert!(!s.to_xml(0, 71, false).contains("days_default"));
     }
 }

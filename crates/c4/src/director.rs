@@ -73,6 +73,25 @@ pub struct CommandDef {
     pub params: Vec<PropertyDef>,
 }
 
+/// A test programming can make on a device (Composer's Conditionals and Loops tabs). DriverWorks
+/// drivers declare a `type`; Control4's built-in proxies (light_v2's LOAD_ON) leave it out,
+/// and some name theirs by number only. Shaped for use by [`crate::program::shape`].
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct ConditionalDef {
+    pub id: Option<u32>,
+    pub name: String,
+    /// SIMPLE, BOOL, NUMBER, STRING, LIST, ROOM, DEVICE (upper-cased); empty when undeclared.
+    pub kind: String,
+    /// Composer's line template: `NAME` for the device, `LOGIC` for the comparison.
+    pub description: String,
+    pub statement: String,
+    pub true_text: Option<String>,
+    pub false_text: Option<String>,
+    pub items: Vec<String>,
+    pub minimum: Option<String>,
+    pub maximum: Option<String>,
+}
+
 /// What a device's driver declares, from the `devicedata` in `GetItems`.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DeviceInfo {
@@ -89,6 +108,9 @@ pub struct DeviceInfo {
     pub properties: Vec<PropertyDef>,
     pub actions: Vec<(String, String)>,
     pub commands: Vec<CommandDef>,
+    /// `<conditionals>`: what an If or While can test on it.
+    #[serde(default)]
+    pub conditionals: Vec<ConditionalDef>,
     /// `<small image_source="c4z">icons/device_sm.png</small>`: where the driver's own icon
     /// lives inside its package (`www/<path>`). `None` for drivers using Composer's images.
     pub icon: Option<String>,
@@ -144,22 +166,21 @@ impl Catalog {
         }
     }
 
-    /// Agents declare no events; the Scheduler's are its entries (Composer's plugin reports
+    /// Agents declare no events; the Scheduler's are its entries, Advanced Lighting's and
+    /// Announcements' come from their scenes and announcements (Composer's plugins report
     /// them the same way), so programming can name and check them. They come from a
     /// snapshot, which has them current.
     pub fn set_schedule_events(&mut self, p: &Project) {
-        for (agent, entries) in &p.schedules {
-            let info = self.devices.entry(*agent).or_insert_with(|| DeviceInfo { id: *agent, ..Default::default() });
-            info.events = entries.iter().map(|e| (e.id, e.spec.name.clone())).collect();
+        for (agent, events) in agent_events(p) {
+            let info = self.devices.entry(agent).or_insert_with(|| DeviceInfo { id: agent, ..Default::default() });
+            info.events = events.into_iter().collect();
         }
     }
 
     /// Whether [`Self::set_schedule_events`] would change nothing.
     pub fn has_schedule_events(&self, p: &Project) -> bool {
-        p.schedules.iter().all(|(agent, entries)| {
-            self.devices.get(agent).is_some_and(|d| {
-                d.events.len() == entries.len() && entries.iter().all(|e| d.events.get(&e.id) == Some(&e.spec.name))
-            })
+        agent_events(p).into_iter().all(|(agent, events)| {
+            self.devices.get(&agent).is_some_and(|d| d.events.len() == events.len() && events.iter().all(|(id, n)| d.events.get(id) == Some(n)))
         })
     }
 
@@ -175,6 +196,37 @@ impl Catalog {
         }
         n
     }
+}
+
+fn conditional_def(c: roxmltree::Node<'_, '_>) -> ConditionalDef {
+    let t = |n: &str| child_text(c, n).map(String::from);
+    let mut items: Vec<String> = child(c, "items")
+        .map(|i| i.children().filter_map(|x| x.text()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect())
+        .unwrap_or_default();
+    // Dynamic conditionals (GetConditionals) give their list as one comma-separated string.
+    if let Some(list) = child_text(c, "list_items") {
+        items.extend(list.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()));
+    }
+    ConditionalDef {
+        id: child_u32(c, "id"),
+        name: t("name").unwrap_or_default(),
+        kind: t("type").unwrap_or_default().to_uppercase(),
+        description: t("description").unwrap_or_default(),
+        statement: t("condition_statement").unwrap_or_default(),
+        true_text: t("true_text"),
+        false_text: t("false_text"),
+        items,
+        minimum: t("minimum"),
+        maximum: t("maximum"),
+    }
+}
+
+/// Built-in agents' events as the project has them now: (agent, [(event id, name)]).
+fn agent_events(p: &Project) -> Vec<(u32, Vec<(u32, String)>)> {
+    let mut out: Vec<(u32, Vec<(u32, String)>)> =
+        p.schedules.iter().map(|(agent, entries)| (*agent, entries.iter().map(|e| (e.id, e.spec.name.clone())).collect())).collect();
+    out.extend(p.agent_data.iter().map(|(agent, d)| (*agent, d.events())).filter(|(_, e)| !e.is_empty()));
+    out
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -375,6 +427,9 @@ impl Director {
                     });
                 }
             }
+            if let Some(cs) = child(dd, "conditionals") {
+                info.conditionals = cs.children().filter(|c| c.has_tag_name("conditional")).map(conditional_def).collect();
+            }
             if cat.room_template.is_none() && child_u32(item, "type") == Some(8) {
                 let itemdata = child(item, "itemdata").map(|n| inner_xml(n, &r.raw)).unwrap_or_default();
                 cat.room_template = Some(format!(
@@ -465,6 +520,12 @@ impl Director {
         let mut applied = Applied::default();
         for call in op.calls(fresh.as_deref()) {
             let r = self.conn.call(call).await?;
+            // Agents answer a change they refuse with `<failure>why</failure>` rather than an error.
+            if r.method == "SendToDevice" {
+                if let Some(why) = crate::agents::reply_failure(r.body()) {
+                    return Err(DirectorError::Other(format!("the agent refused it: {why}")));
+                }
+            }
             let doc = r.doc()?;
             for n in doc.descendants() {
                 if n.has_tag_name("protocol") || n.has_tag_name("proxy") {
@@ -472,6 +533,13 @@ impl Director {
                         applied.created.push(id);
                     }
                 }
+            }
+            // Director answers an AddCodeItem it won't take (an Else that follows no If, say)
+            // with success and no id, and stores nothing.
+            if r.method == "AddCodeItem" && r.body().trim().parse::<u32>().is_err() {
+                return Err(DirectorError::Other(
+                    "Director didn't add the programming line (it gave no id back); check where it was meant to go".into(),
+                ));
             }
             // AddItem answers with the bare new id.
             if r.method == "AddItem" {

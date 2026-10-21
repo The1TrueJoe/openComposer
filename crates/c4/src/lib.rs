@@ -3,6 +3,7 @@
 //!
 //! Nothing here knows about the desktop app or MCP; `app/` builds on it.
 
+pub mod agent_ops;
 pub mod agents;
 pub mod broker;
 pub mod c4p;
@@ -13,6 +14,7 @@ pub mod drivers;
 mod keys;
 pub mod model;
 pub mod ops;
+pub mod program;
 pub mod sddp;
 pub mod soap;
 pub mod xml;

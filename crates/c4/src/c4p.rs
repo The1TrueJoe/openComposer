@@ -173,9 +173,9 @@ mod tests {
 
     #[test]
     fn comment_round_trips_composer_layout() {
-        let raw = "Project Name: Camellia Dr\r\rCreated: 7/25/2026 12:05:47 AM\rSource: ComposerPro 3.3.0\rDirector: 3.3.0.628678-res\rAuthor: \r\rPersonal Information: True\rAnnouncements: True\r\r\r";
+        let raw = "Project Name: Sample House\r\rCreated: 7/25/2026 12:05:47 AM\rSource: ComposerPro 3.3.0\rDirector: 3.3.0.628678-res\rAuthor: \r\rPersonal Information: True\rAnnouncements: True\r\r\r";
         let m = Meta::parse(raw);
-        assert_eq!(m.get("Project Name"), Some("Camellia Dr"));
+        assert_eq!(m.get("Project Name"), Some("Sample House"));
         assert_eq!(m.get("Author"), Some(""));
         assert_eq!(m.render(), raw);
     }

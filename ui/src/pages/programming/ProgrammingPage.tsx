@@ -1,14 +1,14 @@
 /** Composer's Programming view, modernised. Left, Device Events: the project tree and the
  *  selected item's events (or every event that has programming). Centre: the open event's
- *  script. Right, Actions: a device's commands to add to it. Every change is an `add_code` or
- *  `remove_code` op through the approval card; read-only Directors can be read, not changed.
+ *  script. Right, Actions: commands, conditionals, loops, variables and Composer's controls
+ *  (Else, Delay, Stop, Break, comments) to add to it. Every change is an op (`add_code`,
+ *  `add_conditional`, `move_code`, `set_code_enabled`…) through the approval card; read-only
+ *  Directors can be read, not changed.
  *
- *  A line moves as `remove_code` + `add_code` of the same line (its stored template, command and
- *  parameters), so only plain command lines with nothing nested under them can move.
- *  Not here yet (the backend can't write them): conditionals, loops, variables, and
- *  enabling/disabling lines. */
+ *  Lines inside a new If go in once Director has given it an id, so an If and its contents are
+ *  two approvals. Not here: compound conditions (AND/OR) and editing a line in place. */
 
-import { ArrowLeft, Lock, Search, Trash2, Zap } from "lucide-react";
+import { ArrowLeft, Info, Lock, Search, Trash2, X, Zap } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, type CodeLineView, type CommandParam, type Op, type ProgrammingEvent, type ShortItem, type TreeNode } from "../../api";
 import { Tabs } from "../../components/controls";
@@ -22,7 +22,8 @@ import type { ProgramFocus, Shell } from "../../lib/shell";
 import { cx, plural, useLoad } from "../../lib/ui";
 import { ProjectTree } from "../design/ProjectTree";
 import { Actions } from "./Actions";
-import { displayFor, moveBlocked, nestedUnder, nodeIndex, slotAt, withName, type Place, type Slot } from "./code";
+import { displayFor, elseSlot, nestedUnder, nodeIndex, roleOf, slotFrom, slotProblem, slotWhere, withName, type Place, type Slot } from "./code";
+import { draftLabel, LineDialog, ready, type Draft, type LineSpec } from "./Lines";
 import { ParamsDialog } from "./Params";
 import { Script } from "./Script";
 
@@ -51,9 +52,13 @@ export function ProgrammingPage({ shell }: { shell: Shell }) {
   const [ev, setEv] = useState<Ev | null>(memory.ev);
   const [target, setTarget] = useState<number | null>(memory.target);
   const [line, setLine] = useState<number | null>(null);
-  const [before, setBefore] = useState(0);
-  const [dragging, setDragging] = useState<Available | null>(null);
+  // Where new lines go, in add_code's terms; the marker's row follows from the lines.
+  const [place, setPlace] = useState<Place>({ parent: 0, before: 0 });
+  const [dragging, setDragging] = useState<Draft | null>(null);
   const [asking, setAsking] = useState<{ a: Available; slot: Slot } | null>(null);
+  const [askingLine, setAskingLine] = useState<{ d: Draft; slot: Slot } | null>(null);
+  // Why the last thing picked couldn't go where it was meant to.
+  const [note, setNote] = useState<string | null>(null);
   useEffect(() => { Object.assign(memory, { mode, node, ev, target }); }, [mode, node, ev, target]);
 
   const open = useCallback((e: Ev, at?: number) => {
@@ -64,7 +69,7 @@ export function ProgrammingPage({ shell }: { shell: Shell }) {
   }, []);
   // A different event: nothing selected in it, new lines at its end.
   const evKey = ev ? `${ev.owner}:${ev.event}` : "";
-  useEffect(() => { setLine(null); setBefore(0); }, [evKey]);
+  useEffect(() => { setLine(null); setPlace({ parent: 0, before: 0 }); setNote(null); }, [evKey]);
 
   // Clicking an event elsewhere (Design › Events) lands here with it open. Each click is a new
   // object, so the same event clicked twice is still honoured; one already applied isn't
@@ -95,8 +100,7 @@ export function ProgrammingPage({ shell }: { shell: Shell }) {
   const ownerNode = ev ? nodes.get(ev.owner) ?? null : null;
   const ownerName = ownerNode?.name ?? programmed.find((p) => p.device.id === ev?.owner)?.device.name ?? item?.name ?? `#${ev?.owner}`;
   const lines = opened?.lines ?? [];
-  const slotIndex = before ? lines.findIndex((l) => l.id === before) : -1;
-  const slot = slotAt(lines, slotIndex < 0 ? lines.length : slotIndex);
+  const slot = slotFrom(lines, place.parent, place.before);
 
   const writable = shell.writable;
   const roWhy = writable ? undefined : `${shell.director?.name ?? "This Director"} is read-only: programming can be read here, not changed. Change it in Settings › Directors.`;
@@ -108,38 +112,71 @@ export function ProgrammingPage({ shell }: { shell: Shell }) {
     const op: Op = { op: "add_code", device: ev.owner, event: ev.event, parent: s.parent, before: s.before, target: a.target, command: a.def.name, params, display };
     await shell.propose([op], `When ${ownerName} › ${opened.name}: ${withName(display, a.targetName)}`);
   };
-  const add = (a: Available, s: Slot = slot) => {
+  /** Any other line, once its values are known: placed at `s` and proposed. */
+  const commitLine = async (spec: LineSpec, s: Slot, label: string) => {
+    if (!ev || !opened) return;
+    const op = { ...spec, device: ev.owner, event: ev.event, parent: s.parent, before: s.before } as Op;
+    const o = await shell.propose([op], `When ${ownerName} › ${opened.name}: add ${label}`);
+    if (o?.status === "applied") setNote(null);
+  };
+  const add = (d: Draft, at: Slot = slot) => {
     if (!writable || !ev) return;
-    if (a.def.params.length) setAsking({ a, slot: s });
-    else void commit(a, [], s);
+    let s = at;
+    if (d.kind === "else" && slotProblem(lines, s, "else")) {
+      // Not where an Else can go: the selected If (or the one just above the marker) takes it.
+      const sel = lines.findIndex((l) => l.id === line);
+      const above = [...lines.slice(0, s.index).keys()].reverse().find((k) => elseSlot(lines, k));
+      const k = sel >= 0 && elseSlot(lines, sel) ? sel : above;
+      const es = k != null ? elseSlot(lines, k) : null;
+      if (!es) { setNote(slotProblem(lines, s, "else")); return; }
+      s = es;
+    } else {
+      const p = slotProblem(lines, s);
+      if (p) { setNote(p); return; }
+    }
+    setNote(null);
+    if (d.kind === "command") {
+      if (d.a.def.params.length) setAsking({ a: d.a, slot: s });
+      else void commit(d.a, [], s);
+      return;
+    }
+    const spec = ready(d);
+    if (spec) void commitLine(spec, s, draftLabel(d));
+    else setAskingLine({ d, slot: s });
   };
   const remove = async (i: number) => {
     const l = lines[i];
     if (!l || !ev || !opened || !writable) return;
     const n = nestedUnder(lines, i);
+    const withElse = roleOf(l) === "if" && n > 0 ? " (and its Else, if it has one)" : "";
     const o = await shell.propose([{ op: "remove_code", device: ev.owner, event: ev.event, id: l.id }],
-      `Remove “${l.text}” from ${ownerName} › ${opened.name}${n ? `, with the ${plural(n, "line")} nested under it` : ""}`);
+      `Remove “${l.text}” from ${ownerName} › ${opened.name}${n ? `, with the ${plural(n, "line")} nested under it${withElse}` : ""}`);
     if (o?.status === "applied") setLine(null);
   };
 
-  // A move is the line removed and the same line (its own template, command and parameters)
-  // added at the new place, in one approval. Only childless command lines get here.
+  // Director moves a line with everything under it (and an If with its Else).
   const move = async (i: number, to: Place) => {
     const l = lines[i];
-    if (!l || !ev || !opened || !writable || moveBlocked(lines, i) || !l.command || !l.target) return;
-    const ops: Op[] = [
-      { op: "remove_code", device: ev.owner, event: ev.event, id: l.id },
-      { op: "add_code", device: ev.owner, event: ev.event, parent: to.parent, before: to.before, target: l.target, command: l.command,
-        params: l.params ?? [], display: l.display ?? l.text },
-    ];
+    if (!l || !ev || !opened || !writable) return;
     const where = to.before ? `above “${lines.find((x) => x.id === to.before)?.text ?? `line #${to.before}`}”`
       : to.parent ? `to the end of “${lines.find((x) => x.id === to.parent)?.text ?? `line #${to.parent}`}”` : "to the end";
-    await shell.propose(ops, `Move “${l.text}” ${where} in ${ownerName} › ${opened.name}`);
+    await shell.propose([{ op: "move_code", device: ev.owner, event: ev.event, id: l.id, parent: to.parent, before: to.before }],
+      `Move “${l.text}” ${where} in ${ownerName} › ${opened.name}`);
+  };
+  const toggle = async (i: number) => {
+    const l = lines[i];
+    if (!l || !ev || !opened || !writable) return;
+    await shell.propose([{ op: "set_code_enabled", device: ev.owner, event: ev.event, id: l.id, enabled: !l.enabled }],
+      `${l.enabled ? "Disable" : "Enable"} “${l.text}” in ${ownerName} › ${opened.name}`);
+  };
+  const addElse = (i: number) => {
+    const s = elseSlot(lines, i);
+    if (s && ev && opened && writable) void commitLine({ op: "add_else" }, s, `an Else to “${lines[i].text}”`);
   };
 
   if (!root && treeRes.error) return <Failure error={treeRes.error} retry={treeRes.reload} />;
 
-  const where = ev && opened ? `${ownerName} › ${opened.name}, ${slot.index >= lines.length ? "at the end" : `above line ${slot.index + 1}`}` : "";
+  const where = ev && opened ? `${ownerName} › ${opened.name}, ${slotWhere(lines, slot)}` : "";
   const selIndex = lines.findIndex((l) => l.id === line);
 
   return (
@@ -196,12 +233,17 @@ export function ProgrammingPage({ shell }: { shell: Shell }) {
             {!writable && <ReadOnlyLock name={shell.director?.name} />}
           </div>
           {!writable && ev && <div className="prog-ro"><Lock size={12} strokeWidth={1.9} />{roWhy}</div>}
+          {note && ev && (
+            <div className="prog-ro prog-note" role="status"><Info size={12} strokeWidth={1.9} />{note}
+              <button className="icon-btn" aria-label="Dismiss" onClick={() => setNote(null)}><X size={12} strokeWidth={1.9} /></button></div>
+          )}
           <div className="panel-body">
             {ev && opened ? (
               <Script owner={ownerNode} ownerName={ownerName} eventName={opened.name} lines={lines} nodes={nodes}
-                      selected={line} onSelect={setLine} slot={slot} onSlot={(s) => setBefore(s.before)}
-                      dragging={!!dragging} onDrop={(s) => dragging && add(dragging, s)} canWrite={writable} why={roWhy}
-                      onDelete={(i) => void remove(i)} onMove={(i, to) => void move(i, to)} />
+                      selected={line} onSelect={setLine} slot={slot} onSlot={(s) => { setPlace({ parent: s.parent, before: s.before }); setNote(null); }}
+                      dragging={dragging ? (dragging.kind === "else" ? "else" : "line") : null} onDrop={(s) => dragging && add(dragging, s)}
+                      canWrite={writable} why={roWhy} onDelete={(i) => void remove(i)} onMove={(i, to) => void move(i, to)}
+                      onToggle={(i) => void toggle(i)} onAddElse={addElse} />
             ) : ev ? (
               <Loading what="Reading the event" />
             ) : (
@@ -217,9 +259,13 @@ export function ProgrammingPage({ shell }: { shell: Shell }) {
                  onAdd={(a) => add(a)} onDrag={setDragging} />
       </SidePane>
       <ParamsDialog ask={asking ? { a: asking.a, driver: nodes.get(asking.a.target)?.driver ?? null } : null}
-                    where={ev && opened ? `${ownerName} › ${opened.name}, ${asking && asking.slot.index < lines.length ? `above line ${asking.slot.index + 1}` : "at the end"}` : where}
+                    where={ev && opened && asking ? `${ownerName} › ${opened.name}, ${slotWhere(lines, asking.slot)}` : where}
                     onCancel={() => setAsking(null)}
                     onAdd={(params) => { const x = asking; setAsking(null); if (x) void commit(x.a, params, x.slot); }} />
+      <LineDialog ask={askingLine?.d ?? null}
+                  where={ev && opened && askingLine ? `${ownerName} › ${opened.name}, ${slotWhere(lines, askingLine.slot)}` : where}
+                  onCancel={() => setAskingLine(null)}
+                  onAdd={(spec) => { const x = askingLine; setAskingLine(null); if (x) void commitLine(spec, x.slot, draftLabel(x.d)); }} />
     </Panes>
   );
 }

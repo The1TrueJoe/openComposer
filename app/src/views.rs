@@ -141,7 +141,8 @@ fn code_lines(p: &Project, code: &[CodeItem], depth: usize, out: &mut Vec<Value>
         // The command and its parameters, so a line can be re-added elsewhere (moved).
         let (command, params) = c.command().unzip();
         out.push(json!({ "depth": depth, "text": c.text(p), "enabled": c.enabled, "id": c.id, "target": c.device,
-            "kind": c.kind, "display": c.display, "command": command, "params": params.unwrap_or_default() }));
+            "kind": c.kind, "role": c4::program::role(c), "display": c.display, "command": command,
+            "params": params.unwrap_or_default() }));
         code_lines(p, &c.children, depth + 1, out);
     }
 }
@@ -194,6 +195,7 @@ pub fn item(p: &Project, cat: &Catalog, id: u32) -> Option<Value> {
         "properties": properties,
         "actions": info.map(|d| d.actions.iter().map(|(n, c)| json!({ "name": n, "command": c })).collect::<Vec<_>>()),
         "commands": info.map(|d| &d.commands),
+        "conditionals": info.map(|d| conditionals(d)),
         "connections": connections_of(p, cat, id),
         "network": p.network_bindings.iter().filter(|n| n.device == id).collect::<Vec<_>>(),
         "network_connections": info.map(|d| d.connections.iter().filter(|c| c.conn_type == 4)
@@ -202,6 +204,39 @@ pub fn item(p: &Project, cat: &Catalog, id: u32) -> Option<Value> {
         "events": events,
         "children": children,
     }))
+}
+
+/// What an If or While can test on a device: each conditional with the comparisons and
+/// parameters it takes, or why it can't be added (Control4's built-in value-taking ones).
+fn conditionals(d: &DeviceInfo) -> Vec<Value> {
+    d.conditionals
+        .iter()
+        .map(|c| {
+            let s = c4::program::shape(c);
+            json!({ "id": c.id, "name": c.name, "type": c.kind, "description": c.description,
+                "statement": c.statement, "logic": s.logic, "params": s.params, "unsupported": s.unsupported })
+        })
+        .collect()
+}
+
+/// Variables programming can test and set, with the item each belongs to. Hidden ones only
+/// when asked for; `programmable` says whether openComposer can write lines for its type.
+pub fn variables(p: &Project, device: Option<u32>, hidden: bool) -> Value {
+    let rows: Vec<Value> = p
+        .variables
+        .iter()
+        .filter(|v| device.is_none_or(|d| v.device == d))
+        .filter(|v| hidden || !v.hidden)
+        .map(|v| {
+            // The project's own variables belong to the Variables agent, which isn't an item.
+            let owner = if p.item(v.device).is_none() && v.device == c4::program::VARIABLES_AGENT { "Variables".into() } else { p.name_of(v.device) };
+            json!({ "device": v.device, "id": v.id, "name": v.name, "owner": owner,
+                "type": v.var_type, "type_name": c4::program::var_type::label(v.var_type), "readonly": v.readonly,
+                "hidden": v.hidden, "value": masked(&v.name, &v.value),
+                "programmable": c4::program::var_type::programmable(v.var_type) })
+        })
+        .collect();
+    json!({ "variables": rows })
 }
 
 /// Every connection definition in the project, optionally filtered.

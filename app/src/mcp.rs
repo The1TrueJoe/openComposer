@@ -112,6 +112,13 @@ impl OpenComposerMcp {
         self.run("get_programming", format!("{:?}", a.device), actions::programming(&self.app, a)).await
     }
 
+    #[tool(description = "Variables programming can test and set (If/While conditions, add_variable_command): \
+        each with its owner device, type (String, Number, Float, Boolean…), whether it's read-only, and its value.",
+        annotations(read_only_hint = true))]
+    async fn get_variables(&self, Parameters(a): Parameters<VariablesArgs>) -> Result<CallToolResult, McpError> {
+        self.run("get_variables", format!("{:?}", a.device), actions::variables(&self.app, a)).await
+    }
+
     #[tool(description = "Network identities (SDDP/IP/Zigbee bindings) in the project and every device Director has \
         discovered, including discovered devices not yet in the project.", annotations(read_only_hint = true))]
     async fn network_status(&self, Parameters(a): Parameters<DirectorArg>) -> Result<CallToolResult, McpError> {
@@ -165,7 +172,15 @@ impl OpenComposerMcp {
     }
 
     #[tool(description = "Change the project. Give an ordered list of ops (add_device, add_room, add_location (site/building/floor), remove_item, rename_item, \
-        move_item, add_connection, remove_connection, add_network_binding, remove_network_binding, set_property, run_action, add_code, remove_code, add_schedule_entry, modify_schedule_entry, remove_schedule_entry). For add_code take the event id from the device's events and the command from the target's commands (both in get_item). The user sees a \
+        move_item, add_connection, remove_connection, add_network_binding, remove_network_binding, set_property, run_action, add_code, remove_code, add_conditional, add_else, add_control, add_variable_command, move_code, set_code_enabled, \
+        add_schedule_entry, modify_schedule_entry, remove_schedule_entry, and for other built-in agents (ids and current settings from agent_view): \
+        add_lighting_scene, rename_lighting_scene, remove_lighting_scene, set_scene_light, remove_scene_light, add_announcement, modify_announcement, \
+        remove_announcement, add_wake_sleep_room, modify_wake_sleep_room, remove_wake_sleep_room, add/modify/remove_push_notification, \
+        add/modify/remove_email_template). For add_code take the event id from the device's events and the command from the target's commands (both in get_item). \
+        Programming: lines go at `before` (a line id, 0 = the end) under `parent` (an If/While/Else id, 0 = top level). add_conditional adds an If (`loop`: true for a While) \
+        testing a device conditional (`{type: device, target, name, logic, params}` from the target's `conditionals` in get_item) or a variable \
+        (`{type: variable, variable: {device, id}, logic, value | other}` from get_variables); add_else puts an Else right after an If (parent = the If's parent, before = the line after it); \
+        add_control adds `{type: delay, ms}`, stop, break or `{type: comment, text}`; lines inside a new If go in a later change, once it has an id (get_programming). The user sees a \
         project diff and approves or declines; this call waits for that and returns what happened, including new item ids.",
         annotations(read_only_hint = false, destructive_hint = true))]
     async fn propose_changes(&self, Parameters(a): Parameters<ProposeArgs>) -> Result<CallToolResult, McpError> {
@@ -229,10 +244,12 @@ impl OpenComposerMcp {
         self.run("ui_show", format!("{:?} {:?} {:?}", a.view, a.item, a.tab), async { actions::ui_show(&self.app, a) }).await
     }
 
-    #[tool(description = "What Composer's own editor shows for a built-in agent, read live: Scheduler events \
-        (time, repeat, next run, the programming under each), Advanced Lighting scenes with their lights, \
-        announcements, Wake/Sleep rooms, push/email notification templates. Change Scheduler events with \
-        propose_changes (add_schedule_entry, modify_schedule_entry, remove_schedule_entry).",
+    #[tool(description = "What Composer's own editor shows for a built-in agent: Scheduler events \
+        (time, repeat, next run, the programming under each), Advanced Lighting scenes with their lights' steps, \
+        announcements, Wake/Sleep room defaults, push/email notifications, plus the choices an editor offers \
+        (lights, rooms, screens, media sources, snapshot providers). Entries carry a `spec` to start a change from. \
+        Change them with propose_changes: *_schedule_entry, *_lighting_scene, set/remove_scene_light, *_announcement, \
+        *_wake_sleep_room, *_push_notification, *_email_template.",
         annotations(read_only_hint = true))]
     async fn agent_view(&self, Parameters(a): Parameters<ItemArgs>) -> Result<CallToolResult, McpError> {
         self.run("agent_view", format!("#{}", a.id), actions::agent_view(&self.app, a)).await

@@ -66,7 +66,7 @@ function Form({ a, driver, where, onCancel, onAdd }: {
 }
 
 /** One parameter, as its type asks: a list is a picker, a range a slider with a number beside it. */
-function Field({ p, value, problem, onChange }: { p: ParamDef; value: string; problem: string | null; onChange: (v: string) => void }) {
+export function Field({ p, value, problem, onChange }: { p: ParamDef; value: string; problem: string | null; onChange: (v: string) => void }) {
   const t = paramType(p);
   const numeric = t.includes("INTEGER") || t.includes("FLOAT") || t === "NUMBER";
   const ranged = numeric && p.minimum != null && p.maximum != null;

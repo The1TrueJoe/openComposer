@@ -321,6 +321,29 @@ const Row = memo(function Row({ change: c }: { change: Change }) {
           <ValueChange from={c.from} to={c.to} />
         </div>
       );
+    case "agent_record_added":
+    case "agent_record_removed":
+      return (
+        <div className={cls}>
+          <Gutter effect={effect} />
+          <Name item={c.owner} />
+          <span className="dim">{c.what}</span>
+          <span className={cx("dv-prop", c.kind === "agent_record_removed" && "strike")}>{c.name}</span>
+          {c.kind === "agent_record_removed" && c.cascade && <span className="tag warn">removed with agent</span>}
+          {c.kind === "agent_record_added" && !!c.details.length && (
+            <span className="dv-details dim">{c.details.filter(([, v]) => v !== "none").map(([k, v]) => `${k}: ${v}`).join(" · ")}</span>
+          )}
+        </div>
+      );
+    case "agent_record_changed":
+      return (
+        <div className={cls}>
+          <Gutter effect={effect} />
+          <Name item={c.owner} />
+          <span className="dv-prop">{c.name} · {c.field}</span>
+          <ValueChange from={c.from === "none" ? null : c.from} to={c.to === "none" ? null : c.to} />
+        </div>
+      );
     case "property_changed":
       return null; // drawn by PropertyRows, grouped under their item
   }

@@ -47,11 +47,20 @@ OPENCOMPOSER_DATA=/tmp/oc C4_CERT=… C4_KEY=… cargo run -p opencomposer --exa
   `ssh -L 18443:127.0.0.1:8443 admin@optiplex.local` and `VIRTUAL_WEB_API=127.0.0.1:18443`).
   Not yet used against the real EA-1. Backups still lack mm.db / identity.db / images
   (served over SMB by the controller).
-- Programming: command lines can be added/removed (`add_code` / `remove_code`, checked
-  against the device's events and the target's commands); a move is `remove_code` + `add_code`
-  of the same line (verified on the Virtual Director). Conditionals, loops and variables
-  aren't done. Proxy event names (e.g. a light's PUSH) come from Control4's
-  built-in proxy definitions, which `GetItems` leaves unnamed. Z-Wave edits not captured.
+- Programming (`crates/c4/src/program.rs`): commands, If/While on a device conditional or a
+  variable, Else, Delay/Stop/Break, comments, variable set/toggle/math, `move_code` and
+  `set_code_enabled`. Checked on the Virtual Director (stored as predicted): If/While on
+  light_v2 LOAD_ON/OFF and a Boolean variable, Else, Delay, Stop, comments, toggle, moves (an
+  If takes its Else), enable/disable; variable set/copy/math/random are built from Composer's
+  code but weren't sent. Lines inside a new If need its Director-assigned id, so they go in a
+  later change. Not done: compound conditions (AND/OR,
+  `AddCodeItemToExpression`), editing a line in place (`UpdateCodeItemCommand`), enabling a
+  whole event (id 0), Device/Room/Media/Color variables, and the value-taking conditionals of
+  Control4's built-in proxies (light_v2 IS_BRIGHTNESS_CURRENT, id-only TV ones): listed but
+  refused. Typed DriverWorks conditionals use `LOGIC`/`VALUE` per the SDK docs, unverified
+  live (no such driver on the Virtual Director). Nothing has been *run* to check Director's
+  evaluation. Proxy event names (e.g. a light's PUSH) come from Control4's built-in proxy
+  definitions, which `GetItems` leaves unnamed. Z-Wave edits not captured.
 - Codex agent path is unverified (no Codex on the dev machine).
 - Identify (`add_network_binding`) after `add_device` is accepted by Director but didn't bind
   the WB-300 in a test; unverified until checked against a real discovered device.
@@ -71,7 +80,15 @@ OPENCOMPOSER_DATA=/tmp/oc C4_CERT=… C4_KEY=… cargo run -p opencomposer --exa
 - New sites/buildings/floors/rooms copy an existing one's `<itemdata>` (`Catalog::template_for`)
   with a fresh `<tag>`.
 - Agents' Composer editors are .NET plugins (`*.c4a.dll`) that talk `SendToDevice` with the
-  agent's own commands (`crates/c4/src/agents.rs`). Scheduler is read/write; Advanced
-  Lighting, Announcements, Wake/Sleep, Push/Email notification are read-only so far.
+  agent's own commands (`crates/c4/src/agents.rs`). Scheduler, Advanced Lighting (scenes,
+  lights' steps), Announcements, Wake/Sleep room defaults and Push/Email notifications are
+  read/write; their ops are in `crates/c4/src/agent_ops.rs` (verified on the Virtual Director).
+  Their data is the agent item's `<state>` in the project (`Project::agent_data`), so diffs and
+  verification see it; `Op::prepare` fills what a call needs from the predicted project.
+  Agents refuse with `<failure>`/`<fail>` replies, which `Director::apply` turns into errors.
+  Announcement image URLs keep camera logins: the model masks them (`MASK`) and keeps the raw
+  XML out of serde; a changed spec still containing the mask keeps the stored value.
+  Not done: lighting scene colours/hold rates/tracking/toggle scenes, member flash/ignore-ramp,
+  announcement audio file list (SMB only), notification variable encoding (`[Device:Var]`).
 - The light colour wheel sends `SET_COLOR_TARGET` with light_v2's `LIGHT_COLOR_TARGET_*`
   params; not yet sent to a real light.

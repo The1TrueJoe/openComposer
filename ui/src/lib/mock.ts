@@ -11,7 +11,7 @@ import type {
   TreeNode, UiContext,
 } from "../api/types";
 import { splitContext } from "./agent.ts";
-import { agentView, applySchedule, describeSchedule, predictSchedule } from "./mockAgents.ts";
+import { agentView, applyAgentOp, applySchedule, describeAgentOp, describeSchedule, isOtherAgentOp, predictAgentOp, predictSchedule } from "./mockAgents.ts";
 import { rgbToHsv, xyToKelvin, xyToRgb } from "./control.ts";
 import {
   BACKUPS, DIRECTORS, DRIVERS, SDDP, ZIGBEE, agentApproval, historyApprovals, seedConversations, seedLibrary, seedProject, showcaseApproval,
@@ -206,6 +206,7 @@ function itemDetail(id: number): ItemDetail {
     variables: project.variables.filter((v) => v.device === id),
     events: dev ? Object.entries(dev.events).map(([eid, name]) => ({ id: Number(eid), name, programming: project.programming.get(`${id}:${eid}`) ?? [] })) : [],
     commands: dev ? dev.commands ?? [] : null,
+    conditionals: dev ? dev.conditionals ?? [] : null,
     children: it.children.map((c) => ({ ...short(c), kind: item(c).kind, driver: item(c).driver, connections: connectionsOf(c) })),
   };
 }
@@ -235,10 +236,18 @@ function describe(op: Op): string {
     }
     case "add_code": return `Add to ${n(op.device)} programming: “${op.display.replace("NAME", project.items.get(op.target)?.name ?? "")}”`;
     case "remove_code": return `Remove programming line #${op.id} from ${n(op.device)}`;
+    case "add_conditional":
+    case "add_control":
+    case "add_variable_command": return `Add to ${n(op.device)} programming: “${lineText(op)}”`;
+    case "add_else": return `Add an Else to ${n(op.device)} programming`;
+    case "move_code": return `Move “${findLine(op.device, op.event, op.id)?.text ?? `line #${op.id}`}” in ${n(op.device)} programming`;
+    case "set_code_enabled":
+      return `${op.enabled ? "Enable" : "Disable"} “${findLine(op.device, op.event, op.id)?.text ?? `line #${op.id}`}” in ${n(op.device)} programming`;
     case "load_project": return `Replace the whole project with ${op.label}`;
     case "add_schedule_entry":
     case "modify_schedule_entry":
     case "remove_schedule_entry": return describeSchedule(op, item(op.agent).name);
+    default: return describeAgentOp(op, agentCtx);
   }
 }
 
@@ -318,8 +327,14 @@ function predict(ops: Op[]): Change[] {
         break;
       }
       case "add_code":
-      case "remove_code": {
-        // Ops on one event build on each other (a move is remove + add): one change per event.
+      case "remove_code":
+      case "add_conditional":
+      case "add_else":
+      case "add_control":
+      case "add_variable_command":
+      case "move_code":
+      case "set_code_enabled": {
+        // Ops on one event build on each other: one change per event.
         const { owner, event, lines } = codeEdit(op, scratch);
         scratch.set(`${owner}:${event}`, lines);
         const change: Change = { kind: "programming_changed", owner: itemRef(owner), event, event_name: project.catalog.get(owner)?.events[event] ?? null, lines };
@@ -336,6 +351,9 @@ function predict(ops: Op[]): Change[] {
       case "modify_schedule_entry":
       case "remove_schedule_entry":
         changes.push(...predictSchedule(op, agentCtx));
+        break;
+      default:
+        if (isOtherAgentOp(op)) changes.push(...predictAgentOp(op, agentCtx));
         break;
       case "load_project":
         changes.push({ kind: "property_changed", item: itemRef(20), property: "Power On Delay (ms)", from: "2500", to: "3000" });
@@ -420,7 +438,13 @@ function apply(op: Op): number[] {
       command(op.device, op.command, op.params ?? []);
       return [];
     case "add_code":
-    case "remove_code": {
+    case "remove_code":
+    case "add_conditional":
+    case "add_else":
+    case "add_control":
+    case "add_variable_command":
+    case "move_code":
+    case "set_code_enabled": {
       const { owner, event, lines } = codeEdit(op);
       project.programming.set(`${owner}:${event}`, lines.filter((l) => l.op !== "removed").map(({ op: _, ...l }) => l));
       return [];
@@ -434,6 +458,9 @@ function apply(op: Op): number[] {
     case "remove_schedule_entry":
       applySchedule(op, agentCtx);
       return [];
+    default:
+      if (isOtherAgentOp(op)) applyAgentOp(op, agentCtx);
+      return [];
   }
 }
 
@@ -445,31 +472,142 @@ const agentCtx = {
   dropProgramming: (agent: number, event: number) => { project.programming.delete(`${agent}:${event}`); },
 };
 
-/** An event's script with one line added or removed, each line marked as the diff shows it. */
+/** An event's script after one programming op, each line marked as the diff shows it. Placement
+ *  follows Director's rules (crates/c4/src/program.rs): lines nest only in an If, While or Else,
+ *  nothing goes between an If and its Else, and an If moves and goes with its Else. */
 type Marked = CodeLineView & { op: "same" | "added" | "removed" };
-function codeEdit(op: Extract<Op, { op: "add_code" | "remove_code" }>, base: Map<string, CodeLineView[]> = project.programming): { owner: number; event: number; lines: Marked[] } {
+type CodeOp = Extract<Op, { op: "add_code" | "remove_code" | "add_conditional" | "add_else" | "add_control" | "add_variable_command" | "move_code" | "set_code_enabled" }>;
+const roleOfLine = (l: CodeLineView) => l.role ?? (l.kind === 2 ? "if" : l.kind === 3 ? "while" : l.kind === 4 ? "else" : l.kind === 5 ? "comment" : "command");
+
+function findLine(device: number, event: number, id: number): CodeLineView | undefined {
+  return project.programming.get(`${device}:${event}`)?.find((l) => l.id === id);
+}
+
+const LOGIC_TEXT: Record<string, string> = { equal: "Equal To", not_equal: "Not Equal To", less_than: "Less Than",
+  less_than_or_equal: "Less Than Or Equal To", greater_than: "Greater Than", greater_than_or_equal: "Greater Than Or Equal To" };
+const varName = (r: { device: number; id: number }) => project.variables.find((v) => v.device === r.device && v.id === r.id)?.name ?? `variable ${r.id}`;
+const varRow = (r: { device: number; id: number }) => project.variables.find((v) => v.device === r.device && v.id === r.id);
+
+/** A new line's text, as the backend writes it when the op leaves it empty. */
+function lineText(op: Extract<Op, { op: "add_conditional" | "add_control" | "add_variable_command" }>): string {
+  if (op.op === "add_control") {
+    const c = op.control;
+    if (c.type === "delay") {
+      const [n, u] = c.ms % 60000 === 0 ? [c.ms / 60000, "minute"] : c.ms % 1000 === 0 ? [c.ms / 1000, "second"] : [c.ms, "millisecond"];
+      return `delay ${n} ${u}${n === 1 ? "" : "s"}`;
+    }
+    return c.type === "comment" ? c.text : c.type === "stop" ? "Stop" : "Break";
+  }
+  if (op.op === "add_variable_command") {
+    const me = varName(op.variable), a = op.action, bool = varRow(op.variable)?.var_type === 4;
+    const val = (x: string) => (bool ? (/^(1|true)$/i.test(x) ? "True" : "False") : x);
+    switch (a.type) {
+      case "set": return `${me} = ${val(a.value)}`;
+      case "toggle": return `Toggle ${me}`;
+      case "copy": return `Set ${me} to the value of ${varName(a.from)}`;
+      case "random": return `${me} = Random Number Between ${a.min} and ${a.max}`;
+      default: return `${me} = ${me} ${{ add: "+", subtract: "-", multiply: "*", divide: "/" }[a.type]} ${a.value}`;
+    }
+  }
+  const word = op.loop ? "While" : "If", c = op.condition;
+  if (c.type === "variable") {
+    const me = varName(c.variable);
+    if (c.other) return `${word} ${me} is ${LOGIC_TEXT[c.logic].toUpperCase()} the value in ${varName(c.other)}`;
+    if (varRow(c.variable)?.var_type === 4) return `${word} ${me} is ${(c.logic === "equal") === /^(1|true)$/i.test(c.value ?? "") ? "True" : "False"}`;
+    return `${word} ${me} ${LOGIC_TEXT[c.logic].toUpperCase()} ${c.value ?? ""}`;
+  }
+  const def = project.catalog.get(c.target)?.conditionals?.find((d) => d.name === c.name);
+  if (!def) throw `“${item(c.target).name}” has no conditional “${c.name}”`;
+  if (def.unsupported) throw def.unsupported;
+  let t = def.description;
+  if (c.logic) t = t.replace(/\bLOGIC\b/, LOGIC_TEXT[c.logic]);
+  for (const p of c.params ?? []) t = t.replace(def.type && p.name === "VALUE" ? /\b(INTEGER|NUMBER|STRING|DEVICE|ROOM|VALUE)\b/ : new RegExp(`\\b${p.name}\\b`), p.value);
+  return `${word} ${t.replace(/\bNAME\b/g, item(c.target).name)}`;
+}
+
+function codeEdit(op: CodeOp, base: Map<string, CodeLineView[]> = project.programming): { owner: number; event: number; lines: Marked[] } {
   item(op.device);
   const old = (base.get(`${op.device}:${op.event}`) ?? []) as (CodeLineView & { op?: Marked["op"] })[];
   const lines: Marked[] = old.map((l) => ({ ...l, op: l.op ?? "same" }));
-  if (op.op === "remove_code") {
-    const i = lines.findIndex((l) => l.id === op.id);
-    if (i < 0) throw `${item(op.device).name} event ${op.event} has no programming line #${op.id}`;
-    for (let j = i; j < lines.length && (j === i || lines[j].depth > lines[i].depth); j++) lines[j].op = "removed";
-    return { owner: op.device, event: op.event, lines };
+  const at = (id: number) => lines.findIndex((l) => l.id === id && l.op !== "removed");
+  /** Rows of line `i`, what's nested under it, and (for an If) its Else and what's under that. */
+  const group = (i: number) => {
+    const d = lines[i].depth;
+    const end = (k: number) => { let j = k + 1; while (j < lines.length && (lines[j].op === "removed" || lines[j].depth > d)) j++; return j; };
+    let j = end(i);
+    if (roleOfLine(lines[i]) === "if" && j < lines.length && lines[j].depth === d && roleOfLine(lines[j]) === "else") j = end(j);
+    return [...Array(j - i).keys()].map((k) => i + k).filter((k) => lines[k].op !== "removed");
+  };
+  const must = (id: number) => {
+    const i = at(id);
+    if (i < 0) throw `${item(op.device).name} event ${op.event} has no programming line #${id}`;
+    return i;
+  };
+  /** Where a line goes, by Director's rules: the row to insert at and its depth. */
+  const placeAt = (parent: number, before: number, kind: number): [number, number] => {
+    const p = parent ? must(parent) : -1;
+    if (p >= 0 && !["if", "while", "else"].includes(roleOfLine(lines[p]))) throw "Lines can only go inside an If, While or Else.";
+    const depth = p >= 0 ? lines[p].depth + 1 : 0;
+    let idx = before ? must(before) : -1;
+    if (idx < 0) {
+      idx = p >= 0 ? p + 1 : lines.length;
+      while (p >= 0 && idx < lines.length && (lines[idx].op === "removed" || lines[idx].depth >= depth)) idx++;
+    }
+    if (idx < lines.length && lines[idx].op !== "removed" && roleOfLine(lines[idx]) === "else" && lines[idx].depth === depth) throw "Nothing can go between an If and its Else.";
+    if (kind === 4) {
+      let k = idx - 1;
+      while (k >= 0 && (lines[k].op === "removed" || lines[k].depth > depth)) k--;
+      if (k < 0 || lines[k].depth !== depth || roleOfLine(lines[k]) !== "if") throw "An Else goes right after an If (one without an Else already).";
+    }
+    return [idx, depth];
+  };
+  const newId = () => Math.max(0, ...[...project.programming.values()].flat().map((l) => l.id), ...lines.map((l) => l.id)) + 1;
+
+  switch (op.op) {
+    case "remove_code":
+      for (const k of group(must(op.id))) lines[k].op = "removed";
+      break;
+    case "set_code_enabled": {
+      const i = must(op.id);
+      if (roleOfLine(lines[i]) === "comment") throw "Comments can't be disabled (Composer doesn't offer it either).";
+      lines.splice(i + 1, 0, { ...lines[i], enabled: op.enabled, op: "added" });
+      lines[i] = { ...lines[i], op: "removed" };
+      break;
+    }
+    case "move_code": {
+      const i = must(op.id);
+      if (roleOfLine(lines[i]) === "else") throw "An Else moves with its If; move the If instead.";
+      const rows = group(i);
+      const moving = rows.map((k) => ({ ...lines[k] }));
+      const ids = moving.map((l) => l.id);
+      if (ids.includes(op.parent) || (op.before && ids.includes(op.before))) throw "A line can't be moved inside itself.";
+      for (const k of rows) lines[k].op = "removed";
+      const [idx, depth] = placeAt(op.parent, op.before, moving[0].kind ?? 1);
+      const shift = depth - moving[0].depth;
+      lines.splice(idx, 0, ...moving.map((l) => ({ ...l, depth: l.depth + shift, op: "added" as const })));
+      break;
+    }
+    default: {
+      const kind = op.op === "add_else" ? 4 : op.op === "add_conditional" ? (op.loop ? 3 : 2) : op.op === "add_control" && op.control.type === "comment" ? 5 : 1;
+      const [idx, depth] = placeAt(op.parent ?? 0, op.before ?? 0, kind);
+      const base = { id: newId(), depth, enabled: true, op: "added" as const, kind };
+      let line: Marked;
+      if (op.op === "add_code") {
+        const target = item(op.target);
+        line = { ...base, target: op.target, text: op.display.replace(/\bNAME\b/g, target.name), role: "command", display: op.display, command: op.command,
+          params: (op.params ?? []).map((p) => ({ name: p.name, type: p.type ?? "STRING", value: p.value })) };
+      } else if (op.op === "add_else") {
+        line = { ...base, target: 100000, text: "Else", role: "else", display: "Else", command: null, params: [] };
+      } else {
+        const role = op.op === "add_conditional" ? (op.loop ? "while" : "if") : op.op === "add_variable_command" ? "variable"
+          : op.control.type === "delay" ? "delay" : op.control.type;
+        const target = op.op === "add_conditional" ? (op.condition.type === "device" ? op.condition.target : op.condition.variable.device)
+          : op.op === "add_variable_command" ? op.variable.device : 100000;
+        line = { ...base, target, text: lineText(op), role, command: null, params: [] };
+      }
+      lines.splice(idx, 0, line);
+    }
   }
-  const target = item(op.target);
-  const parent = op.parent ? lines.findIndex((l) => l.id === op.parent) : -1;
-  if (op.parent && parent < 0) throw `no programming line #${op.parent} to nest under`;
-  let at = op.before ? lines.findIndex((l) => l.id === op.before) : -1;
-  if (op.before && at < 0) throw `no programming line #${op.before} to insert before`;
-  const depth = parent >= 0 ? lines[parent].depth + 1 : 0;
-  if (at < 0) {
-    at = parent >= 0 ? parent + 1 : lines.length;
-    while (parent >= 0 && at < lines.length && lines[at].depth >= depth) at++;
-  }
-  const id = Math.max(0, ...[...project.programming.values()].flat().map((l) => l.id)) + 1;
-  lines.splice(at, 0, { id, depth, enabled: true, target: op.target, text: op.display.replace(/\bNAME\b/g, target.name), op: "added",
-    kind: 1, display: op.display, command: op.command, params: (op.params ?? []).map((p) => ({ name: p.name, type: p.type ?? "STRING", value: p.value })) });
   return { owner: op.device, event: op.event, lines };
 }
 
@@ -990,6 +1128,14 @@ async function act(name: string, a: Args): Promise<unknown> {
         }
       }
       return { connections: rows };
+    }
+    case "get_variables": {
+      const owner = (d: number) => (d === 100001 ? "Variables" : project.items.get(d)?.name ?? `#${d}`);
+      return { variables: project.variables
+        .filter((x) => (a.device == null || a.device === x.device) && (a.hidden || !x.hidden))
+        .map((x) => ({ device: x.device, id: x.id, name: x.name, owner: owner(x.device), type: x.var_type,
+          type_name: ({ 1: "String", 2: "Number", 3: "Float", 4: "Boolean" } as Record<number, string>)[x.var_type] ?? "Other",
+          readonly: x.readonly, hidden: x.hidden, value: x.value, programmable: [1, 2, 3, 4].includes(x.var_type) })) };
     }
     case "get_programming":
       return { events: [...project.programming.entries()]
