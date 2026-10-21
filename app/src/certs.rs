@@ -76,14 +76,14 @@ pub fn load(path: &Path) -> anyhow::Result<Option<StoredIdentity>> {
 
 pub fn from_pem_files(cert: &Path, key: &Path) -> anyhow::Result<StoredIdentity> {
     let cert_pem = std::fs::read_to_string(cert)?;
-    // composer.pem sometimes carries its key too; accept a single file for both.
+    // A .pem sometimes carries its key too; accept a single file for both.
     let key_pem = if cert == key { cert_pem.clone() } else { std::fs::read_to_string(key)? };
     Ok(StoredIdentity { cert_pem, key_pem, label: file_label(cert) })
 }
 
 /// Whatever files someone picked or dropped: PEM certificates and keys in any
-/// arrangement, or a .p12. Composer keeps the certificate in `composer.pem` and the key
-/// in `composer.key` beside it, so a lone certificate brings its sibling `.key` along.
+/// arrangement, or a .p12. A certificate is often kept beside its key
+/// (`client.pem` + `client.key`), so a lone certificate brings its sibling `.key` along.
 pub fn from_files(paths: &[std::path::PathBuf], password: Option<&str>) -> anyhow::Result<StoredIdentity> {
     let is_p12 = |p: &Path| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("p12") || e.eq_ignore_ascii_case("pfx"));
     if let Some(p12) = paths.iter().find(|p| is_p12(p)) {
@@ -108,17 +108,17 @@ pub fn from_files(paths: &[std::path::PathBuf], password: Option<&str>) -> anyho
     for p in paths {
         take(p, read_blocks(p)?);
     }
-    // composer.pem + composer.key: a certificate on its own brings the .key beside it.
+    // client.pem + client.key: a certificate on its own brings the .key beside it.
     let siblings: Vec<_> = paths.iter().map(|p| p.with_extension("key")).filter(|s| s.is_file() && !paths.contains(s)).collect();
     for s in siblings {
         take(&s, read_blocks(&s)?);
     }
     let names = paths.iter().map(|p| file_label(p)).collect::<Vec<_>>().join(", ");
     if certs.is_empty() {
-        anyhow::bail!("no certificate in {names}; choose composer.pem (with composer.key) or a .p12");
+        anyhow::bail!("no certificate in {names}; choose a certificate (.pem with its .key) or a .p12");
     }
     let Some(key_pem) = key else {
-        anyhow::bail!("{names} holds the certificate but not its private key, and there was no matching .key beside it; choose composer.key too");
+        anyhow::bail!("{names} holds the certificate but not its private key, and there was no matching .key beside it; choose the .key file too");
     };
     let id = StoredIdentity { cert_pem: certs, key_pem, label: label.unwrap_or_default() };
     id.identity().map_err(|e| anyhow::anyhow!("the certificate and key don't work together: {e}"))?;

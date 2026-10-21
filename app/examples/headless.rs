@@ -1,6 +1,6 @@
 //! Run openComposer's MCP server without a window, for end-to-end tests.
 //!
-//!   OPENCOMPOSER_DATA=/tmp/oc C4_CERT=composer.pem C4_KEY=composer.key \
+//!   OPENCOMPOSER_DATA=/tmp/oc C4_CERT=client.pem C4_KEY=client.key \
 //!     cargo run -p opencomposer --example headless -- <writable-host> [<read-only-host>]
 //!
 //! Writes to the first host are approved automatically (point it at a Virtual

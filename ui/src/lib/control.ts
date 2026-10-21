@@ -68,7 +68,7 @@ const TRANSPORT = plain("PLAY", "PAUSE", "STOP", "SCAN_REV", "SCAN_FWD", "SKIP_R
 
 /** Control4's standard proxy commands, for a proxy whose definition lists none (Director keeps
  *  the built-in proxies' commands to itself). ponytail: a fixed list per proxy type, not the
- *  proxy definitions; the upgrade is reading them from Composer's proxy files. */
+ *  proxy definitions; the upgrade is Control4's public DriverWorks proxy documentation. */
 export function standardFor(proxy: string | null | undefined): CommandDef[] {
   const x = proxy ? proxyName(proxy) : "";
   if (/^light|dimmer/.test(x)) return [...POWER, c("TOGGLE", "Toggle NAME"), c("SET_LEVEL", "Set NAME level to LEVEL", LEVEL)];

@@ -167,8 +167,8 @@ impl Catalog {
     }
 
     /// Agents declare no events; the Scheduler's are its entries, Advanced Lighting's and
-    /// Announcements' come from their scenes and announcements (Composer's plugins report
-    /// them the same way), so programming can name and check them. They come from a
+    /// Announcements' come from their scenes and announcements, so programming
+    /// can name and check them. They come from a
     /// snapshot, which has them current.
     pub fn set_schedule_events(&mut self, p: &Project) {
         for (agent, events) in agent_events(p) {

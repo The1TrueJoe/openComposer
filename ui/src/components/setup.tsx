@@ -15,8 +15,8 @@ export const MODES: { value: AccessMode; label: string }[] = [
   { value: "read_only", label: "Read only" },
 ];
 
-/** Certificate files by drag-and-drop or picking: composer.pem + composer.key (a lone
- *  composer.pem brings the .key beside it), or a .p12, which then asks for its password. */
+/** Certificate files by drag-and-drop or picking: a .pem + its .key (a lone
+ *  .pem brings the .key beside it), or a .p12, which then asks for its password. */
 export function CertificateForm({ identity, onChanged }: { identity: IdentityStatus; onChanged: () => void }) {
   const [needsPassword, setNeedsPassword] = useState<string[] | null>(null);
   const [password, setPassword] = useState("");
@@ -44,7 +44,7 @@ export function CertificateForm({ identity, onChanged }: { identity: IdentitySta
   const drop = useDropFiles((paths) => void importPaths(paths), isCertFile);
   const choose = async () => {
     const files = await pickFiles({
-      title: "Choose composer.pem and composer.key (or a .p12)",
+      title: "Choose the certificate and its key (or a .p12)",
       extensions: ["pem", "key", "crt", "cer", "p12", "pfx"],
       multiple: true,
     });
@@ -62,7 +62,7 @@ export function CertificateForm({ identity, onChanged }: { identity: IdentitySta
       {identity.error && <p className="err">{identity.error}</p>}
       <div ref={drop.ref} {...drop.handlers} className={cx("cert-drop", drop.over && "over")}>
         {busy ? <Spinner /> : <FileKey2 size={22} strokeWidth={1.5} />}
-        <b>{identity.loaded ? "Drop a different certificate here" : "Drop composer.pem and composer.key here"}</b>
+        <b>{identity.loaded ? "Drop a different certificate here" : "Drop the certificate and its key here"}</b>
         <span className="dim">or a <code>.p12</code> export — kept encrypted on this computer, with the key in the OS keychain</span>
         <button className="act" disabled={busy} onClick={choose}><FileKey2 size={14} strokeWidth={1.8} />Choose files…</button>
       </div>

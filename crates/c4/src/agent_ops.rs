@@ -2,9 +2,9 @@
 //! Announcements, Wake/Sleep rooms, push and email notifications. Their variants live in
 //! [`Op`]; this is how each predicts, validates, describes itself and what it sends.
 //!
-//! Every change is a `SendToDevice` to the agent with the command Composer's plugin sends
-//! (`NEW_SCENE`, `modify_announcement`, `MODIFY_TEMPLATE`, …), learned from Composer Pro
-//! 3.3.3's plugins and checked against the Virtual Director. The agents keep their data in
+//! Every change is a `SendToDevice` to the agent with the agent's own command
+//! (`NEW_SCENE`, `modify_announcement`, `MODIFY_TEMPLATE`, …), checked against the Virtual
+//! Director. The agents keep their data in
 //! the project (`Project::agent_data`), so a change is verified by reading the project back.
 //!
 //! Some calls need what the project holds now (how many steps a light has, the parts of an
@@ -492,7 +492,7 @@ fn email(op: &Op, p: &mut Project) -> Result<(), OpError> {
     Ok(())
 }
 
-/// What Composer's plugin sends, or `None` for ops that aren't agent ops.
+/// What the agent is sent, or `None` for ops that aren't agent ops.
 pub fn calls(op: &Op) -> Option<Vec<Call>> {
     let int = |v: u32| v.to_string();
     Some(match op {

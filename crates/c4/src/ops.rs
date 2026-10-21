@@ -4,8 +4,6 @@
 //! what the approval card diffs), and turned into the c4soap calls Composer would send.
 //! Prediction also validates: an op that can't apply cleanly to the current snapshot
 //! is refused before anyone is asked to approve it.
-//!
-//! Call formats come from Composer Pro 3.3's own debug logs.
 
 use serde::{Deserialize, Serialize};
 

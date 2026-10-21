@@ -1,17 +1,16 @@
-//! Control4's built-in agents whose Composer editors are .NET plugins
-//! (`control4_agent_*.c4a.dll`) rather than driver web tabs: what those editors ask the
-//! agent for, and what comes back.
+//! Control4's built-in agents that have no driver web tab (Scheduler, Advanced Lighting,
+//! Announcements, …): what openComposer asks each agent for, and what comes back.
 //!
-//! Every plugin talks to its agent the same way: `SendToDevice` to the agent's item with a
+//! Every agent is reached the same way: `SendToDevice` to the agent's item with a
 //! `<devicecommand>` (`GET_ALL_ENTRIES`, `GET_SCENE_LIST`, `get_announcements`, …), answered
 //! synchronously with agent-specific XML. Writes are the same call with another command
 //! (`ADD_ENTRY`, …); Director answers those with an empty reply, and the agent reports
-//! `entry_added` / `command_failed` to the plugin afterwards, so a write is checked by
+//! `entry_added` / `command_failed` to the client afterwards, so a write is checked by
 //! reading the project back, as every other op is.
 //!
-//! Learned from Composer Pro 3.3.3's plugins and checked against Director 3.3.3 (the
-//! Virtual Director and a real EA-1). This module is protocol and parsing only: names are
-//! resolved and things are worded for people in the app (`agent_view`).
+//! Checked against Director 3.3.3 (the Virtual Director and a real EA-1). This module is
+//! protocol and parsing only: names are resolved and things are worded for people in the app
+//! (`agent_view`).
 
 use roxmltree::Node;
 use schemars::JsonSchema;
@@ -62,7 +61,7 @@ impl AgentKind {
     }
 }
 
-/// A `<devicecommand>` as Composer's plugins build it. `params` are (name, type, value);
+/// A `<devicecommand>` as the agents take it. `params` are (name, type, value);
 /// values are text, so XML payloads (`ENTRY_XML`) travel escaped.
 pub fn device_command(command: &str, params: &[(&str, &str, &str)]) -> String {
     let ps: String = params
@@ -109,7 +108,7 @@ fn parse(xml: &str) -> Option<roxmltree::Document<'_>> {
 
 // ---- Scheduler ---------------------------------------------------------------------------------
 
-/// What a scheduled event's time is measured from (Composer's `OffsetType`).
+/// What a scheduled event's time is measured from.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum TimeBase {
@@ -185,7 +184,7 @@ impl Weekday {
     }
 }
 
-/// Composer's "start on the Nth weekday of the month" (`StartPeriod`).
+/// Composer's "start on the Nth weekday of the month".
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum Nth {
@@ -412,7 +411,7 @@ impl ScheduleSpec {
         }
     }
 
-    /// The `<entry>` Composer sends in `ADD_ENTRY` / `MODIFY_ENTRY` (its `ScheduledEntry.ToXml`).
+    /// The `<entry>` Composer sends in `ADD_ENTRY` / `MODIFY_ENTRY`.
     pub fn to_xml(&self, id: u32, creator: u32, category: &str, locked: bool) -> String {
         let (y, m, d) = ymd(&self.start_date).unwrap_or((2000, 1, 1));
         // Composer stores "Nth weekday" starts as the first of the month plus the rule.
@@ -583,7 +582,7 @@ impl AgentData {
         })
     }
 
-    /// The agent's events, for programming (Composer's plugins report them the same way).
+    /// The agent's events, for programming.
     pub fn events(&self) -> Vec<(u32, String)> {
         match self {
             Self::Lighting { scenes } => scenes
@@ -1214,8 +1213,8 @@ impl AnnouncementSpec {
         }
     }
 
-    /// The `<announcement>` Composer sends in `add_announcement` / `modify_announcement`
-    /// (its `Announcement.ToXml`). Settings this spec doesn't cover (delays, variable
+    /// The `<announcement>` Composer sends in `add_announcement` / `modify_announcement`.
+    /// Settings this spec doesn't cover (delays, variable
     /// displays) and masked credentials are kept from `current`'s stored XML; `room_of` and
     /// `onscreen` describe the screens as Composer would.
     pub fn to_xml(&self, id: u32, current: Option<&Announcement>, room_of: impl Fn(u32) -> u32, onscreen: impl Fn(u32) -> bool) -> String {
@@ -1389,7 +1388,7 @@ impl WakeSleepSpec {
         if d.is_empty() || d.len() == 7 { "all".into() } else { d.iter().map(|w| w.short().to_ascii_lowercase()).collect::<Vec<_>>().join(",") }
     }
 
-    /// The `<scene>` Composer sends in `ADD_`/`MODIFY_WAKEUPGOODNIGHTSCENE` (its `Scene.ToXml`).
+    /// The `<scene>` Composer sends in `ADD_`/`MODIFY_WAKEUPGOODNIGHTSCENE`.
     pub fn to_xml(&self, id: u32, room: u32, with_days: bool) -> String {
         let (h, m) = hhmm(&self.wake_time).unwrap_or((6, 30));
         let b = |v: bool| if v { "1" } else { "0" };

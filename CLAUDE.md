@@ -8,6 +8,13 @@
 - Never commit certificates, keys, project data or Control4's code/logs. `poc/out*`,
   `*.pem`, `*.key`, `*.p12` are ignored; keep it that way.
 - Before you say it works, run it, and say what you could not verify.
+- **Clean-room only.** Learn how Control4 behaves from what Director and the controller's web
+  API send and store on controllers we own or are authorised to manage, and from Control4's
+  public documentation. Don't decompile, disassemble or read the code of Composer, its plugins
+  or Control4 firmware, and don't name their internal classes in code or comments. Never ship
+  Control4's certificates, keys, drivers or firmware, or explain how to extract them.
+- openComposer isn't affiliated with Control4 / Snap One. Keep the disclaimer in the README and
+  Settings; use "Control4" and "Composer" only to say what it works with, never their logos.
 
 ## Code
 - Comments explain *why*. Module headers say what the module is for and what it is not.
@@ -25,9 +32,9 @@
 cargo test --workspace
 npm --prefix ui run build
 ```
-Live, read-only smoke test (needs the Composer cert):
+Live, read-only smoke test (needs a client cert the controller trusts):
 ```bash
-C4_CERT=composer.pem C4_KEY=composer.key cargo run -p c4 --example live -- optiplex.local 192.168.1.172
+C4_CERT=client.pem C4_KEY=client.key cargo run -p c4 --example live -- optiplex.local 192.168.1.172
 ```
 Headless MCP server for end-to-end tests (auto-approves writes on the first host only —
 point it at the Virtual Director):
@@ -51,8 +58,8 @@ OPENCOMPOSER_DATA=/tmp/oc C4_CERT=… C4_KEY=… cargo run -p opencomposer --exa
   variable, Else, Delay/Stop/Break, comments, variable set/toggle/math, `move_code` and
   `set_code_enabled`. Checked on the Virtual Director (stored as predicted): If/While on
   light_v2 LOAD_ON/OFF and a Boolean variable, Else, Delay, Stop, comments, toggle, moves (an
-  If takes its Else), enable/disable; variable set/copy/math/random are built from Composer's
-  code but weren't sent. Lines inside a new If need its Director-assigned id, so they go in a
+  If takes its Else), enable/disable; variable set/copy/math/random are built
+  but weren't sent. Lines inside a new If need its Director-assigned id, so they go in a
   later change. Not done: compound conditions (AND/OR,
   `AddCodeItemToExpression`), editing a line in place (`UpdateCodeItemCommand`), enabling a
   whole event (id 0), Device/Room/Media/Color variables, and the value-taking conditionals of
@@ -79,7 +86,7 @@ OPENCOMPOSER_DATA=/tmp/oc C4_CERT=… C4_KEY=… cargo run -p opencomposer --exa
   keeps the driver's generic name, the proxy holds the dealer's.
 - New sites/buildings/floors/rooms copy an existing one's `<itemdata>` (`Catalog::template_for`)
   with a fresh `<tag>`.
-- Agents' Composer editors are .NET plugins (`*.c4a.dll`) that talk `SendToDevice` with the
+- Built-in agents without a driver web tab are driven with `SendToDevice` and the
   agent's own commands (`crates/c4/src/agents.rs`). Scheduler, Advanced Lighting (scenes,
   lights' steps), Announcements, Wake/Sleep room defaults and Push/Email notifications are
   read/write; their ops are in `crates/c4/src/agent_ops.rs` (verified on the Virtual Director).

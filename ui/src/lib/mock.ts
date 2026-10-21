@@ -50,7 +50,7 @@ const config: Config = {
 };
 let identity = fresh
   ? { loaded: false, unlocked: true, label: null as string | null, fingerprint: null as string | null, error: null as string | null }
-  : { loaded: true, unlocked: true, label: "composer.pem (Telaak Integration)", fingerprint: "a4:9e:20:7c:1b:f3:58:d2:6a:0e", error: null };
+  : { loaded: true, unlocked: true, label: "client.pem (Telaak Integration)", fingerprint: "a4:9e:20:7c:1b:f3:58:d2:6a:0e", error: null };
 const connected = new Set<string>(fresh ? [] : ["d-telaak"]);
 const approvals: Approval[] = fresh ? [] : [showcaseApproval(), agentApproval(), ...historyApprovals()];
 const waiting = new Map<string, (o: Outcome) => void>();
@@ -1039,7 +1039,7 @@ async function agentTurn(c: ConversationInfo, raw: string) {
 type Args = Record<string, unknown>;
 
 function ensureSession(): string {
-  if (!identity.loaded) throw "no client certificate yet — import composer.pem/.key (or a .p12) in Settings";
+  if (!identity.loaded) throw "no client certificate yet — import a certificate and its key (or a .p12) in Settings";
   const id = config.active_director;
   if (!id) throw "no Director is set up — add one in Directors";
   if (!connected.has(id)) {
@@ -1355,7 +1355,7 @@ async function handle(cmd: string, a: Args): Promise<unknown> {
     case "connect_director": {
       await sleep(600);
       const id = String(a.id);
-      if (!identity.loaded) throw "no client certificate yet — import composer.pem/.key (or a .p12) in Settings";
+      if (!identity.loaded) throw "no client certificate yet — import a certificate and its key (or a .p12) in Settings";
       const d = config.directors.find((x) => x.id === id);
       if (!d) throw `no Director called “${id}”`;
       if (d.host.endsWith(".local") && d.mode === "read_only") throw `could not reach ${d.host}:5021 (connection timed out)`;
@@ -1371,7 +1371,7 @@ async function handle(cmd: string, a: Args): Promise<unknown> {
     case "import_identity_files": {
       const paths = (a.paths as string[]) ?? [];
       if (paths.some((p) => /\.(p12|pfx)$/i.test(p)) && !a.password) throw "NEEDS_PASSWORD: that .p12 is password-protected; enter its password";
-      if (!paths.some((p) => /\.(pem|crt|cer|p12|pfx)$/i.test(p))) throw `no certificate in ${paths.join(", ")}; choose composer.pem (with composer.key) or a .p12`;
+      if (!paths.some((p) => /\.(pem|crt|cer|p12|pfx)$/i.test(p))) throw `no certificate in ${paths.join(", ")}; choose a certificate (.pem with its .key) or a .p12`;
       await sleep(300);
       identity = { loaded: true, unlocked: true, label: `${paths[0].split(/[\\/]/).pop()} (Telaak Integration)`, fingerprint: "a4:9e:20:7c:1b:f3:58:d2:6a:0e", error: null };
       return null;

@@ -2,10 +2,8 @@
 //! Stop, Break, comments and variables — the code item kinds, the `cmdcond` XML Director takes
 //! for each, the line text Composer stores, and where in a script each may go.
 //!
-//! Formats are Composer Pro 3.3's (Control4.Designer.Programming's variable controls and
-//! Control4.Common's `DriverConditional.ToCommandXml`), checked against the 3.3.3 Virtual
-//! Director, which stores them verbatim and answers `EnableCodeItem`/`MoveCodeItem` as noted
-//! below. Not here: compound conditions (Composer's AND/OR expression builder,
+//! Formats are checked against the 3.3.3 Virtual Director, which stores them verbatim and
+//! answers `EnableCodeItem`/`MoveCodeItem` as noted below. Not here: compound conditions (Composer's AND/OR expression builder,
 //! `AddCodeItemToExpression`), conditionals on Device/Room/Media/Color variables, and the
 //! value-taking conditionals of Control4's built-in proxies (see [`shape`]).
 
@@ -16,7 +14,7 @@ use crate::model::{CodeItem, Project};
 use crate::ops::{CodeParam, Op};
 use crate::xml::escape;
 
-/// Director's code item types (Composer's `CodeItemType`).
+/// Director's code item types.
 pub mod kind {
     pub const COMMAND: u32 = 1;
     pub const CONDITIONAL: u32 = 2;
@@ -89,7 +87,7 @@ impl Logic {
             Logic::GreaterThanOrEqual => "Greater Than Or Equal To",
         }
     }
-    /// How a variable comparison reads ("GREATER THAN", Composer's `CompareOperation`).
+    /// How a variable comparison reads ("GREATER THAN").
     fn var_words(self) -> String {
         self.words().to_uppercase()
     }
@@ -172,7 +170,7 @@ pub enum VarAction {
     Random { min: String, max: String },
 }
 
-/// Variable types programming can use (Composer's `VariableType`).
+/// Variable types programming can use.
 pub mod var_type {
     pub const STRING: u32 = 1;
     pub const NUMBER: u32 = 2;
@@ -241,8 +239,8 @@ fn macros(description: &str) -> Vec<&str> {
 /// `TestCondition`. Control4's built-in proxies declare none; Composer hard-codes their
 /// editors, so only the ones without values (LOAD_ON "NAME is on") can be added here.
 /// ponytail: proxy conditionals with values (light_v2 IS_BRIGHTNESS_CURRENT, a TV's input) are
-/// listed but refused; the upgrade is their parameter names, read from Composer's per-proxy
-/// controls or a Composer log of one being added.
+/// listed but refused; the upgrade is their parameter names, read back from a project on one of
+/// our own controllers where such a line exists.
 pub fn shape(def: &ConditionalDef) -> Shape {
     let value = |t: &str| {
         let mut p = param("VALUE", t);
@@ -476,7 +474,7 @@ fn vname(v: &VarRef) -> String {
     format!("VNAME:{},{}", v.device, v.id)
 }
 
-/// Composer's `encodeCodeItemDescription`: `#!"text with {KEY}";KEY="VNAME:d,v";…`.
+/// The `#!` template a stored line's text uses: `#!"text with {KEY}";KEY="VNAME:d,v";…`.
 fn encode(text: &str, vars: &[(&str, String)]) -> String {
     let q = |s: &str| s.replace('\\', "\\\\").replace('"', "\\\"");
     let mut out = format!("#!\"{}\"", q(text));

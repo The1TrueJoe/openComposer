@@ -1,4 +1,4 @@
-//! c4soap — the Director's wire protocol, as Composer Pro speaks it.
+//! c4soap — the Director's wire protocol.
 //!
 //! OS 3.x Directors listen on TLS port 5021 and require a client certificate (the
 //! handshake requests one; without it every call answers `Access denied`). Each
@@ -63,7 +63,7 @@ pub enum SoapError {
 
 pub type Result<T, E = SoapError> = std::result::Result<T, E>;
 
-/// A client certificate + key, as PEM. Composer's `composer.pem` / `composer.key` work as-is.
+/// A client certificate + key, as PEM.
 #[derive(Clone)]
 pub struct Identity {
     certs: Vec<CertificateDer<'static>>,
@@ -371,14 +371,23 @@ pub fn tls_config(identity: &Identity, pin: Option<&str>) -> Result<(rustls::Cli
 /// TLS for a controller's web API when a token, not a client certificate, authenticates:
 /// the controller's self-signed certificate is accepted (pinned when `pin` is given).
 pub fn web_tls_config(pin: Option<&str>) -> rustls::ClientConfig {
+    web_tls_config_seen(pin).0
+}
+
+/// Like [`web_tls_config`], but also returns the cell that receives the fingerprint the
+/// controller presented, so a token-authenticated caller can pin it for later (the cell is
+/// filled during the TLS handshake, i.e. after the first request on the client completes).
+pub fn web_tls_config_seen(pin: Option<&str>) -> (rustls::ClientConfig, Arc<StdMutex<Option<String>>>) {
     let provider = Arc::new(rustls::crypto::ring::default_provider());
-    let verifier = PinVerifier { pin: pin.map(|p| p.to_ascii_lowercase()), seen: Default::default(), provider: provider.clone() };
-    rustls::ClientConfig::builder_with_provider(provider)
+    let seen = Arc::new(StdMutex::new(None));
+    let verifier = PinVerifier { pin: pin.map(|p| p.to_ascii_lowercase()), seen: seen.clone(), provider: provider.clone() };
+    let config = rustls::ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
         .expect("ring supports the default TLS versions")
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(verifier))
-        .with_no_client_auth()
+        .with_no_client_auth();
+    (config, seen)
 }
 
 /// Try every address a name resolves to at once and keep the first that answers.

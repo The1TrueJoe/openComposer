@@ -1,7 +1,7 @@
 """Read-only proof of concept: dump a Control4 project and its connections over c4soap.
 
 Usage:
-    C4_CERT=composer.pem C4_KEY=composer.key python3 poc/c4read.py <controller-ip> [out-dir]
+    C4_CERT=client.pem C4_KEY=client.key python3 poc/c4read.py <controller-ip> [out-dir]
 
 Only Get* / Is* commands are allowed; anything else is refused before it hits the wire.
 """

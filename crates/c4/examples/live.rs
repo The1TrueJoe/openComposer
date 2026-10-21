@@ -1,6 +1,6 @@
 //! Read-only smoke test against real Directors.
 //!
-//!   C4_CERT=composer.pem C4_KEY=composer.key cargo run -p c4 --example live -- <host> [<other-host>]
+//!   C4_CERT=client.pem C4_KEY=client.key cargo run -p c4 --example live -- <host> [<other-host>]
 //!
 //! Connects, snapshots, reads the driver catalog, discovered devices and Zigbee nodes,
 //! and with a second host prints the semantic diff between the two projects.

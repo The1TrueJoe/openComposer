@@ -13,7 +13,7 @@ export function SettingsPage({ shell }: { shell: Shell }) {
     <div className="pane settings">
       <section className="card" id="certificate">
         <h3>Certificate</h3>
-        <p className="hint flush">The client certificate Directors trust — the one Composer Pro uses.</p>
+        <p className="hint flush">A client certificate your Directors trust. openComposer doesn't include one.</p>
         <CertificateForm identity={shell.status.identity} onChanged={shell.refreshStatus} />
       </section>
       <Directors shell={shell} />

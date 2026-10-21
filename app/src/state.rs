@@ -63,7 +63,7 @@ pub struct Activity {
 
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
-    #[error("no client certificate yet — import composer.pem/.key (or a .p12) in Settings")]
+    #[error("no client certificate yet — import a certificate and its key (or a .p12) in Settings")]
     NoIdentity,
     #[error("no Director is set up — add one in Directors")]
     NoDirector,

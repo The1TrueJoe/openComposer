@@ -184,8 +184,8 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
           <h1>Certificate for {step.target.name}</h1>
           <p className="lede">
             {step.why
-              ? <>The controller refused the connection ({step.why}). Use the client certificate it trusts — the one Composer Pro uses.</>
-              : <>Controllers only talk to a client holding a trusted certificate — the one Composer Pro uses: <code>composer.pem</code> with its <code>composer.key</code>, or a <code>.p12</code>.</>}
+              ? <>The controller refused the connection ({step.why}). Use a client certificate it trusts.</>
+              : <>Controllers only talk to a client holding a certificate they trust: a <code>.pem</code> with its <code>.key</code>, or a <code>.p12</code>. openComposer doesn't include one.</>}
           </p>
           <CertificateForm identity={status.identity} onChanged={() => { onChanged(); void connect(step.target, true); }} />
           <div className="connect-foot">
