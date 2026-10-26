@@ -21,24 +21,28 @@ import { ReadOnlyLock } from "./shell";
 const NEEDS_CERT = /certificate|access denied|handshake|tls/i;
 
 type Target = { id: string; name: string };
+/** How to reach the controller, chosen in step 1; step 2 shows what that method finds. */
+type Method = "network" | "sidecar" | "address";
 type Step =
-  | { kind: "controller" }
+  | { kind: "method" }
+  | { kind: "controller"; method: Method }
   | { kind: "certificate"; target: Target; why: string | null }
   | { kind: "connecting"; target: Target };
 
-const STEPS = ["Controller", "Certificate", "Open project"] as const;
+const STEPS = ["Connection", "Controller", "Certificate", "Open project"] as const;
 
 export function ConnectScreen({ status, info, onChanged, onEnter }: {
   status: AppStatus; info: Map<string, DirectorInfo>; onChanged: () => void; onEnter: () => void;
 }) {
   const { directors, active_director } = status.config;
-  const [step, setStep] = useState<Step>({ kind: "controller" });
+  const [step, setStep] = useState<Step>({ kind: "method" });
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [found, setFound] = useState<Announcement[] | null>(null);
   const [scanning, setScanning] = useState(false);
-  const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [sidecar, setSidecar] = useState<SidecarDetection | null>(null);
+  // Remembered so the certificate step (reached mid-connect) returns to the same method.
+  const [lastMethod, setLastMethod] = useState<Method>("network");
 
   const scan = useCallback(async () => {
     setScanning(true);
@@ -80,7 +84,7 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
         setStep({ kind: "certificate", target: t, why: msg });
       } else {
         setErrors((x) => ({ ...x, [t.id]: msg }));
-        setStep({ kind: "controller" });
+        setStep({ kind: "controller", method: lastMethod });
       }
     }
   };
@@ -130,7 +134,10 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
     .filter((d) => !seen.has(d.id))
     .sort((a, b) => (a.id === first ? -1 : b.id === first ? 1 : a.name.localeCompare(b.name)));
 
-  const at = step.kind === "controller" ? 0 : step.kind === "certificate" ? 1 : 2;
+  const at = step.kind === "method" ? 0 : step.kind === "controller" ? 1 : step.kind === "certificate" ? 2 : 3;
+  const sidecarReady = !!sidecar && sidecar.sessions.length > 0;
+  /** Jump to step 2 for a chosen method. */
+  const choose = (method: Method) => { setLastMethod(method); setStep({ kind: "controller", method }); };
 
   // The Director first, then secondaries (dimmed, nothing to open).
   const foundRows: ControllerRow[] = (found ?? [])
@@ -160,22 +167,84 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
           ))}
         </ol>
 
-        {step.kind === "controller" && <>
+        {step.kind === "method" && <>
           <h1>Connect to a Director</h1>
           {!status.identity.unlocked && (
             <p className="hint"><KeyRound size={13} strokeWidth={1.8} /> Unlocking your certificate — if macOS asks to use the keychain, choose Allow (or Always Allow).</p>
           )}
+          <p className="lede">How do you want to reach the controller?</p>
+
+          <div className="method-grid">
+            <button className="method-tile" onClick={() => choose("network")}>
+              <Radar size={18} strokeWidth={1.8} />
+              <b>On your network</b>
+              <span className="dim small">
+                Find controllers on this network.
+                {found !== null && (found.length ? ` ${found.length} found.` : " None answered yet.")}
+              </span>
+            </button>
+
+            <button className="method-tile" disabled={!sidecarReady} onClick={() => choose("sidecar")}>
+              <Cable size={18} strokeWidth={1.8} />
+              <b>Composer remote session</b>
+              <span className="dim small">
+                {sidecarReady
+                  ? `A Composer remote session is open here — ${sidecar!.sessions.length} controller${sidecar!.sessions.length > 1 ? "s" : ""} reachable through it.`
+                  : "Attach through an open Composer Pro remote-support session (none detected on this computer)."}
+              </span>
+            </button>
+
+            <button className="method-tile" onClick={() => choose("address")}>
+              <Plus size={18} strokeWidth={1.8} />
+              <b>Enter an address</b>
+              <span className="dim small">Type a host or IP — or a forwarded <span className="mono">127.0.0.1:port</span>.</span>
+            </button>
+          </div>
+
+          <div className="connect-foot">
+            <button className="link" onClick={onEnter}>Continue without connecting</button>
+            <span className="hint">Backups, settings and the agent work offline.</span>
+          </div>
+        </>}
+
+        {step.kind === "controller" && step.method === "network" && <>
+          <h1>Controllers on your network</h1>
           <p className="lede">Pick the controller whose project you want to open.</p>
 
-          {sidecar && sidecar.sessions.length > 0 && (
+          <section className="connect-sec">
+            <div className="connect-head">
+              On your network
+              <button className="act small quiet" onClick={scan} disabled={scanning}>
+                {scanning ? <Spinner /> : <RefreshCw size={12} strokeWidth={1.8} />}Scan again
+              </button>
+            </div>
+            {found === null || (scanning && !found.length)
+              ? <p className="hint"><Radar size={13} strokeWidth={1.8} /> Looking for controllers…</p>
+              : !found.length
+                ? <p className="empty">No controllers answered. If you're on the right network, macOS may be asking to allow local network access — or go back and enter an address.</p>
+                : <ControllerTable rows={foundRows} busy={busy} label="Controllers on your network" />}
+          </section>
+
+          {!!others.length && (
             <section className="connect-sec">
-              <div className="connect-head"><span className="row nowrap"><Cable size={13} strokeWidth={1.8} />Composer remote session</span></div>
-              <p className="hint">
-                openComposer can attach to Composer Pro's remote-support session as an additional standard client —
-                it doesn't replace Composer and doesn't change how the controller authenticates.
-              </p>
-              <div className="connect-list">
-                {sidecar.sessions.map((s) => {
+              <div className="connect-head">Saved</div>
+              <ControllerTable rows={savedRows} busy={busy} label="Saved Directors" />
+            </section>
+          )}
+
+          <BackFoot onBack={() => setStep({ kind: "method" })} />
+        </>}
+
+        {step.kind === "controller" && step.method === "sidecar" && <>
+          <h1><span className="row nowrap"><Cable size={18} strokeWidth={1.8} />Composer remote session</span></h1>
+          <p className="lede">
+            openComposer attaches to Composer Pro's remote-support session as an additional standard client —
+            it doesn't replace Composer and doesn't change how the controller authenticates.
+          </p>
+
+          {sidecarReady
+            ? <div className="connect-list">
+                {sidecar!.sessions.map((s) => {
                   const key = `sidecar:${s.director_addr}`;
                   return (
                     <div key={s.director_addr} className="connect-row">
@@ -194,46 +263,19 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
                   );
                 })}
               </div>
-            </section>
-          )}
+            : <p className="empty">No Composer remote session is open on this computer. Start one in Composer Pro, or forward the PC's <span className="mono">10.123.x.y:5021</span> here and go back to enter an address.</p>}
 
-          <section className="connect-sec">
-            <div className="connect-head">
-              On your network
-              <button className="act small quiet" onClick={scan} disabled={scanning}>
-                {scanning ? <Spinner /> : <RefreshCw size={12} strokeWidth={1.8} />}Scan again
-              </button>
-            </div>
-            {found === null || (scanning && !found.length)
-              ? <p className="hint"><Radar size={13} strokeWidth={1.8} /> Looking for controllers…</p>
-              : !found.length
-                ? <p className="empty">No controllers answered. If you're on the right network, macOS may be asking to allow local network access — or add one by address below.</p>
-                : <ControllerTable rows={foundRows} busy={busy} label="Controllers on your network" />}
-          </section>
+          <BackFoot onBack={() => setStep({ kind: "method" })} />
+        </>}
 
-          {!!others.length && (
-            <section className="connect-sec">
-              <div className="connect-head">Saved</div>
-              <ControllerTable rows={savedRows} busy={busy} label="Saved Directors" />
-            </section>
-          )}
-
-          <section className="connect-sec">
-            {adding
-              ? <>
-                  <div className="connect-head">Add by address</div>
-                  <AddDirectorForm onAdded={(id) => {
-                    onChanged();
-                    void connect({ id, name: "the new Director" });
-                  }} />
-                </>
-              : <button className="act quiet" onClick={() => setAdding(true)}><Plus size={14} strokeWidth={1.8} />Add a Director by address…</button>}
-          </section>
-
-          <div className="connect-foot">
-            <button className="link" onClick={onEnter}>Continue without connecting</button>
-            <span className="hint">Backups, settings and the agent work offline.</span>
-          </div>
+        {step.kind === "controller" && step.method === "address" && <>
+          <h1>Enter an address</h1>
+          <p className="lede">A host name or IP, or a forwarded local address like <span className="mono">127.0.0.1:15021</span>.</p>
+          <AddDirectorForm onAdded={(id) => {
+            onChanged();
+            void connect({ id, name: "the new Director" });
+          }} />
+          <BackFoot onBack={() => setStep({ kind: "method" })} />
         </>}
 
         {step.kind === "certificate" && <>
@@ -244,9 +286,7 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
               : <>Controllers only talk to a client holding a certificate they trust: a <code>.pem</code> with its <code>.key</code>, or a <code>.p12</code>. openComposer doesn't include one.</>}
           </p>
           <CertificateForm identity={status.identity} onChanged={() => { onChanged(); void connect(step.target, true); }} />
-          <div className="connect-foot">
-            <button className="act quiet" onClick={() => setStep({ kind: "controller" })}><ArrowLeft size={14} strokeWidth={1.8} />Back</button>
-          </div>
+          <BackFoot onBack={() => setStep({ kind: "controller", method: lastMethod })} />
         </>}
 
         {step.kind === "connecting" && (
@@ -257,6 +297,15 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+/** The step-2 footer: a Back to the connection-method choice. */
+function BackFoot({ onBack }: { onBack: () => void }) {
+  return (
+    <div className="connect-foot">
+      <button className="act quiet" onClick={onBack}><ArrowLeft size={14} strokeWidth={1.8} />Back</button>
     </div>
   );
 }

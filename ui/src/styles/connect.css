@@ -18,6 +18,28 @@
 .connect-card h1 { font-size: 20px; font-weight: 600; }
 .connect-card .lede { color: var(--dim); margin-top: -12px; }
 
+/* Step 1: pick a connection method. */
+.method-grid { display: flex; flex-direction: column; gap: 10px; }
+.method-tile {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 12px;
+  row-gap: 2px;
+  align-items: center;
+  text-align: left;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--side);
+  cursor: pointer;
+}
+.method-tile:hover:not(:disabled) { background: var(--side-hover); border-color: var(--accent); }
+.method-tile:disabled { opacity: .55; cursor: not-allowed; }
+.method-tile > svg { grid-row: 1 / span 2; color: var(--accent); }
+.method-tile b { font-weight: 600; }
+.method-tile .small { grid-column: 2; }
+
 .connect-sec { display: flex; flex-direction: column; gap: 8px; }
 .connect-head {
   display: flex;
