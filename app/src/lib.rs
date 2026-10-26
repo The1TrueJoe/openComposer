@@ -60,6 +60,7 @@ pub fn run() {
             commands::import_identity_pem,
             commands::import_identity_p12,
             commands::import_identity_files,
+            commands::discover_certs,
             commands::add_director,
             commands::update_director,
             commands::remove_director,

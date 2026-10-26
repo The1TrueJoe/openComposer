@@ -126,3 +126,11 @@ OPENCOMPOSER_DATA=/tmp/oc C4_CERT=… C4_KEY=… cargo run -p opencomposer --exa
   `User-Agent: openComposer/<version>` (`c4::soap::USER_AGENT`): an honest identifier, not a
   Composer build string — controllers accept on the cert and route, so the minimal truthful UA is
   enough and we deliberately do not impersonate Composer.
+- Certificate discovery (`certs::discover` / `discover_certs` command, Certificate form): offers
+  the dealer identity Composer already keeps under its app-data folder
+  (`<config_dir>/Control4/Composer/` — `%APPDATA%\Roaming` on Windows, `~/Library/Application
+  Support` on macOS) so the owner reuses it instead of exporting by hand. Metadata only (name,
+  kind, needs-password) by filename, no file is opened; a `.pem` needs its sibling `.key`. A
+  `.p12` (what Composer stores, e.g. `composer.p12`) is password-protected — the owner enters its
+  password through the existing NEEDS_PASSWORD flow; we never recover Composer's. Local/UI only,
+  not an MCP tool. Most useful running on the same PC as Composer (sidecar).

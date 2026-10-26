@@ -1440,6 +1440,10 @@ async function handle(cmd: string, a: Args): Promise<unknown> {
       identity = { loaded: true, unlocked: true, label: `${paths[0].split(/[\\/]/).pop()} (Telaak Integration)`, fingerprint: "a4:9e:20:7c:1b:f3:58:d2:6a:0e", error: null };
       return null;
     }
+    case "discover_certs":
+      // One found certificate, so the Certificate step's "found on this computer" row renders.
+      return [{ path: "C:\\Users\\you\\AppData\\Roaming\\Control4\\Composer\\composer.p12",
+        label: "composer.p12", kind: "p12", needs_password: true, source: "Composer (AppData)" }];
     case "discover_controllers":
       await sleep(1500);
       return SDDP.filter((s) => s.device_type.startsWith("c4:control4_")).concat([

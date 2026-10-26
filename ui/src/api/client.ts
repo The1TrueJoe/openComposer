@@ -3,7 +3,7 @@ import type {
   DirectorInfo, DriverDoc, Events, ItemDetail, McpStatus, NetworkView, Op, Outcome, Overview,
   ProgrammingEvent, VariableRow, Provider, ProviderStatus, SavedDirector, AccessMode, TreeNode, ZigbeeQuery, BackupResult,
   AddDriverArgs, ControllerDriver, LibraryDriver, UiContext, CommandParam, DeviceState, Effort, AuthRequest, McpGrant, DriverTab, AgentView,
-  TakeoverStatus, TakeoverParams, TakeoverReport, RevertParams, SidecarDetection,
+  TakeoverStatus, TakeoverParams, TakeoverReport, RevertParams, SidecarDetection, FoundCert,
 } from "./types";
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -56,6 +56,8 @@ export const api = {
   /** Any picked/dropped certificate files; a .p12 without a password rejects with a message
    *  starting "NEEDS_PASSWORD:". */
   importFiles: (paths: string[], password: string | null = null) => call<void>("import_identity_files", { paths, password }),
+  /** Client certificates found where Composer Pro keeps one, to reuse without exporting by hand. */
+  discoverCerts: () => call<FoundCert[]>("discover_certs"),
 
   addDirector: (name: string, host: string, mode: AccessMode) => call<SavedDirector>("add_director", { name, host, mode }),
   updateDirector: (id: string, patch: { name?: string; host?: string; mode?: AccessMode; webApi?: boolean; webApiAddr?: string }) =>

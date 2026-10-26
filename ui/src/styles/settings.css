@@ -18,6 +18,19 @@
 .cert-state svg { margin-top: 2px; flex: none; }
 .cert .err { margin: 0; font-size: 12px; }
 .p12 input { width: 200px; }
+.cert-found { display: flex; flex-direction: column; gap: 6px; }
+.cert-found > .small { margin-bottom: 2px; }
+.cert-found-row {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bar);
+  color: inherit; cursor: pointer;
+}
+.cert-found-row:hover:not(:disabled) { border-color: var(--accent); }
+.cert-found-row:disabled { opacity: .6; cursor: default; }
+.cert-found-row svg { flex: none; color: var(--muted); }
+.cert-found-name { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.cert-found-name b { font-weight: 600; }
+.cert-found-row .act { flex: none; }
 
 .add-director .row input { flex: 1; min-width: 150px; }
 .found-list { margin-top: 8px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }

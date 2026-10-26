@@ -179,6 +179,98 @@ fn file_label(p: &Path) -> String {
     p.file_name().map(|f| f.to_string_lossy().into_owned()).unwrap_or_default()
 }
 
+/// A client certificate found in a place Composer Pro keeps one, offered so the owner can reuse
+/// their existing dealer identity instead of exporting it by hand. Metadata only — no key bytes
+/// are read here; the actual import happens through `from_files`/`from_p12` when the owner picks
+/// one, and a `.p12` still needs its password (we never recover Composer's — the owner enters it).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct FoundCert {
+    pub path: String,
+    pub label: String,
+    /// "pem" (a certificate + key, used as-is) or "p12" (asks for its password).
+    pub kind: &'static str,
+    pub needs_password: bool,
+    /// Where it was found, for the UI ("Composer (AppData)").
+    pub source: String,
+}
+
+/// Client certificates in the well-known Composer locations that exist on this computer.
+/// Composer stores the dealer identity under its app-data folder (`…/Control4/Composer/`), as a
+/// password-protected `composer.p12` and sometimes an exported `.pem`/`.key` pair. We look only
+/// in those fixed spots — no disk walk — and classify by name, without opening the files.
+pub fn discover() -> Vec<FoundCert> {
+    // `config_dir()` is %APPDATA%\Roaming on Windows and ~/Library/Application Support on macOS —
+    // the root of Composer's app-data tree in both.
+    match directories::BaseDirs::new() {
+        Some(base) => discover_in(base.config_dir()),
+        None => Vec::new(),
+    }
+}
+
+/// `discover`, parameterised on the app-data root so it can be tested against a temp layout.
+fn discover_in(config_dir: &Path) -> Vec<FoundCert> {
+    let mut out: Vec<FoundCert> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let src = if cfg!(windows) { "Composer (AppData)" } else { "Composer app data" };
+    let mut push = |path: std::path::PathBuf| {
+        let is_p12 = path.extension().is_some_and(|e| e.eq_ignore_ascii_case("p12") || e.eq_ignore_ascii_case("pfx"));
+        // A lone cert needs its key beside it; without one it isn't a usable identity.
+        let usable = is_p12 || path.with_extension("key").is_file();
+        if usable && path.is_file() && seen.insert(path.clone()) {
+            out.push(FoundCert {
+                label: file_label(&path),
+                kind: if is_p12 { "p12" } else { "pem" },
+                needs_password: is_p12,
+                source: src.to_string(),
+                path: path.to_string_lossy().into_owned(),
+            });
+        }
+    };
+    let dir = config_dir.join("Control4").join("Composer");
+    for name in ["composer.p12", "composer.pem", "client.p12", "client.pem"] {
+        push(dir.join(name));
+    }
+    // Any other .p12 Composer left in that folder (e.g. a renamed export).
+    if let Ok(entries) = std::fs::read_dir(&dir) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.extension().is_some_and(|x| x.eq_ignore_ascii_case("p12") || x.eq_ignore_ascii_case("pfx")) {
+                push(p);
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod discover_tests {
+    use super::discover_in;
+
+    #[test]
+    fn finds_composer_p12_and_pem_pair() {
+        let tmp = std::env::temp_dir().join(format!("oc-disc-{}", std::process::id()));
+        let dir = tmp.join("Control4").join("Composer");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("composer.p12"), b"not a real keystore").unwrap();
+        // A pem with a key beside it is usable; a lone pem (no .key) is skipped.
+        std::fs::write(dir.join("composer.pem"), b"cert").unwrap();
+        std::fs::write(dir.join("composer.key"), b"key").unwrap();
+        std::fs::write(dir.join("ca.pem"), b"ca only").unwrap();
+
+        let found = discover_in(&tmp);
+        let by = |name: &str| found.iter().find(|f| f.label == name);
+        let p12 = by("composer.p12").expect("composer.p12 found");
+        assert_eq!(p12.kind, "p12");
+        assert!(p12.needs_password);
+        let pem = by("composer.pem").expect("composer.pem (with key) found");
+        assert_eq!(pem.kind, "pem");
+        assert!(!pem.needs_password);
+        assert!(by("ca.pem").is_none(), "a cert with no sibling key is not a usable identity");
+
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+}
+
 fn pem(tag: &str, der: &[u8]) -> String {
     use std::fmt::Write;
     const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";

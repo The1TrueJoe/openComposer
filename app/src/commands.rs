@@ -81,6 +81,13 @@ pub async fn import_identity_files(app: S<'_>, paths: Vec<String>, password: Opt
     app.set_identity(id).map_err(err)
 }
 
+/// Client certificates found where Composer Pro keeps one, so the owner can reuse their dealer
+/// identity. Local and read-only (metadata, not keys); deliberately not an MCP/agent tool.
+#[tauri::command]
+pub async fn discover_certs() -> R<Vec<certs::FoundCert>> {
+    Ok(certs::discover())
+}
+
 #[tauri::command]
 pub async fn import_identity_p12(app: S<'_>, path: String, password: String) -> R<()> {
     let id = certs::from_p12(&PathBuf::from(path), &password).map_err(err)?;

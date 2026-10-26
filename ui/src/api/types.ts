@@ -27,6 +27,16 @@ export interface Config {
   agent: { provider: Provider; claude_path: string | null; codex_path: string | null; model: string | null };
 }
 
+/** A client certificate found where Composer Pro keeps one (app/src/certs.rs `FoundCert`). */
+export interface FoundCert {
+  path: string;
+  label: string;
+  /** "pem" (used as-is) or "p12" (asks for its password). */
+  kind: "pem" | "p12";
+  needs_password: boolean;
+  source: string;
+}
+
 export interface IdentityStatus {
   loaded: boolean;
   /** False while the stored certificate is being unlocked (macOS may be asking for keychain access). */

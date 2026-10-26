@@ -2,9 +2,9 @@
  *  a Director — shared by the connect wizard and Settings. */
 
 import { FileKey2, KeyRound, Radar, Plus, ShieldCheck } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { api, errText, type AccessMode, type Announcement, type IdentityStatus } from "../api";
+import { api, errText, type AccessMode, type Announcement, type FoundCert, type IdentityStatus } from "../api";
 import { useDropFiles } from "../lib/drop";
 import { baseName, pickFiles } from "../lib/files";
 import { cx } from "../lib/ui";
@@ -22,6 +22,10 @@ export function CertificateForm({ identity, onChanged }: { identity: IdentitySta
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Certificates Composer already has on this computer — offered so the owner reuses their
+  // dealer identity rather than exporting it. A .p12 still asks for its password below.
+  const [found, setFound] = useState<FoundCert[]>([]);
+  useEffect(() => { api.discoverCerts().then(setFound, () => setFound([])); }, []);
 
   const importPaths = async (paths: string[], pw: string | null = null) => {
     if (!paths.length) return;
@@ -60,6 +64,19 @@ export function CertificateForm({ identity, onChanged }: { identity: IdentitySta
         </div>
       )}
       {identity.error && <p className="err">{identity.error}</p>}
+      {found.length > 0 && (
+        <div className="cert-found">
+          <span className="dim small">Found on this computer</span>
+          {found.map((f) => (
+            <button key={f.path} className="cert-found-row" disabled={busy} title={f.path}
+                    onClick={() => void importPaths([f.path])}>
+              <FileKey2 size={14} strokeWidth={1.8} />
+              <span className="cert-found-name"><b>{f.label}</b><span className="dim small">{f.source}{f.needs_password ? " · needs its password" : ""}</span></span>
+              <span className="act small">Use</span>
+            </button>
+          ))}
+        </div>
+      )}
       <div ref={drop.ref} {...drop.handlers} className={cx("cert-drop", drop.over && "over")}>
         {busy ? <Spinner /> : <FileKey2 size={22} strokeWidth={1.5} />}
         <b>{identity.loaded ? "Drop a different certificate here" : "Drop the certificate and its key here"}</b>
