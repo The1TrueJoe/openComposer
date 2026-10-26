@@ -39,6 +39,12 @@ use crate::xml::escape;
 pub const TLS_PORT: u16 = 5021;
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// How openComposer identifies itself to a controller's HTTP services (the web API broker and
+/// driver web tabs). It is the honest product name and version, not a Composer build string:
+/// controllers accept a request on its client certificate and route, so the User-Agent only
+/// needs to be a sensible, truthful identifier. We deliberately do not impersonate Composer.
+pub const USER_AGENT: &str = concat!("openComposer/", env!("CARGO_PKG_VERSION"));
+
 #[derive(Debug, thiserror::Error)]
 pub enum SoapError {
     #[error("could not connect to {host}: {source}")]

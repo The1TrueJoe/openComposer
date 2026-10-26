@@ -37,6 +37,7 @@ fn web_client() -> &'static reqwest::Client {
     C.get_or_init(|| {
         reqwest::Client::builder()
             .use_preconfigured_tls(c4::soap::web_tls_config(None))
+            .user_agent(c4::soap::USER_AGENT)
             .timeout(std::time::Duration::from_secs(60))
             .build()
             .expect("http client")

@@ -7,9 +7,9 @@
  *  3. Connecting — and the project opens. */
 
 import { createColumnHelper } from "@tanstack/react-table";
-import { ArrowLeft, KeyRound, ArrowRight, Check, Plug, Plus, Radar, RefreshCw } from "lucide-react";
+import { ArrowLeft, Cable, KeyRound, ArrowRight, Check, Plug, Plus, Radar, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { api, errText, type Announcement, type AppStatus, type DirectorInfo, type SavedDirector } from "../api";
+import { api, errText, type Announcement, type AppStatus, type DirectorInfo, type SavedDirector, type SidecarDetection, type SidecarSession } from "../api";
 import { cx } from "../lib/ui";
 import { Spinner } from "./controls";
 import { DataTable } from "./DataTable";
@@ -38,6 +38,7 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
   const [scanning, setScanning] = useState(false);
   const [adding, setAdding] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
+  const [sidecar, setSidecar] = useState<SidecarDetection | null>(null);
 
   const scan = useCallback(async () => {
     setScanning(true);
@@ -50,6 +51,14 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
     }
   }, []);
   useEffect(() => { void scan(); }, [scan]);
+
+  // Is Composer running a remote-support session on this computer? If so, offer to connect
+  // through it. Read-only: this only looks at local interfaces and probes the Director port.
+  useEffect(() => {
+    let alive = true;
+    api.detectSidecar().then((d) => { if (alive) setSidecar(d); }).catch(() => {});
+    return () => { alive = false; };
+  }, []);
 
   /** `haveCert` skips the up-front check right after an import, before status refreshes. */
   const connect = async (t: Target, haveCert = status.identity.loaded) => {
@@ -87,6 +96,23 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
     setBusy(key);
     try {
       const d = await api.addDirector(f.host || `${f.model || "Controller"} (${f.address})`, f.address, "approve");
+      onChanged();
+      await connect({ id: d.id, name: d.name });
+    } catch (e) {
+      setErrors((x) => ({ ...x, [key]: errText(e) }));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  /** A detected Composer remote session: save it as a Director (if it isn't yet), then connect. */
+  const connectSidecar = async (s: SidecarSession) => {
+    const existing = directors.find((d) => d.host.toLowerCase() === s.director_addr.toLowerCase());
+    if (existing) return connect({ id: existing.id, name: existing.name });
+    const key = `sidecar:${s.director_addr}`;
+    setBusy(key);
+    try {
+      const d = await api.addDirector(`Composer session (${s.adapter_ip})`, s.director_addr, "approve");
       onChanged();
       await connect({ id: d.id, name: d.name });
     } catch (e) {
@@ -140,6 +166,36 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
             <p className="hint"><KeyRound size={13} strokeWidth={1.8} /> Unlocking your certificate — if macOS asks to use the keychain, choose Allow (or Always Allow).</p>
           )}
           <p className="lede">Pick the controller whose project you want to open.</p>
+
+          {sidecar && sidecar.sessions.length > 0 && (
+            <section className="connect-sec">
+              <div className="connect-head"><span className="row nowrap"><Cable size={13} strokeWidth={1.8} />Composer remote session</span></div>
+              <p className="hint">
+                openComposer can attach to Composer Pro's remote-support session as an additional standard client —
+                it doesn't replace Composer and doesn't change how the controller authenticates.
+              </p>
+              <div className="connect-list">
+                {sidecar.sessions.map((s) => {
+                  const key = `sidecar:${s.director_addr}`;
+                  return (
+                    <div key={s.director_addr} className="connect-row">
+                      <span className="connect-text">
+                        <b>Composer remote session detected</b>
+                        <span className="dim small">
+                          connect to <span className="mono">{s.director_addr}</span> (adapter {s.interface})
+                          {!s.reachable && " — no Director has answered yet"}
+                        </span>
+                        {errors[key] && <span className="err small">{errors[key]}</span>}
+                      </span>
+                      <button className="act small primary spread" disabled={!!busy} onClick={() => connectSidecar(s)}>
+                        {busy === key ? <Spinner /> : <Plug size={13} strokeWidth={1.8} />}Connect
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          )}
 
           <section className="connect-sec">
             <div className="connect-head">

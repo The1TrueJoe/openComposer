@@ -1114,6 +1114,12 @@ async function act(name: string, a: Args): Promise<unknown> {
       return { devices: SDDP.map((s): Announcement => ({ kind: "200 OK", primary_proxy: "", proxies: [], config_url: "", max_age: 1800,
         headers: { Host: s.host, Type: s.device_type }, ...s })) };
     }
+    case "detect_sidecar":
+      await sleep(250);
+      // The fixture backend has no real network: show the "nothing found" shape so the
+      // Connect screen's sidecar section can be looked at without a controller.
+      return { detected: false, any_reachable: false, sessions: [],
+        note: "No Composer remote-support relay found on this computer." };
     case "search_drivers": {
       await sleep(350);
       const text = String(a.text ?? "").toLowerCase();

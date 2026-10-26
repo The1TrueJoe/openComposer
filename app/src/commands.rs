@@ -264,6 +264,7 @@ pub async fn action(app: S<'_>, name: String, args: Option<Value>) -> R<Value> {
         "get_variables" => actions::variables(app, self::args(a)?).await,
         "network_status" => actions::network(app, self::args(a)?).await,
         "discover_sddp" => actions::discover_sddp(self::args(a)?).await,
+        "detect_sidecar" => actions::detect_sidecar().await,
         "zigbee" => actions::zigbee(app, req(a)?).await,
         "search_drivers" => actions::search_drivers(app, self::args(a)?).await,
         "list_backups" => Ok(actions::list_backups(app)),

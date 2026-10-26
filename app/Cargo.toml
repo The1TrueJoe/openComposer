@@ -12,6 +12,10 @@ chacha20poly1305 = "0.11.0"
 chrono = { version = "0.4.45", features = ["serde"] }
 directories = "6.0.0"
 futures-util = "0.3.34"
+# Sidecar detection enumerates this machine's network interfaces to spot Composer's
+# remote-support relay (a 10.123.x.y adapter). if-addrs wraps getifaddrs / GetAdaptersAddresses
+# so the same code works on macOS and the Windows PC that runs Composer.
+if-addrs = "0.14.0"
 hex = "0.4.3"
 keyring = "4.2.0"
 p12-keystore = "0.4.1"

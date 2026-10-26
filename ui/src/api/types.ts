@@ -117,6 +117,28 @@ export interface Announcement {
   director?: string | null;
 }
 
+/** A Composer Pro remote-support session detected on this computer (app/src/actions.rs
+ *  detect_sidecar / crates/c4/src/sidecar.rs). */
+export interface SidecarSession {
+  /** The virtual adapter's own IPv4 address (10.123.x.y). */
+  adapter_ip: string;
+  /** The interface it was found on. */
+  interface: string;
+  /** Address to add as a Director: `<adapter_ip>:5021`. */
+  director_addr: string;
+  /** Where the controller's web API is on the same relay. */
+  web_api_addr: string;
+  /** A Director answered on 5021 (a plain TCP probe). */
+  reachable: boolean;
+}
+
+export interface SidecarDetection {
+  detected: boolean;
+  any_reachable: boolean;
+  sessions: SidecarSession[];
+  note: string;
+}
+
 // ---- project views (app/src/views.rs) --------------------------------------------------------
 
 export type KindLabel = "project" | "site" | "building" | "floor" | "room" | "device" | "proxy" | "agent" | "item";

@@ -103,3 +103,26 @@ OPENCOMPOSER_DATA=/tmp/oc C4_CERT=… C4_KEY=… cargo run -p opencomposer --exa
   once there's a copy. Writes re-read it (`snapshot(true)`). `Session::watch` re-reads every 30 s
   while the session was used in the last 5 min and emits `project-changed` when it differs,
   ignoring encrypted values (Director re-encrypts driver passwords on every Upload).
+- Sidecar mode (`crates/c4/src/sidecar.rs`, `actions::detect_sidecar`, `detect_sidecar` tool,
+  Connect screen): openComposer can run alongside real Composer Pro and reach the owner's own
+  controller through Composer's open remote-support session, as another standard client — same
+  dealer certificate, same protocol, nothing worked around. While a session is up Composer
+  brings up a 10.123.x.y virtual adapter on the PC and relays the controller's ports there, so a
+  compatible client on that PC (or via an SSH/port forward to it) reaches the controller at that
+  local address. `candidates_from_ifaces` (pure, unit-tested) picks 10.123.x.y interfaces;
+  `director_listening` is a plain TCP probe of `<addr>:5021` (read-only, no TLS, no cert). The
+  action enumerates interfaces with `if-addrs` and returns candidate `director_addr`s; adding one
+  as a Director uses the existing host:port support (c76682c). The web API is derived from the
+  same host (`web_api_addr` unset → `split_addr(host)` on 443), as for any forwarded Director.
+  Mac-side path: forward the PC's 10.123.x.y:5021 to a local port and add `127.0.0.1:<port>`;
+  for the web API forward :443 too and set `web_api_addr` to that local address. Out of scope and
+  not done: reading/decrypting Composer's key store or touching the cloud relay's own auth.
+  Verified: the probe reaches a real Director through a host:port loopback relay, and detection
+  classification by unit test; untestable here — live detection of an actual 10.123 adapter (no
+  Composer remote session was available).
+- Transport parity: the SOAP side already matches a standard client (`category="composer"`,
+  mutual TLS with legacy RSA keys, pinned self-signed cert, NUL-terminated XML — unchanged). For
+  the HTTP side, the broker and driver-web-tab clients and `App::http` all send
+  `User-Agent: openComposer/<version>` (`c4::soap::USER_AGENT`): an honest identifier, not a
+  Composer build string — controllers accept on the cert and route, so the minimal truthful UA is
+  enough and we deliberately do not impersonate Composer.

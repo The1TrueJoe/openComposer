@@ -16,6 +16,7 @@ pub mod model;
 pub mod ops;
 pub mod program;
 pub mod sddp;
+pub mod sidecar;
 pub mod soap;
 pub mod takeover;
 pub mod xml;

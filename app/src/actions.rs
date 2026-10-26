@@ -328,6 +328,53 @@ pub async fn discover_sddp(a: SddpArgs) -> AppResult<Value> {
     Ok(json!({ "devices": found }))
 }
 
+/// Look for a Composer Pro remote-support session on this computer and report the local
+/// address its controller is reachable at through the relay. Read-only and side-effect-free:
+/// it inspects this machine's own network interfaces for Composer's 10.123.x.y virtual adapter
+/// and makes a plain TCP connection (no TLS handshake, no certificate) to see whether a
+/// Director is listening. Add a reported `director_addr` as a Director to connect through it —
+/// openComposer then talks to the controller as a standard client, exactly as Composer does.
+pub async fn detect_sidecar() -> AppResult<Value> {
+    let ifaces = if_addrs::get_if_addrs()
+        .map_err(|e| AppError::Other(format!("couldn't read this computer's network interfaces: {e}")))?;
+    let v4: Vec<(String, std::net::Ipv4Addr)> = ifaces
+        .iter()
+        .filter_map(|i| match i.ip() {
+            std::net::IpAddr::V4(ip) => Some((i.name.clone(), ip)),
+            std::net::IpAddr::V6(_) => None,
+        })
+        .collect();
+    let candidates = c4::sidecar::candidates_from_ifaces(v4.iter().map(|(n, ip)| (n.as_str(), *ip)));
+    // Probe each in parallel with a short timeout: a plain connect to the Director port.
+    let mut set = tokio::task::JoinSet::new();
+    for c in candidates {
+        set.spawn(async move {
+            let reachable = c4::sidecar::director_listening(&c.director_addr, Duration::from_millis(600)).await;
+            let mut v = serde_json::to_value(&c).unwrap_or_default();
+            v["reachable"] = json!(reachable);
+            v
+        });
+    }
+    let mut sessions = Vec::new();
+    while let Some(Ok(v)) = set.join_next().await {
+        sessions.push(v);
+    }
+    sessions.sort_by(|a, b| a["adapter_ip"].as_str().cmp(&b["adapter_ip"].as_str()));
+    let any_reachable = sessions.iter().any(|s| s["reachable"] == json!(true));
+    let note = if sessions.is_empty() {
+        "No Composer remote-support relay found on this computer. Start a remote session in \
+         Composer Pro on this PC, or forward the PC's 10.123.x.y:5021 to a local port here and \
+         add 127.0.0.1:<port> as a Director."
+    } else if any_reachable {
+        "Add the director_addr of a reachable session as a Director (approve-each-write or \
+         read-only as you like) and connect; its web API is derived from the same host."
+    } else {
+        "A Composer relay adapter is present but no Director answered on 5021 — the remote \
+         session may be starting up or already closed."
+    };
+    Ok(json!({ "detected": !sessions.is_empty(), "any_reachable": any_reachable, "sessions": sessions, "note": note }))
+}
+
 pub async fn zigbee(app: &Arc<App>, a: ZigbeeArgs) -> AppResult<Value> {
     let s = app.session(a.director.as_deref()).await?;
     Ok(s.director.zigbee(a.query).await?)

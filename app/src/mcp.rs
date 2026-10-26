@@ -131,6 +131,14 @@ impl OpenComposerMcp {
         self.run("discover_sddp", String::new(), actions::discover_sddp(a)).await
     }
 
+    #[tool(description = "Detect a Composer Pro remote-support session on this computer (its 10.123.x.y relay adapter) \
+        and return the local address a controller is reachable at through it. Read-only: inspects this machine's \
+        network interfaces and probes the Director port with a plain TCP connect. Add a reported director_addr as a \
+        Director to connect through the session as a standard client.", annotations(read_only_hint = true))]
+    async fn detect_sidecar(&self) -> Result<CallToolResult, McpError> {
+        self.run("detect_sidecar", String::new(), actions::detect_sidecar()).await
+    }
+
     #[tool(description = "Zigbee mesh information from the controller: server, mesh, nodes or zaps.",
         annotations(read_only_hint = true))]
     async fn zigbee(&self, Parameters(a): Parameters<ZigbeeArgs>) -> Result<CallToolResult, McpError> {

@@ -3,7 +3,7 @@ import type {
   DirectorInfo, DriverDoc, Events, ItemDetail, McpStatus, NetworkView, Op, Outcome, Overview,
   ProgrammingEvent, VariableRow, Provider, ProviderStatus, SavedDirector, AccessMode, TreeNode, ZigbeeQuery, BackupResult,
   AddDriverArgs, ControllerDriver, LibraryDriver, UiContext, CommandParam, DeviceState, Effort, AuthRequest, McpGrant, DriverTab, AgentView,
-  TakeoverStatus, TakeoverParams, TakeoverReport, RevertParams,
+  TakeoverStatus, TakeoverParams, TakeoverReport, RevertParams, SidecarDetection,
 } from "./types";
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -100,6 +100,8 @@ export const api = {
   variables: (device?: number, hidden = false) => action<{ variables: VariableRow[] }>("get_variables", { device, hidden }),
   network: () => action<NetworkView>("network_status"),
   sddp: (seconds?: number, pattern?: string) => action<{ devices: Announcement[] }>("discover_sddp", { seconds, pattern }),
+  /** Detect a Composer Pro remote-support session on this computer (its 10.123.x.y relay). */
+  detectSidecar: () => action<SidecarDetection>("detect_sidecar"),
   zigbee: (query: ZigbeeQuery) => action<unknown>("zigbee", { query }),
   searchDrivers: (q: { text?: string; search_type?: string; rows?: number }) =>
     action<{ total: number; drivers: DriverDoc[] }>("search_drivers", { ...q, text: q.text ?? "" }),

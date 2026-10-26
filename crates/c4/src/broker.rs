@@ -12,7 +12,7 @@
 
 use std::time::Duration;
 
-use crate::soap::{Identity, SoapError, tls_config};
+use crate::soap::{Identity, SoapError, USER_AGENT, tls_config};
 
 #[derive(Debug, thiserror::Error)]
 pub enum BrokerError {
@@ -42,6 +42,7 @@ impl Broker {
         let (config, seen) = tls_config(identity, pin)?;
         let http = reqwest::Client::builder()
             .use_preconfigured_tls(config)
+            .user_agent(USER_AGENT)
             .timeout(Duration::from_secs(120))
             .build()
             .map_err(|source| BrokerError::Http { addr: addr.into(), source })?;
