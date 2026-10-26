@@ -286,7 +286,9 @@ impl App {
             }
         }
         let identity = self.identity_for_use().await?;
-        let addr = saved.web_api_addr.clone().unwrap_or_else(|| saved.host.clone());
+        // A Director reached through a forwarded port has its web API somewhere else; without a
+        // web API address of its own, assume the usual port on the same host.
+        let addr = saved.web_api_addr.clone().unwrap_or_else(|| c4::soap::split_addr(&saved.host, 0).0);
         let b = Arc::new(
             c4::broker::Broker::connect(&addr, &identity, saved.web_api_fingerprint.as_deref())
                 .await

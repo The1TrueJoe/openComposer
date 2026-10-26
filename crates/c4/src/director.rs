@@ -273,7 +273,8 @@ pub struct Director {
 
 impl Director {
     pub async fn connect(host: &str, identity: &Identity, pin: Option<&str>) -> Result<Self> {
-        let conn = Connection::connect(host, TLS_PORT, identity, pin).await?;
+        let (name, port) = crate::soap::split_addr(host, TLS_PORT);
+        let conn = Connection::connect(&name, port, identity, pin).await?;
         let ver = conn.call(Call::new("GetVersionInfo")).await?;
         let dialect = Dialect::from_version_info(&ver.raw)
             .ok_or_else(|| DirectorError::Other("GetVersionInfo did not include a Director version".into()))?;

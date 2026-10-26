@@ -390,6 +390,26 @@ pub fn web_tls_config_seen(pin: Option<&str>) -> (rustls::ClientConfig, Arc<StdM
     (config, seen)
 }
 
+/// `host`, `host:port`, `[v6]` or `[v6]:port` → (host, port). A Director's address carries a
+/// port when it's reached through a forward, e.g. an SSH tunnel to a remote-support relay
+/// (`127.0.0.1:15021`); a bare IPv6 address (several colons) is taken as a host.
+pub fn split_addr(addr: &str, default_port: u16) -> (String, u16) {
+    let a = addr.trim();
+    if let Some(rest) = a.strip_prefix('[') {
+        if let Some((h, tail)) = rest.split_once(']') {
+            let port = tail.strip_prefix(':').and_then(|p| p.parse().ok()).unwrap_or(default_port);
+            return (h.to_string(), port);
+        }
+    }
+    match a.rsplit_once(':') {
+        Some((h, p)) if !h.contains(':') => match p.parse() {
+            Ok(port) => (h.to_string(), port),
+            Err(_) => (a.to_string(), default_port),
+        },
+        _ => (a.to_string(), default_port),
+    }
+}
+
 /// Try every address a name resolves to at once and keep the first that answers.
 /// `.local` names often resolve to an IPv6 link-local address that never connects,
 /// or to an interface on another subnet, before the one that works.
@@ -508,6 +528,20 @@ impl ServerCertVerifier for PinVerifier {
 
     fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
         self.provider.signature_verification_algorithms.supported_schemes()
+    }
+}
+
+#[cfg(test)]
+mod addr_tests {
+    use super::split_addr;
+
+    #[test]
+    fn addresses_with_and_without_ports() {
+        assert_eq!(split_addr("192.168.1.172", 5021), ("192.168.1.172".into(), 5021));
+        assert_eq!(split_addr("127.0.0.1:15021", 5021), ("127.0.0.1".into(), 15021));
+        assert_eq!(split_addr("optiplex.local", 5021), ("optiplex.local".into(), 5021));
+        assert_eq!(split_addr("fe80::1", 5021), ("fe80::1".into(), 5021));
+        assert_eq!(split_addr("[fe80::1]:6000", 5021), ("fe80::1".into(), 6000));
     }
 }
 
