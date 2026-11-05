@@ -1,9 +1,9 @@
 import {
-  ArrowRight, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, EyeOff, Network, Package, Plug, Sparkles, User,
+  ArrowRight, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, EyeOff, MapPin, Network, Package, Plug, Sparkles, User,
 } from "lucide-react";
 import { Fragment, memo, useMemo, useState } from "react";
 import type { Change, CodeLine, Diff, Endpoint, ItemRef } from "../api";
-import { effectOf, group, inlineDiff, isCascade, subjectOf, tally, type Effect, type SectionId, type Seg } from "../lib/diff";
+import { effectOf, groupByLocation, inlineDiff, isCascade, subjectOf, tally, type Effect, type LocGroup, type Seg } from "../lib/diff";
 import { ago, cx, dateTime, plural } from "../lib/ui";
 import { DiffGraph } from "./DiffGraph";
 import { KindIcon } from "./icons";
@@ -42,10 +42,12 @@ export function DiffView({ diff, header, graph = true, empty = "No differences."
     const q = filter.trim().toLowerCase();
     return q ? diff.changes.filter((c) => searchText(c).includes(q)) : diff.changes;
   }, [diff.changes, filter]);
-  const sections = useMemo(() => group(shown), [shown]);
-  const [closed, setClosed] = useState<Set<SectionId>>(
-    () => new Set(group(diff.changes).filter((s) => s.changes.length > COLLAPSE_OVER).map((s) => s.id)));
-  const [showGraph, setShowGraph] = useState(true);
+  const groups = useMemo(() => groupByLocation(shown), [shown]);
+  const [closed, setClosed] = useState<Set<string>>(
+    () => new Set(groupByLocation(diff.changes).filter((g) => g.changes.length > COLLAPSE_OVER).map((g) => g.key)));
+  // The device map is a secondary, optional view — collapsed by default so the diff opens on
+  // the changes themselves, not a diagram competing for attention.
+  const [showGraph, setShowGraph] = useState(false);
   // Recount rather than trust `summary`: verification side effects arrive with it zeroed.
   const t = useMemo(() => tally(diff.changes), [diff.changes]);
   const hasConnections = diff.changes.some((c) => c.kind === "connection_added" || c.kind === "connection_removed");
@@ -69,10 +71,10 @@ export function DiffView({ diff, header, graph = true, empty = "No differences."
             </button>
           </Tip>
         )}
-        {sections.length > 1 && (
+        {groups.length > 1 && (
           <Tip text={closed.size ? "Expand all" : "Collapse all"}>
             <button className="icon-btn" aria-label={closed.size ? "Expand all" : "Collapse all"}
-                    onClick={() => setClosed(closed.size ? new Set() : new Set(sections.map((s) => s.id)))}>
+                    onClick={() => setClosed(closed.size ? new Set() : new Set(groups.map((g) => g.key)))}>
               {closed.size ? <ChevronsUpDown size={14} strokeWidth={1.8} /> : <ChevronsDownUp size={14} strokeWidth={1.8} />}
             </button>
           </Tip>
@@ -81,9 +83,9 @@ export function DiffView({ diff, header, graph = true, empty = "No differences."
       {graph && hasConnections && showGraph && <DiffGraph changes={diff.changes} />}
       {!diff.changes.length && <p className="empty dv-empty">{empty}</p>}
       {!!diff.changes.length && !shown.length && <p className="empty dv-empty">No change matches “{filter}”.</p>}
-      {sections.map((s) => (
-        <Section key={s.id} id={s.id} title={s.title} changes={s.changes} open={!closed.has(s.id)}
-                 onToggle={() => setClosed((c) => { const n = new Set(c); if (n.has(s.id)) n.delete(s.id); else n.add(s.id); return n; })} />
+      {groups.map((g) => (
+        <LocationGroup key={g.key} group={g} open={!closed.has(g.key)}
+                 onToggle={() => setClosed((c) => { const n = new Set(c); if (n.has(g.key)) n.delete(g.key); else n.add(g.key); return n; })} />
       ))}
     </div>
   );
@@ -119,18 +121,20 @@ export function SourceBadge({ source }: { source: string }) {
   return <span className="source-badge"><Icon size={12} strokeWidth={1.8} />{label}</span>;
 }
 
-function Section({ id, title, changes, open, onToggle }: {
-  id: SectionId; title: string; changes: Change[]; open: boolean; onToggle: () => void;
-}) {
+/** One location's changes, under a header that names the place once — like a git file header,
+ *  so the path isn't repeated on every row. Property changes stay grouped under their device. */
+function LocationGroup({ group: g, open, onToggle }: { group: LocGroup; open: boolean; onToggle: () => void }) {
   const [limit, setLimit] = useState(PAGE);
-  const t = tally(changes);
-  const visible = changes.slice(0, limit);
+  const t = tally(g.changes);
+  const visible = g.changes.slice(0, limit);
+  const props = visible.filter((c): c is Extract<Change, { kind: "property_changed" }> => c.kind === "property_changed");
+  const rest = visible.filter((c) => c.kind !== "property_changed");
   return (
-    <section className={cx("dv-sec", `dv-${id}`)}>
+    <section className={cx("dv-sec", `dv-loc-${g.kind}`)}>
       <button className="dv-sec-head" onClick={onToggle} aria-expanded={open}>
         {open ? <ChevronDown size={13} strokeWidth={1.8} /> : <ChevronRight size={13} strokeWidth={1.8} />}
-        <span className="dv-sec-title">{title}</span>
-        <span className="dv-count">{changes.length}</span>
+        <LocHeader group={g} />
+        <span className="dv-count">{g.changes.length}</span>
         <span className="dv-mini">
           {!!t.added && <span className="added">+{t.added}</span>}
           {!!t.removed && <span className="removed">−{t.removed}</span>}
@@ -139,15 +143,33 @@ function Section({ id, title, changes, open, onToggle }: {
       </button>
       {open && (
         <div className="dv-rows">
-          {id === "properties" ? <PropertyRows changes={visible} /> : visible.map((c, i) => <Row key={i} change={c} />)}
-          {changes.length > limit && (
+          {rest.map((c, i) => <Row key={i} change={c} hideCrumbs />)}
+          {props.length > 0 && <PropertyRows changes={props} hideCrumbs />}
+          {g.changes.length > limit && (
             <button className="dv-more" onClick={() => setLimit(limit + PAGE * 4)}>
-              Show {Math.min(PAGE * 4, changes.length - limit)} more of {changes.length - limit} remaining
+              Show {Math.min(PAGE * 4, g.changes.length - limit)} more of {g.changes.length - limit} remaining
             </button>
           )}
         </div>
       )}
     </section>
+  );
+}
+
+/** The group header: the location path as quiet breadcrumbs (a git-style "file" line), or a plain
+ *  label for the Connections / Project groups. */
+function LocHeader({ group: g }: { group: LocGroup }) {
+  if (g.kind !== "location") return <span className="dv-loc-title">{g.path[0]}</span>;
+  return (
+    <span className="dv-loc-title">
+      <MapPin size={12} strokeWidth={1.8} className="dv-loc-ic" />
+      {g.path.map((p, i) => (
+        <Fragment key={i}>
+          {i > 0 && <span className="sep">›</span>}
+          <span className={cx(i === g.path.length - 1 && "dv-loc-leaf")}>{p}</span>
+        </Fragment>
+      ))}
+    </span>
   );
 }
 
@@ -196,7 +218,7 @@ export function ValueChange({ from, to }: { from: string | null; to: string | nu
 
 const Segs = ({ segs }: { segs: Seg[] }) => <>{segs.map((s, i) => s.changed ? <mark key={i}>{s.text}</mark> : <span key={i}>{s.text}</span>)}</>;
 
-const Row = memo(function Row({ change: c }: { change: Change }) {
+const Row = memo(function Row({ change: c, hideCrumbs }: { change: Change; hideCrumbs?: boolean }) {
   const effect = effectOf(c);
   const cls = cx("dv-row", effect, isCascade(c) && "cascade");
   switch (c.kind) {
@@ -208,7 +230,7 @@ const Row = memo(function Row({ change: c }: { change: Change }) {
           <Name item={c.item} driver={c.driver} strike={c.kind === "item_removed"} />
           <span className="tag">{typeof c.item.item_kind === "string" ? c.item.item_kind : "item"}</span>
           {c.descendants > 0 && <span className="tag">+{c.descendants} inside</span>}
-          <Crumbs parts={c.item.location} />
+          {!hideCrumbs && <Crumbs parts={c.item.location} />}
           {c.driver && <code className="dv-driver">{c.driver}</code>}
         </div>
       );
@@ -219,7 +241,7 @@ const Row = memo(function Row({ change: c }: { change: Change }) {
           <span className="dv-name"><span className="dv-ic"><KindIcon kind={c.item.item_kind} /></span></span>
           <ValueChange from={c.from} to={c.to} />
           <span className="tag">renamed</span>
-          <Crumbs parts={c.item.location} />
+          {!hideCrumbs && <Crumbs parts={c.item.location} />}
         </div>
       );
     case "item_moved":
@@ -242,7 +264,7 @@ const Row = memo(function Row({ change: c }: { change: Change }) {
           <Name item={c.item} driver={c.to} />
           <span className="tag">driver</span>
           <ValueChange from={c.from} to={c.to} />
-          <Crumbs parts={c.item.location} />
+          {!hideCrumbs && <Crumbs parts={c.item.location} />}
         </div>
       );
     case "connection_added":
@@ -351,7 +373,7 @@ const Row = memo(function Row({ change: c }: { change: Change }) {
 
 /** Properties grouped under their item: ten changed properties of one driver read as one
  *  device being reconfigured, not ten unrelated things. */
-function PropertyRows({ changes }: { changes: Change[] }) {
+function PropertyRows({ changes, hideCrumbs }: { changes: Change[]; hideCrumbs?: boolean }) {
   const groups = useMemo(() => {
     const out: { item: ItemRef; rows: Extract<Change, { kind: "property_changed" }>[] }[] = [];
     for (const c of changes) {
@@ -366,7 +388,7 @@ function PropertyRows({ changes }: { changes: Change[] }) {
     <>
       {groups.map((g, i) => (
         <div key={i} className="dv-pgroup">
-          <div className="dv-pitem"><Name item={g.item} /><Crumbs parts={g.item.location} /></div>
+          <div className="dv-pitem"><Name item={g.item} />{!hideCrumbs && <Crumbs parts={g.item.location} />}</div>
           {g.rows.map((c, j) => (
             <div key={j} className={cx("dv-row changed", c.from == null && "added", c.to == null && "removed")}>
               <Gutter effect={c.from == null ? "added" : c.to == null ? "removed" : "changed"} />

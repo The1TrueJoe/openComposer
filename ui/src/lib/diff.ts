@@ -57,6 +57,38 @@ export function group(changes: readonly Change[]): { id: SectionId; title: strin
   return SECTIONS.filter((s) => by.has(s.id)).map((s) => ({ ...s, changes: by.get(s.id)! }));
 }
 
+export interface LocGroup {
+  key: string;
+  /** The location path, shown once as the group header. ["Connections"]/["Project"] for specials. */
+  path: string[];
+  kind: "location" | "connections" | "other";
+  changes: Change[];
+}
+
+/** Changes grouped by where they live — the subject's location path — so the path is shown once
+ *  as a header, like a git file header, instead of repeated on every row. Connections (which join
+ *  two places) and the rare change with no location get their own groups, after the locations. */
+export function groupByLocation(changes: readonly Change[]): LocGroup[] {
+  const by = new Map<string, Change[]>();
+  const meta = new Map<string, { path: string[]; kind: LocGroup["kind"] }>();
+  for (const c of changes) {
+    let key: string, path: string[], kind: LocGroup["kind"];
+    if (c.kind === "connection_added" || c.kind === "connection_removed") {
+      key = "\u0000conn"; path = ["Connections"]; kind = "connections";
+    } else {
+      const subj = subjectOf(c);
+      if (subj && subj.location.length) { path = subj.location; key = path.join("\u0001"); kind = "location"; }
+      else { key = "\u0000other"; path = ["Project"]; kind = "other"; }
+    }
+    if (!by.has(key)) { by.set(key, []); meta.set(key, { path, kind }); }
+    by.get(key)!.push(c);
+  }
+  const rank = (k: LocGroup["kind"]) => (k === "location" ? 0 : k === "connections" ? 1 : 2);
+  return [...by.entries()]
+    .map(([key, cs]) => ({ key, ...meta.get(key)!, changes: cs }))
+    .sort((a, b) => rank(a.kind) - rank(b.kind) || a.path.join("/").localeCompare(b.path.join("/")));
+}
+
 export function tally(changes: readonly Change[]): Record<Effect, number> {
   const t = { added: 0, removed: 0, changed: 0 };
   for (const c of changes) t[effectOf(c)]++;
