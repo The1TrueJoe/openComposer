@@ -105,10 +105,13 @@ export default function App() {
       const i = list.findIndex((x) => x.id === a.id);
       return i < 0 ? [a, ...list] : list.map((x) => (x.id === a.id ? a : x));
     });
-    // A change you just asked for: its card is the next thing you want to see.
+    // A change you just made in the UI: on an approve-mode director its card is the next thing
+    // you want to see, but on an auto-apply (test) director it just applies — so don't pop the
+    // approvals drawer for your own edit there.
     if (a.status === "pending" && a.source === UI_SOURCE) {
       ours.current.add(a.id);
-      setDrawer(true);
+      const dir = status?.config.directors.find((d) => d.id === a.director_id);
+      if (dir?.mode !== "auto") setDrawer(true);
     }
   });
   useBackendEvent("attention", (n) => {
