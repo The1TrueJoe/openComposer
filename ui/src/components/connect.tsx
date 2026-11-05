@@ -7,8 +7,9 @@
  *  3. Connecting — and the project opens. */
 
 import { createColumnHelper } from "@tanstack/react-table";
-import { ArrowLeft, Cable, KeyRound, ArrowRight, Check, Plug, Plus, Radar, RefreshCw } from "lucide-react";
+import { ArrowLeft, Cable, KeyRound, ArrowRight, Check, Plug, Plus, Radar, RefreshCw, ShieldCheck } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { toast } from "sonner";
 import { api, errText, type Announcement, type AppStatus, type DirectorInfo, type SavedDirector, type SidecarDetection, type SidecarSession } from "../api";
 import { cx } from "../lib/ui";
 import { Spinner } from "./controls";
@@ -16,17 +17,21 @@ import { DataTable } from "./DataTable";
 import { Tip } from "./Dialogs";
 import { AddDirectorForm, CertificateForm } from "./setup";
 import { ReadOnlyLock } from "./shell";
+import { TakeoverWizard } from "./TakeoverWizard";
 
-/** Errors that mean "this controller wants a (different) client certificate". */
-const NEEDS_CERT = /certificate|access denied|handshake|tls/i;
+/** A failure that means the controller couldn't be reached at all (a network problem), as
+ *  opposed to it answering and rejecting our certificate. Only changes the wording on the help
+ *  step — every failure lands there, and every failure offers the takeover. */
+const UNREACHABLE = /could not connect|no route|timed out|timeout|unreachable|refused/i;
 
-type Target = { id: string; name: string };
+type Target = { id: string; name: string; host?: string };
 /** How to reach the controller, chosen in step 1; step 2 shows what that method finds. */
 type Method = "network" | "sidecar" | "address";
 type Step =
   | { kind: "method" }
   | { kind: "controller"; method: Method }
   | { kind: "certificate"; target: Target; why: string | null }
+  | { kind: "takeover"; target: Target; why: string | null }
   | { kind: "connecting"; target: Target };
 
 const STEPS = ["Connection", "Controller", "Certificate", "Open project"] as const;
@@ -80,12 +85,12 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
       onEnter();
     } catch (e) {
       const msg = errText(e);
-      if (NEEDS_CERT.test(msg)) {
-        setStep({ kind: "certificate", target: t, why: msg });
-      } else {
-        setErrors((x) => ({ ...x, [t.id]: msg }));
-        setStep({ kind: "controller", method: lastMethod });
-      }
+      // Show the failure as a toast, and land on the help step — it offers a certificate to
+      // import and, for a controller you own that won't trust ours, the takeover wizard. The
+      // toast carries the takeover as a quick action too, so it's one click from the error.
+      toast.error(msg, { action: { label: "Take over", onClick: () => setStep({ kind: "takeover", target: t, why: msg }) } });
+      setErrors((x) => ({ ...x, [t.id]: msg }));
+      setStep({ kind: "certificate", target: t, why: msg });
     }
   };
 
@@ -95,13 +100,13 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
   /** A controller from the scan: save it (if it isn't yet), then connect. */
   const connectFound = async (f: Announcement) => {
     const existing = savedFor(f);
-    if (existing) return connect({ id: existing.id, name: existing.name });
+    if (existing) return connect({ id: existing.id, name: existing.name, host: existing.host });
     const key = `found:${f.address}`;
     setBusy(key);
     try {
       const d = await api.addDirector(f.host || `${f.model || "Controller"} (${f.address})`, f.address, "approve");
       onChanged();
-      await connect({ id: d.id, name: d.name });
+      await connect({ id: d.id, name: d.name, host: d.host });
     } catch (e) {
       setErrors((x) => ({ ...x, [key]: errText(e) }));
     } finally {
@@ -112,13 +117,13 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
   /** A detected Composer remote session: save it as a Director (if it isn't yet), then connect. */
   const connectSidecar = async (s: SidecarSession) => {
     const existing = directors.find((d) => d.host.toLowerCase() === s.director_addr.toLowerCase());
-    if (existing) return connect({ id: existing.id, name: existing.name });
+    if (existing) return connect({ id: existing.id, name: existing.name, host: existing.host });
     const key = `sidecar:${s.director_addr}`;
     setBusy(key);
     try {
       const d = await api.addDirector(`Composer session (${s.adapter_ip})`, s.director_addr, "approve");
       onChanged();
-      await connect({ id: d.id, name: d.name });
+      await connect({ id: d.id, name: d.name, host: d.host });
     } catch (e) {
       setErrors((x) => ({ ...x, [key]: errText(e) }));
     } finally {
@@ -135,6 +140,11 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
     .sort((a, b) => (a.id === first ? -1 : b.id === first ? 1 : a.name.localeCompare(b.name)));
 
   const at = step.kind === "method" ? 0 : step.kind === "controller" ? 1 : step.kind === "certificate" ? 2 : 3;
+  // The help step (kind "certificate") is reached both to pick a first certificate (why === null)
+  // and after any failed connection (why set). `unreachable` is a network failure, where the
+  // takeover can't help until the controller answers; otherwise the controller refused our cert.
+  const certWhy = step.kind === "certificate" ? step.why : null;
+  const certUnreachable = !!certWhy && UNREACHABLE.test(certWhy);
   const sidecarReady = !!sidecar && sidecar.sessions.length > 0;
   /** Jump to step 2 for a chosen method. */
   const choose = (method: Method) => { setLastMethod(method); setStep({ kind: "controller", method }); };
@@ -159,13 +169,23 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
   return (
     <div className="connect">
       <div className="connect-card">
-        <ol className="wizard-steps">
+        {step.kind === "takeover" && (
+          <TakeoverWizard
+            host={step.target.host ?? directors.find((d) => d.id === step.target.id)?.host ?? ""}
+            name={step.target.name}
+            onCancel={() => setStep({ kind: "certificate", target: step.target, why: step.why })}
+            onConnect={() => void connect(step.target, true)}
+            refreshStatus={onChanged}
+          />
+        )}
+
+        {step.kind !== "takeover" && <ol className="wizard-steps">
           {STEPS.map((label, i) => (
             <li key={label} className={cx(i === at && "on", i < at && "done")}>
               <span className="wizard-n">{i < at ? <Check size={12} strokeWidth={2.2} /> : i + 1}</span>{label}
             </li>
           ))}
-        </ol>
+        </ol>}
 
         {step.kind === "method" && <>
           <h1>Connect to a Director</h1>
@@ -279,13 +299,35 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
         </>}
 
         {step.kind === "certificate" && <>
-          <h1>Certificate for {step.target.name}</h1>
+          <h1>{!certWhy ? `Certificate for ${step.target.name}` : certUnreachable ? `Couldn't reach ${step.target.name}` : `${step.target.name} refused the connection`}</h1>
           <p className="lede">
-            {step.why
-              ? <>The controller refused the connection ({step.why}). Use a client certificate it trusts.</>
-              : <>Controllers only talk to a client holding a certificate they trust: a <code>.pem</code> with its <code>.key</code>, or a <code>.p12</code>. openComposer doesn't include one.</>}
+            {!certWhy
+              ? <>Controllers only talk to a client holding a certificate they trust: a <code>.pem</code> with its <code>.key</code>, or a <code>.p12</code>. openComposer doesn't include one.</>
+              : certUnreachable
+                ? <>openComposer couldn't reach the controller ({certWhy}). Check it's powered on and on the same network as this computer. If you own it, you can take it over so it trusts openComposer's certificate once it's reachable.</>
+                : <>The controller refused the connection ({certWhy}). Use a client certificate it trusts — or, if you own it, take it over so it trusts openComposer's.</>}
           </p>
           <CertificateForm identity={status.identity} onChanged={() => { onChanged(); void connect(step.target, true); }} />
+          {/* Every failed connection offers the takeover: a controller you own that won't trust our
+              certificate (a factory-restored one won't) accepts it once openComposer's authority is
+              installed. Hidden only on the first-certificate case (why === null), so it doesn't get in
+              the way of the ordinary "import a cert" path. */}
+          {certWhy && (
+            <div className="connect-takeover">
+              <ShieldCheck size={15} strokeWidth={1.8} />
+              <div className="connect-text">
+                <b>Own this controller? Take it over.</b>
+                <span className="dim small">
+                  Installs openComposer's certificate authority on the controller so the certificate
+                  it issues is trusted — what a factory-restored controller needs. It changes the
+                  controller and reboots it, so do this only on hardware you own{certUnreachable ? ", and only once it's reachable on the network" : ""}.
+                </span>
+              </div>
+              <button className="act small primary spread" onClick={() => setStep({ kind: "takeover", target: step.target, why: step.why })}>
+                <ShieldCheck size={13} strokeWidth={1.8} />Take over this controller
+              </button>
+            </div>
+          )}
           <BackFoot onBack={() => setStep({ kind: "controller", method: lastMethod })} />
         </>}
 

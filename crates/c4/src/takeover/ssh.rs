@@ -106,6 +106,67 @@ pub fn command_line(user: &str, host: &str, auth: &Auth) -> Result<(String, Vec<
 /// Retries through the ~1-in-10 spurious login refusal these controllers exhibit.
 const AUTH_TRIES: usize = 3;
 
+/// What an unauthenticated SSH probe of a controller reveals about its takeover era — read
+/// from the auth methods its sshd offers, without ever logging in. A controller that still
+/// offers `password` runs pre-4.2 firmware (password SSH on); one offering only `publickey`
+/// is OS 4.2+, where password SSH is off until the account bootstrap re-enables it. This is
+/// the one era signal available without the certificate (the OS version itself is only in the
+/// authenticated SOAP `GetVersionInfo`, which a to-be-taken-over controller refuses).
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct EraProbe {
+    /// The controller's sshd answered on :22.
+    pub reachable: bool,
+    /// Its sshd offers password auth — i.e. pre-4.2 firmware.
+    pub password_auth: bool,
+    /// The takeover era this implies: "older" (password SSH on, pre-4.2) or "modern" (OS 4.2+,
+    /// bootstrap needed), or "unknown" when the probe couldn't read the methods.
+    pub era: &'static str,
+    /// The SSH identification string, e.g. "dropbear_2020.81" — informational only.
+    pub banner: Option<String>,
+}
+
+/// Probe a controller's sshd for the takeover era without authenticating. `ssh` with
+/// `PreferredAuthentications=none` sends a single "none" request; the server answers with the
+/// methods it will accept ("Permission denied (publickey,password)."), which `ssh` prints to
+/// stderr before exiting. No password is tried and no session opens.
+pub fn probe_era(host: &str) -> EraProbe {
+    let mut c = Command::new("ssh");
+    c.args(legacy_opts());
+    c.args([
+        "-v",
+        "-o", "PreferredAuthentications=none",
+        "-o", "BatchMode=yes",
+        "-o", "NumberOfPasswordPrompts=0",
+    ]);
+    c.arg(format!("root@{host}"));
+    c.arg("true");
+    c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped());
+    let out = match c.output() {
+        Ok(o) => o,
+        Err(_) => return EraProbe { reachable: false, password_auth: false, era: "unknown", banner: None },
+    };
+    let err = String::from_utf8_lossy(&out.stderr);
+    // "debug1: Remote protocol version 2.0, remote software version dropbear_2020.81"
+    let banner = err.lines().find_map(|l| {
+        let marker = "remote software version ";
+        l.find(marker).map(|i| l[i + marker.len()..].trim().to_string())
+    });
+    // "root@host: Permission denied (publickey,password)."
+    let methods = err.lines().find_map(|l| {
+        let i = l.find("Permission denied (")?;
+        let rest = &l[i + "Permission denied (".len()..];
+        rest.find(')').map(|j| rest[..j].to_string())
+    });
+    match methods {
+        Some(m) => {
+            let password = m.split(',').any(|x| matches!(x.trim(), "password" | "keyboard-interactive"));
+            EraProbe { reachable: true, password_auth: password, era: if password { "older" } else { "modern" }, banner }
+        }
+        // No methods line: reached sshd only if we saw its banner, else it never answered.
+        None => EraProbe { reachable: banner.is_some(), password_auth: false, era: "unknown", banner },
+    }
+}
+
 impl Ssh {
     pub fn new(host: impl Into<String>, user: impl Into<String>, auth: Auth) -> Self {
         Ssh { host: host.into(), user: user.into(), auth }

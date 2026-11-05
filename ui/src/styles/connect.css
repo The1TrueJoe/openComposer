@@ -154,3 +154,26 @@
 .ct-name b { font-weight: 600; overflow: hidden; text-overflow: ellipsis; }
 .connect-table td.nowrap-cell { white-space: nowrap; }
 .connect-table td.nowrap-cell .ellip { display: block; }
+
+/* "Take over this controller" offer on the certificate step: shown when the controller
+   refused a certificate openComposer already holds, so importing another won't help. */
+.connect-takeover {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--side);
+}
+.connect-takeover > svg { align-self: flex-start; margin-top: 2px; color: var(--accent); flex: none; }
+.connect-takeover .connect-text b { font-weight: 600; }
+.connect-takeover .spread { flex: none; align-self: flex-start; white-space: nowrap; }
+
+/* Takeover wizard, rendered inside the connect card. */
+.takeover-wiz { display: flex; flex-direction: column; gap: 14px; }
+.takeover-wiz h1 { font-size: 20px; font-weight: 600; }
+.takeover-wiz .lede { color: var(--dim); margin-top: -8px; }
+.takeover-wiz .advanced { margin-top: 2px; }
+.connect-foot.end { justify-content: flex-end; }
