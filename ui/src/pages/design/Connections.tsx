@@ -34,6 +34,9 @@ export function Connections({ d, shell, onSelect }: { d: ItemDetail; shell: Shel
       key: `${o.id}:${def.id}`, owner: { id: o.id, name: o.name, kind: o.kind, driver: o.driver }, def, kind: kindOf(def),
     }))).map((c, i) => ({ c, i })).sort((a, b) => classRank(a.c.def.classes) - classRank(b.c.def.classes) || a.i - b.i).map((x) => x.c);
   }, [d]);
+  // A connection can't be joined to the device's own family — itself or its proxies. The Tuya
+  // Plug and its light_v2 proxy are one device, so the proxy must not be offered as an endpoint.
+  const family = useMemo(() => new Set<number>([d.id, ...d.children.map((c) => c.id)]), [d]);
   const [picked, setPicked] = useState<string | null>(null);
   const sel = conns.find((c) => c.key === picked) ?? conns[0] ?? null;
   const proxies = new Set(conns.map((c) => c.owner.id)).size > 1;
@@ -95,7 +98,7 @@ export function Connections({ d, shell, onSelect }: { d: ItemDetail; shell: Shel
         </MainPane>
         <Grip />
         <BottomPane id="ends" defaultSize="55%" minSize={130} maxSize="85%">
-          {sel && <Endpoints key={sel.key} c={sel} room={d.room} shell={shell} onSelect={onSelect} why={why} />}
+          {sel && <Endpoints key={sel.key} c={sel} room={d.room} family={family} shell={shell} onSelect={onSelect} why={why} />}
         </BottomPane>
       </Panes>
     </div>
@@ -272,7 +275,7 @@ interface End {
   status: 0 | 1 | 2;
 }
 
-function Endpoints({ c, room, shell, onSelect, why }: { c: Conn; room: string | null; shell: Shell; onSelect: (id: number) => void; why?: string }) {
+function Endpoints({ c, room, family, shell, onSelect, why }: { c: Conn; room: string | null; family: Set<number>; shell: Shell; onSelect: (id: number) => void; why?: string }) {
   const all = useLoad(() => api.connections(), [shell.rev]);
   const [roomF, setRoomF] = useState(ALL);
   const [classF, setClassF] = useState(ALL);
@@ -283,7 +286,7 @@ function Endpoints({ c, room, shell, onSelect, why }: { c: Conn; room: string | 
   const full = c.def.role === "input" && c.def.connected_to.length > 0;
 
   const ends: End[] = useMemo(() => (all.data?.connections ?? [])
-    .filter((r) => r.device.id !== c.owner.id && r.connection.role !== c.def.role && shared(r.connection.classes, c.def.classes).length > 0)
+    .filter((r) => !family.has(r.device.id) && r.connection.role !== c.def.role && shared(r.connection.classes, c.def.classes).length > 0)
     .map((r) => {
       const here = c.def.connected_to.find((p) => p.device.id === r.device.id && p.binding === r.connection.id) ?? null;
       const takenBy = !here && r.connection.role === "input" && r.connection.connected_to.length
