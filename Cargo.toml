@@ -7,3 +7,10 @@ version = "0.1.0"
 edition = "2024"
 # Source-available, noncommercial only — see LICENSE (PolyForm Noncommercial 1.0.0).
 license-file = "LICENSE"
+
+# Keep the build's disk footprint small (we don't debug the binary and don't need fast rebuilds):
+# no debug symbols in dev artifacts — which are the bulk of target/ — and no incremental-compile
+# cache. Rebuilds are slower and full, but target/ stays far smaller. Remove to trade back.
+[profile.dev]
+debug = false
+incremental = false
