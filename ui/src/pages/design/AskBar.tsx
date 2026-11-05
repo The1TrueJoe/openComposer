@@ -205,8 +205,8 @@ export function AskBar({ shell, focus, project }: { shell: Shell; focus: FocusIt
           <Tip text={`Sent with your message: ${context}`}>
             <span className="ask-chip"><Eye size={11} strokeWidth={1.8} /><span>{chip}</span></span>
           </Tip>
+          <span className="ask-input">
           <textarea ref={box} rows={1} value={text} aria-label="Ask the agent"
-                    placeholder={busy ? "Working… (Stop to interrupt)" : "Ask about this project, or tell me what to change…"}
                     onChange={(e) => setText(e.target.value)}
                     onFocus={() => { if (conv?.entries.length && !open) setOpen(true); }}
                     onKeyDown={(e) => {
@@ -215,6 +215,8 @@ export function AskBar({ shell, focus, project }: { shell: Shell; focus: FocusIt
                         void send();
                       }
                     }} />
+            {!text && <span className="ask-ph" aria-hidden>{busy ? "Working… (Stop to interrupt)" : "Ask about this project, or tell me what to change…"}</span>}
+          </span>
           <AgentSettings conv={conv} prefs={prefs} onPrefs={setPrefs} onProvider={switchProvider} compact />
           {!open && (
             <Tip text={conv ? "Show the reply" : "Open the assistant"}>

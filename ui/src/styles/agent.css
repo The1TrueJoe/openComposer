@@ -118,3 +118,6 @@
 .chip.attach { max-width: 230px; background: var(--bg); }
 .msg.user .attach-chips { justify-content: flex-end; margin-top: 4px; max-width: 78%; }
 .attach-btn { width: 28px; height: 28px; border-radius: 50%; }
+
+/* The placeholder hint overlay (shared .ask-ph), aligned to the composer's own padding. */
+.composer-box .ask-ph { left: 0; right: 0; top: 5px; line-height: 1.5; }

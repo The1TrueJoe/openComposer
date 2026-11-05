@@ -186,7 +186,8 @@ function Chat({ conv, shell, onSend, notInstalled, prefs, onPrefs, onNew }: {
           <AttachmentChips files={att.files} onRemove={att.remove} />
           <div className="composer-row">
           <AttachButton onPick={() => void att.pick()} />
-          <textarea ref={box} rows={1} placeholder={busy ? "Working… (Stop to interrupt)" : "Message the agent — Enter to send, Shift+Enter for a new line"}
+          <span className="ask-input">
+          <textarea ref={box} rows={1}
                     value={text} onChange={(e) => setText(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
@@ -194,6 +195,8 @@ function Chat({ conv, shell, onSend, notInstalled, prefs, onPrefs, onNew }: {
                         void submit();
                       }
                     }} />
+          {!text && <span className="ask-ph" aria-hidden>{busy ? "Working… (Stop to interrupt)" : "Message the agent — Enter to send, Shift+Enter for a new line"}</span>}
+          </span>
           {busy ? (
             <Tip text="Stop"><button className="send stop" aria-label="Stop" onClick={() => conv && api.agentStop(conv.id).catch((e) => toast.error(errText(e)))}>
               <Square size={13} strokeWidth={2.2} /></button></Tip>

@@ -327,3 +327,14 @@
 .link-event:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent); }
 .link-event .event-go { color: var(--muted); opacity: 0; margin-left: 6px; }
 .link-event:hover .event-go, .link-event:focus-visible .event-go { opacity: 1; color: var(--accent); }
+
+/* The placeholder hint is drawn as an overlay so it stays one line and ellipsises when it
+   doesn't fit — the native textarea placeholder wraps and would grow the bar. The textarea
+   itself has an empty placeholder and still grows for what you actually type. */
+.ask-input { position: relative; display: flex; flex: 1 1 120px; min-width: 90px; }
+.ask-input textarea { width: 100%; }
+.ask-ph {
+  position: absolute; left: 4px; right: 4px; top: 5px; pointer-events: none;
+  color: var(--dim); font: inherit; line-height: 1.45;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
