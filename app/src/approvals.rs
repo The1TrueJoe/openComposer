@@ -297,7 +297,11 @@ fn check_properties(ops: &[Op], cat: &c4::Catalog, p: &c4::Project) -> AppResult
         if def.readonly {
             return Err(AppError::Other(format!("“{who}” property “{name}” is read-only; the driver sets it")));
         }
-        if !def.items.is_empty() && !def.items.iter().any(|i| i == value) {
+        // A LIST property's `items` are only what driver.xml declared; the driver can replace the
+        // choices at runtime (`C4:UpdatePropertyList`), so a value outside that static list may be
+        // perfectly valid. Director is the authority when the change is applied, so don't refuse a
+        // LIST value here — only enforce a genuinely fixed list for other item-bearing types.
+        if !def.prop_type.contains("LIST") && !def.items.is_empty() && !def.items.iter().any(|i| i == value) {
             return Err(AppError::Other(format!("“{name}” must be one of: {}", def.items.join(", "))));
         }
         if def.prop_type.contains("INTEGER") || def.prop_type.contains("FLOAT") {
