@@ -3,7 +3,7 @@
 
 // ---- settings ------------------------------------------------------------------------------
 
-export type AccessMode = "read_only" | "approve";
+export type AccessMode = "read_only" | "approve" | "auto";
 export type Provider = "claude" | "codex";
 
 export interface SavedDirector {

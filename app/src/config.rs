@@ -13,6 +13,10 @@ pub enum AccessMode {
     ReadOnly,
     /// Writes pause for an approval card showing the predicted diff.
     Approve,
+    /// Writes apply immediately with no approval card — for a test controller you are free to
+    /// experiment on. Still logged in Activity, and still backed up before each change, so it
+    /// stays reversible; there is just no gate. Not for a controller running a real home.
+    Auto,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
