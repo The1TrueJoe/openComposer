@@ -156,12 +156,38 @@ fn with_fresh_tag(template: &str) -> String {
     }
 }
 
+/// Built-in location/room definitions for a factory-blank project. Director refuses to add the
+/// first site, building, floor or room when the project has none to copy, so these stand in. They
+/// are learned clean-room from the structure Director stores — a location carries its built-in
+/// image, a room is instantiated from `roomdevice.c4i` (see `tests/fixtures/sample-project.xml`) —
+/// and `with_fresh_tag` gives each its own tag, with Director filling in the rest on `AddItem`. A
+/// template captured from an existing item is always preferred; these only apply when there is none.
+const FALLBACK_SITE: &str = "<item><itemdata><large_image>locations_lg/site.gif</large_image></itemdata></item>";
+const FALLBACK_BUILDING: &str = "<item><itemdata><large_image>locations_lg/building.gif</large_image></itemdata></item>";
+const FALLBACK_FLOOR: &str = "<item><itemdata><large_image>locations_lg/floor.gif</large_image></itemdata></item>";
+const FALLBACK_ROOM: &str = "<item><itemdata><config_data_file>roomdevice.c4i</config_data_file></itemdata></item>";
+
+/// The built-in location template for a site (2), building (3) or floor (4) kind code.
+fn fallback_location(code: u32) -> Option<&'static str> {
+    match code {
+        2 => Some(FALLBACK_SITE),
+        3 => Some(FALLBACK_BUILDING),
+        4 => Some(FALLBACK_FLOOR),
+        _ => None,
+    }
+}
+
 impl Catalog {
-    /// The definition Director wants in `AddItem` for a new location, copied from one that exists.
+    /// The definition Director wants in `AddItem` for a new location, copied from one that exists,
+    /// or a built-in fallback ([`FALLBACK_SITE`] etc.) when the project is blank and has none.
     pub fn template_for(&self, op: &Op) -> Option<&str> {
         match op {
-            Op::AddRoom { .. } => self.room_template.as_deref(),
-            Op::AddLocation { kind, .. } => self.location_templates.get(&kind.item_kind().code()).map(String::as_str),
+            Op::AddRoom { .. } => self.room_template.as_deref().or(Some(FALLBACK_ROOM)),
+            Op::AddLocation { kind, .. } => self
+                .location_templates
+                .get(&kind.item_kind().code())
+                .map(String::as_str)
+                .or_else(|| fallback_location(kind.item_kind().code())),
             _ => None,
         }
     }
@@ -555,7 +581,24 @@ impl Director {
 
 #[cfg(test)]
 mod tests {
-    use super::with_fresh_tag;
+    use super::{Catalog, with_fresh_tag};
+    use crate::ops::{LocationKind, Op};
+
+    #[test]
+    fn fallback_templates_for_a_blank_project() {
+        // A factory-blank project's catalog captured no locations or rooms.
+        let cat = Catalog::default();
+        let add_loc = |kind| Op::AddLocation { parent: 1, kind, name: "x".into() };
+        assert!(cat.template_for(&add_loc(LocationKind::Site)).unwrap().contains("site.gif"));
+        assert!(cat.template_for(&add_loc(LocationKind::Building)).unwrap().contains("building.gif"));
+        assert!(cat.template_for(&add_loc(LocationKind::Floor)).unwrap().contains("floor.gif"));
+        assert!(cat.template_for(&Op::AddRoom { floor: 1, name: "x".into() }).unwrap().contains("roomdevice.c4i"));
+
+        // A template captured from a real item still wins over the fallback.
+        let mut cat2 = Catalog::default();
+        cat2.room_template = Some("<item><itemdata><tag>real</tag></itemdata></item>".into());
+        assert!(cat2.template_for(&Op::AddRoom { floor: 1, name: "x".into() }).unwrap().contains("<tag>real</tag>"));
+    }
 
     #[test]
     fn fresh_tags() {
