@@ -77,7 +77,7 @@ export function ApprovalCard({ approval: a, collapsible = false, autoFocus = fal
       {open && (
         <>
           <div className="ac-body">
-            <DiffView diff={a.diff} header={{
+            <DiffView diff={a.diff} fetchItem={a.status === "pending" || a.status === "applying" ? api.item : undefined} header={{
               source: a.source, director: a.director_name, project: a.project, reason: a.reason, time: a.created,
               descriptions: a.descriptions, installs,
             }} empty={

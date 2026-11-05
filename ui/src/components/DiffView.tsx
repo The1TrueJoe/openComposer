@@ -2,12 +2,17 @@ import {
   ArrowRight, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, EyeOff, MapPin, Network, Package, Plug, Sparkles, User,
 } from "lucide-react";
 import { Fragment, memo, useMemo, useState } from "react";
-import type { Change, CodeLine, Diff, Endpoint, ItemRef } from "../api";
+import type { Change, CodeLine, Diff, Endpoint, ItemDetail, ItemRef, PropertyView } from "../api";
 import { effectOf, groupByLocation, inlineDiff, isCascade, subjectOf, tally, type Effect, type LocGroup, type Seg } from "../lib/diff";
 import { ago, cx, dateTime, plural } from "../lib/ui";
 import { DiffGraph } from "./DiffGraph";
+import { Spinner } from "./controls";
 import { KindIcon } from "./icons";
 import { Tip } from "./Dialogs";
+
+/** Fetches a device's current detail, for showing unchanged settings around a change as context.
+ *  The caller supplies it only when the diff is against the live director (an approval card). */
+export type FetchItem = (id: number) => Promise<ItemDetail | null>;
 
 export interface DiffHeader {
   source?: string;
@@ -30,12 +35,15 @@ const COLLAPSE_OVER = 120;
 /** A semantic project diff, in Composer's terms: what is added, removed and changed among
  *  rooms and devices, properties, connections, network identities, variables and programming.
  *  The same view on an approval card, inline in the agent chat, and comparing backups. */
-export function DiffView({ diff, header, graph = true, empty = "No differences." }: {
+export function DiffView({ diff, header, graph = true, empty = "No differences.", fetchItem }: {
   diff: Diff;
   header?: DiffHeader;
   /** The affected-devices map above the sections (off for nested side-effect diffs). */
   graph?: boolean;
   empty?: string;
+  /** When given (a live approval), a changed device can expand to show its other settings as
+   *  context, the way git shows the lines around a change. */
+  fetchItem?: FetchItem;
 }) {
   const [filter, setFilter] = useState("");
   const shown = useMemo(() => {
@@ -84,7 +92,7 @@ export function DiffView({ diff, header, graph = true, empty = "No differences."
       {!diff.changes.length && <p className="empty dv-empty">{empty}</p>}
       {!!diff.changes.length && !shown.length && <p className="empty dv-empty">No change matches “{filter}”.</p>}
       {groups.map((g) => (
-        <LocationGroup key={g.key} group={g} open={!closed.has(g.key)}
+        <LocationGroup key={g.key} group={g} open={!closed.has(g.key)} fetchItem={fetchItem}
                  onToggle={() => setClosed((c) => { const n = new Set(c); if (n.has(g.key)) n.delete(g.key); else n.add(g.key); return n; })} />
       ))}
     </div>
@@ -123,7 +131,7 @@ export function SourceBadge({ source }: { source: string }) {
 
 /** One location's changes, under a header that names the place once — like a git file header,
  *  so the path isn't repeated on every row. Property changes stay grouped under their device. */
-function LocationGroup({ group: g, open, onToggle }: { group: LocGroup; open: boolean; onToggle: () => void }) {
+function LocationGroup({ group: g, open, onToggle, fetchItem }: { group: LocGroup; open: boolean; onToggle: () => void; fetchItem?: FetchItem }) {
   const [limit, setLimit] = useState(PAGE);
   const t = tally(g.changes);
   const visible = g.changes.slice(0, limit);
@@ -144,7 +152,7 @@ function LocationGroup({ group: g, open, onToggle }: { group: LocGroup; open: bo
       {open && (
         <div className="dv-rows">
           {rest.map((c, i) => <Row key={i} change={c} hideCrumbs />)}
-          {props.length > 0 && <PropertyRows changes={props} hideCrumbs />}
+          {props.length > 0 && <PropertyRows changes={props} hideCrumbs fetchItem={fetchItem} />}
           {g.changes.length > limit && (
             <button className="dv-more" onClick={() => setLimit(limit + PAGE * 4)}>
               Show {Math.min(PAGE * 4, g.changes.length - limit)} more of {g.changes.length - limit} remaining
@@ -373,7 +381,7 @@ const Row = memo(function Row({ change: c, hideCrumbs }: { change: Change; hideC
 
 /** Properties grouped under their item: ten changed properties of one driver read as one
  *  device being reconfigured, not ten unrelated things. */
-function PropertyRows({ changes, hideCrumbs }: { changes: Change[]; hideCrumbs?: boolean }) {
+function PropertyRows({ changes, hideCrumbs, fetchItem }: { changes: Change[]; hideCrumbs?: boolean; fetchItem?: FetchItem }) {
   const groups = useMemo(() => {
     const out: { item: ItemRef; rows: Extract<Change, { kind: "property_changed" }>[] }[] = [];
     for (const c of changes) {
@@ -396,8 +404,52 @@ function PropertyRows({ changes, hideCrumbs }: { changes: Change[]; hideCrumbs?:
               <ValueChange from={c.from} to={c.to} />
             </div>
           ))}
+          {fetchItem && <PropertyContext itemId={g.item.id} changed={new Set(g.rows.map((r) => r.property))} fetchItem={fetchItem} />}
         </div>
       ))}
+    </>
+  );
+}
+
+/** The device's other settings, shown on demand as dimmed context rows — the way git shows the
+ *  unchanged lines around a change, so a change reads against the device's whole configuration. */
+function PropertyContext({ itemId, changed, fetchItem }: { itemId: number; changed: Set<string>; fetchItem: FetchItem }) {
+  const [open, setOpen] = useState(false);
+  const [props, setProps] = useState<PropertyView[] | null>(null);
+  const [loading, setLoading] = useState(false);
+  const toggle = async () => {
+    if (open) return setOpen(false);
+    setOpen(true);
+    if (props || loading) return;
+    setLoading(true);
+    try {
+      const d = await fetchItem(itemId);
+      setProps(d?.properties ?? []);
+    } catch {
+      setProps([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+  // Settings that didn't change (and aren't blank) are the useful context.
+  const context = (props ?? []).filter((p) => !changed.has(p.name) && p.value !== "");
+  return (
+    <>
+      <button className="dv-context-toggle" onClick={toggle} aria-expanded={open}>
+        {open ? <ChevronDown size={11} strokeWidth={1.8} /> : <ChevronRight size={11} strokeWidth={1.8} />}
+        {open ? "Hide" : "Show"} the device's other settings
+      </button>
+      {open && (loading
+        ? <div className="dv-row context"><span className="dv-prop dim"><Spinner /> reading settings…</span></div>
+        : !context.length
+          ? <div className="dv-row context"><span className="dv-prop dim">No other settings to show.</span></div>
+          : context.map((p) => (
+            <div key={p.name} className="dv-row context">
+              <span className="dv-gutter context"> </span>
+              <span className="dv-prop">{p.name}</span>
+              <span className="dv-ctx-val">{p.value}</span>
+            </div>
+          )))}
     </>
   );
 }
