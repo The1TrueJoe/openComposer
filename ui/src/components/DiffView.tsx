@@ -2,7 +2,7 @@ import {
   ArrowRight, ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, EyeOff, MapPin, Network, Package, Plug, Sparkles, User,
 } from "lucide-react";
 import { Fragment, memo, useMemo, useState } from "react";
-import type { Change, CodeLine, Diff, Endpoint, ItemDetail, ItemRef, PropertyView } from "../api";
+import type { Change, CodeLine, ConnectionDef, Diff, Endpoint, ItemDetail, ItemRef, PropertyView } from "../api";
 import { effectOf, groupByLocation, inlineDiff, isCascade, subjectOf, tally, type Effect, type LocGroup, type Seg } from "../lib/diff";
 import { ago, cx, dateTime, plural } from "../lib/ui";
 import { DiffGraph } from "./DiffGraph";
@@ -151,7 +151,7 @@ function LocationGroup({ group: g, open, onToggle, fetchItem }: { group: LocGrou
       </button>
       {open && (
         <div className="dv-rows">
-          {rest.map((c, i) => <Row key={i} change={c} hideCrumbs />)}
+          {rest.map((c, i) => <Row key={i} change={c} hideCrumbs fetchItem={fetchItem} />)}
           {props.length > 0 && <PropertyRows changes={props} hideCrumbs fetchItem={fetchItem} />}
           {g.changes.length > limit && (
             <button className="dv-more" onClick={() => setLimit(limit + PAGE * 4)}>
@@ -226,7 +226,7 @@ export function ValueChange({ from, to }: { from: string | null; to: string | nu
 
 const Segs = ({ segs }: { segs: Seg[] }) => <>{segs.map((s, i) => s.changed ? <mark key={i}>{s.text}</mark> : <span key={i}>{s.text}</span>)}</>;
 
-const Row = memo(function Row({ change: c, hideCrumbs }: { change: Change; hideCrumbs?: boolean }) {
+const Row = memo(function Row({ change: c, hideCrumbs, fetchItem }: { change: Change; hideCrumbs?: boolean; fetchItem?: FetchItem }) {
   const effect = effectOf(c);
   const cls = cx("dv-row", effect, isCascade(c) && "cascade");
   switch (c.kind) {
@@ -278,11 +278,14 @@ const Row = memo(function Row({ change: c, hideCrumbs }: { change: Change; hideC
     case "connection_added":
     case "connection_removed":
       return (
-        <div className={cls}>
-          <Gutter effect={effect} />
-          <Wire provider={c.connection.provider} consumer={c.connection.consumer} classes={c.connection.classes} effect={effect} />
-          {c.kind === "connection_removed" && c.cascade && <span className="tag warn">removed with device</span>}
-        </div>
+        <>
+          <div className={cls}>
+            <Gutter effect={effect} />
+            <Wire provider={c.connection.provider} consumer={c.connection.consumer} classes={c.connection.classes} effect={effect} />
+            {c.kind === "connection_removed" && c.cascade && <span className="tag warn">removed with device</span>}
+          </div>
+          {fetchItem && <ConnectionContext endpoints={[c.connection.provider.device, c.connection.consumer.device]} fetchItem={fetchItem} />}
+        </>
       );
     case "network_added":
     case "network_removed":
@@ -450,6 +453,61 @@ function PropertyContext({ itemId, changed, fetchItem }: { itemId: number; chang
               <span className="dv-ctx-val">{p.value}</span>
             </div>
           )))}
+    </>
+  );
+}
+
+/** The other wiring on the devices a changed connection touches — shown on demand as dimmed
+ *  context, so a change reads against what's already plugged into each device. */
+function ConnectionContext({ endpoints, fetchItem }: { endpoints: ItemRef[]; fetchItem: FetchItem }) {
+  const [open, setOpen] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [data, setData] = useState<{ id: number; name: string; conns: ConnectionDef[] }[] | null>(null);
+  const toggle = async () => {
+    if (open) return setOpen(false);
+    setOpen(true);
+    if (data || loading) return;
+    setLoading(true);
+    try {
+      const uniq = endpoints.filter((e, i) => endpoints.findIndex((x) => x.id === e.id) === i);
+      const out = await Promise.all(uniq.map(async (e) => {
+        const d = await fetchItem(e.id);
+        return { id: e.id, name: e.name, conns: (d?.connections ?? []).filter((c) => c.connected_to.length) };
+      }));
+      setData(out);
+    } catch {
+      setData([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+  return (
+    <>
+      <button className="dv-context-toggle" onClick={toggle} aria-expanded={open}>
+        {open ? <ChevronDown size={11} strokeWidth={1.8} /> : <ChevronRight size={11} strokeWidth={1.8} />}
+        {open ? "Hide" : "Show"} these devices' other connections
+      </button>
+      {open && (loading
+        ? <div className="dv-row context"><span className="dv-prop dim"><Spinner /> reading connections…</span></div>
+        : (data ?? []).map((dev) => (
+          dev.conns.length === 0
+            ? <div key={dev.id} className="dv-row context"><span className="dv-ctx-conn dim">{dev.name} — no other connections</span></div>
+            : <Fragment key={dev.id}>{dev.conns.map((c) => (
+                <div key={c.id} className="dv-row context">
+                  <span className="dv-gutter context"> </span>
+                  <span className="dv-ctx-conn">
+                    <b>{dev.name}</b><span className="sep">›</span><span className="dv-port">{c.name}</span>
+                    <span className="dv-ctx-arrow">→</span>
+                    {c.connected_to.map((p, i) => (
+                      <Fragment key={i}>
+                        {i > 0 && <span className="dv-ctx-sep">, </span>}
+                        <span className="dv-ctx-peer">{p.device.name}{p.connection ? ` › ${p.connection}` : ""}</span>
+                      </Fragment>
+                    ))}
+                  </span>
+                </div>
+              ))}</Fragment>
+        )))}
     </>
   );
 }
