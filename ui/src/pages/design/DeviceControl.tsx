@@ -15,9 +15,9 @@
 
 import * as Dialog from "@radix-ui/react-dialog";
 import {
-  AlertTriangle, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Circle, DoorOpen, Dot, FastForward, Gauge, Grid3x3, Headphones, House, Info,
+  AlertTriangle, Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, Circle, DoorOpen, Dot, Droplets, Fan, FastForward, Flame, Gauge, Grid3x3, Headphones, House, Info,
   LayoutList, Lightbulb, ListTree, LogIn, Menu, Minus, MonitorPlay, Palette, Pause, Play, Plus, Power, RefreshCw, Rewind, Search, Send, SkipBack,
-  SkipForward, Square, Sun, SunDim, Thermometer, Tv, Undo2, Volume2, VolumeX, X,
+  SkipForward, Snowflake, Square, Sun, SunDim, Thermometer, Tv, Undo2, Volume2, VolumeX, X,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, errText, type CommandDef, type CommandParam, type ConnectionDef, type ItemDetail, type ParamDef } from "../../api";
@@ -54,7 +54,7 @@ interface Sent {
 }
 
 type Send = (a: Available, params?: CommandParam[]) => Promise<void>;
-type Layout = "light" | "remote" | "switch" | "generic" | "room";
+type Layout = "light" | "remote" | "switch" | "generic" | "room" | "thermostat";
 
 /** Everything a remote needs to draw itself and send. */
 interface Ctl {
@@ -230,6 +230,7 @@ function Panel({ id, shell, onClose }: { id: number; shell: Shell; onClose: () =
     light: ["Light", <Lightbulb key="i" size={13} strokeWidth={1.8} />],
     remote: ["Remote", <Tv key="i" size={13} strokeWidth={1.8} />],
     switch: ["Matrix", <Grid3x3 key="i" size={13} strokeWidth={1.8} />],
+    thermostat: ["Thermostat", <Thermometer key="i" size={13} strokeWidth={1.8} />],
     generic: [family === "thermostat" ? "Thermostat" : "Controls", family === "thermostat" ? <Thermometer key="i" size={13} strokeWidth={1.8} /> : <Gauge key="i" size={13} strokeWidth={1.8} />],
   };
   const sentLog = <SentLog log={log} clear={() => setLog([])} />;
@@ -265,12 +266,13 @@ function Panel({ id, shell, onClose }: { id: number; shell: Shell; onClose: () =
 
       <div className={cx("control-body", tab === "remote" && "stage")}>
         {tab === "remote" ? (
-          <div className={cx("rc-stage", layout === "switch" && "wide", (layout === "remote" || layout === "light" || layout === "room") && "fit")}>
+          <div className={cx("rc-stage", layout === "switch" && "wide", (layout === "remote" || layout === "light" || layout === "room" || layout === "thermostat") && "fit")}>
             <div className="rc-main">
               {!isRoom && !available.length && <Unlisted d={d} onAll={() => setTab("commands")} />}
               {layout === "light" && <Fit>{() => <LightRemote ctl={ctl} />}</Fit>}
               {layout === "remote" && <RemoteFit ctl={ctl} family={family} />}
               {layout === "room" && <Fit>{() => <RoomRemote ctl={ctl} />}</Fit>}
+              {layout === "thermostat" && <Fit>{() => <ThermostatRemote ctl={ctl} />}</Fit>}
               {layout === "switch" && route && <Matrix ctl={ctl} route={route} />}
               {layout === "generic" && !!available.length && (
                 <section className="control-card rc-panel">
@@ -281,7 +283,7 @@ function Panel({ id, shell, onClose }: { id: number; shell: Shell; onClose: () =
               {(layout === "generic" || layout === "switch") && <Extras ctl={ctl} layout={layout} />}
             </div>
             <aside className="rc-side">
-              {(layout === "remote" || layout === "light" || layout === "room") && <Extras ctl={ctl} layout={layout} />}
+              {(layout === "remote" || layout === "light" || layout === "room" || layout === "thermostat") && <Extras ctl={ctl} layout={layout} />}
               <section className="control-card">
                 <div className="control-card-head">
                   <span>Live state</span>
@@ -538,6 +540,9 @@ const QUICK_PLACED = new Set(["ON", "OFF", "SET_LEVEL", "RAMP_TO_LEVEL", "SET_VO
 
 function layoutOf(family: Family, available: Available[], connections: ConnectionDef[], route: ReturnType<typeof routeCommand>): Layout {
   if (family === "light") return "light";
+  // Its own panel when we have its thermostat controls (from the proxy's capabilities); a
+  // thermostat that declares none falls back to the generic list.
+  if (family === "thermostat") return available.some((a) => /^SET_(SETPOINT|MODE)/.test(normName(a.def.name))) ? "thermostat" : "generic";
   if (family === "switch" && route) return "switch";
   // Anything else with several video inputs and outputs and a command that routes between them
   // is a matrix too, whatever proxy its driver chose.
@@ -1284,9 +1289,102 @@ function Matrix({ ctl, route }: { ctl: Ctl; route: NonNullable<ReturnType<typeof
 
 /** The driver's other buttons (commands that take nothing) and choices (one list parameter),
  *  so the remote has every key without opening All commands. */
+// ---- thermostat -------------------------------------------------------------------------------
+
+const THERMOSTAT_PLACED = new Set(["SET_SETPOINT_HEAT", "SET_SETPOINT_COOL", "SET_SETPOINT_SINGLE", "SET_MODE_HVAC", "SET_MODE_FAN"]);
+
+/** A thermostat's own panel: the temperature it reads now with what it is doing and the humidity,
+ *  the heat and cool setpoints it steps, and its HVAC and fan modes — all drawn from the proxy's
+ *  capabilities and sent as the standard thermostatV2 commands. Readings stay "—" until the
+ *  thermostat reports (for instance before it has signed in), and the setpoint steppers wait for a
+ *  reading before they move; the mode buttons work regardless. */
+function ThermostatRemote({ ctl }: { ctl: Ctl }) {
+  const { caps, vars } = ctl;
+  const pickStr = (re: RegExp) => vars.find((v) => re.test(v.name.toUpperCase()))?.value ?? null;
+  const pickNum = (re: RegExp) => numberOf(pickStr(re));
+  const eq = (a: string | null, b: string) => (a ?? "").trim().toLowerCase() === b.trim().toLowerCase();
+
+  // The scale it reports, else the device's "Temperature Scale" property, else Fahrenheit.
+  const scaleProp = ctl.items[0]?.properties?.find((pr) => /temperature\s*scale/i.test(pr.name))?.value ?? "";
+  const scale: "F" | "C" = /^c/i.test(pickStr(/^SCALE$/) ?? "") || (!pickStr(/^SCALE$/) && /^c/i.test(scaleProp)) ? "C" : "F";
+  const unit = `°${scale}`;
+
+  const temp = pickNum(/^(CURRENT_)?TEMPERATURE(_[FC])?$/);
+  const humidity = truthy(caps.has_humidity) ? pickNum(/HUMIDITY/) : null;
+  const hvacState = pickStr(/^HVAC_?STATE$/);
+  const hvacMode = pickStr(/^HVAC_?MODE$/);
+  const fanMode = pickStr(/^FAN_?MODE$/);
+  const heatSet = pickNum(/HEAT_?SETPOINT/);
+  const coolSet = pickNum(/COOL_?SETPOINT/);
+  const singleSet = pickNum(/SINGLE_?SETPOINT/);
+
+  const f = (...n: string[]) => findCommand(ctl.available, ...n);
+  const heat = f("SET_SETPOINT_HEAT"), cool = f("SET_SETPOINT_COOL"), single = f("SET_SETPOINT_SINGLE");
+  const hvac = f("SET_MODE_HVAC"), fan = f("SET_MODE_FAN");
+
+  const running = hvacState && /heat/i.test(hvacState) ? "heat" : hvacState && /cool/i.test(hvacState) ? "cool" : "idle";
+  const stateLabel = hvacState && !/off|idle/i.test(hvacState) ? hvacState : hvacMode && !eq(hvacMode, "Off") ? "Idle" : "Off";
+
+  return (
+    <section className="control-card rc-panel tstat">
+      <div className="tstat-head">
+        <span className={cx("tstat-temp", running)}>{temp ?? "—"}<span className="tstat-unit">{unit}</span></span>
+        <div className="tstat-meta">
+          <span className={cx("tstat-badge", running)}>
+            {running === "heat" ? <Flame size={12} strokeWidth={2} /> : running === "cool" ? <Snowflake size={12} strokeWidth={2} /> : null}
+            {stateLabel}
+          </span>
+          {humidity != null && <span className="tstat-humid"><Droplets size={13} strokeWidth={1.8} />{humidity}%</span>}
+        </div>
+      </div>
+
+      <div className="tstat-rows">
+        {single ? (
+          <QRow label="Set to" icon={<Thermometer size={13} strokeWidth={1.8} />}><Stepper a={single} value={singleSet} send={ctl.send} disabled={ctl.disabled} why={ctl.why} /></QRow>
+        ) : (
+          <>
+            {heat && <QRow label="Heat to" icon={<Flame size={13} strokeWidth={1.8} />}><Stepper a={heat} value={heatSet} send={ctl.send} disabled={ctl.disabled} why={ctl.why} /></QRow>}
+            {cool && <QRow label="Cool to" icon={<Snowflake size={13} strokeWidth={1.8} />}><Stepper a={cool} value={coolSet} send={ctl.send} disabled={ctl.disabled} why={ctl.why} /></QRow>}
+          </>
+        )}
+        <ModeRow ctl={ctl} label="Mode" icon={<Power size={13} strokeWidth={1.8} />} cmd={hvac} current={hvacMode} />
+        <ModeRow ctl={ctl} label="Fan" icon={<Fan size={13} strokeWidth={1.8} />} cmd={fan} current={fanMode} />
+      </div>
+
+      {temp == null && <p className="dim small flush-p tstat-wait">Waiting for the thermostat to report — readings and setpoints appear once it is online.</p>}
+    </section>
+  );
+}
+
+const tstatEq = (a: string | null, b: string) => (a ?? "").trim().toLowerCase() === b.trim().toLowerCase();
+const tstatModeIcon = (m: string) =>
+  /off/i.test(m) ? <Power size={13} strokeWidth={1.8} />
+  : /heat|emer/i.test(m) ? <Flame size={13} strokeWidth={1.8} />
+  : /cool/i.test(m) ? <Snowflake size={13} strokeWidth={1.8} />
+  : null;
+
+/** One row of mutually exclusive mode buttons (HVAC or fan), the current one lit. */
+function ModeRow({ ctl, label, icon, cmd, current }: { ctl: Ctl; label: string; icon: React.ReactNode; cmd: Available | undefined; current: string | null }) {
+  const items = cmd?.def.params[0]?.items ?? [];
+  if (!cmd || !items.length) return null;
+  const name = cmd.def.params[0].name;
+  return (
+    <div className="q-row tstat-modes">
+      <span className="q-label">{icon}{label}</span>
+      <div className="seg">
+        {items.map((m) => (
+          <Key key={m} ctl={ctl} a={cmd} label={m} params={[{ name, type: "STRING", value: m }]} on={tstatEq(current, m)} className="rc-pill small tstat-mode">
+            {tstatModeIcon(m)}{m}
+          </Key>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function Extras({ ctl, layout }: { ctl: Ctl; layout: Layout }) {
   const placed = layout === "light" ? LIGHT_PLACED : layout === "generic" ? QUICK_PLACED : layout === "switch" ? new Set([...K.on, ...K.off, ...K.toggle])
-    : layout === "room" ? new Set(ROOM_COMMANDS.map((x) => x.name)) : REMOTE_PLACED;
+    : layout === "room" ? new Set(ROOM_COMMANDS.map((x) => x.name)) : layout === "thermostat" ? THERMOSTAT_PLACED : REMOTE_PLACED;
   const seen = new Set<string>();
   const mine = ctl.available.filter((a) => {
     const n = normName(a.def.name);

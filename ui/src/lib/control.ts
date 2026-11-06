@@ -210,6 +210,25 @@ function evidenced(x: ItemDetail, role: string, caps: Record<string, string>, va
     cap("on_off", c("ON", "Turn on NAME"), c("OFF", "Turn off NAME"));
     if (truthy(caps.dimmer) || truthy(caps.set_level)) out.push([c("SET_LEVEL", "Set NAME level to LEVEL", LEVEL), `capability ${truthy(caps.set_level) ? "set_level" : "dimmer"}`]);
   }
+  // A thermostat proxy lists no commands of its own: the standard thermostatV2 commands it takes
+  // follow from its <capabilities> (clean-room, from Control4's public thermostat proxy protocol).
+  // Setpoints are ranged by the proxy's own min/max, in the scale it reports (Fahrenheit until it
+  // says otherwise); modes are the exact strings it lists.
+  if (/thermostat|hvac/.test(role)) {
+    const sc = /^c/i.test(vars.find((v) => v.owner === x.id && v.name.toUpperCase() === "SCALE")?.value ?? "") ? "c" : "f";
+    const setpoint = (which: "heat" | "cool") =>
+      p("SETPOINT", "RANGED_INTEGER", { minimum: caps[`setpoint_${which}_min_${sc}`] ?? null, maximum: caps[`setpoint_${which}_max_${sc}`] ?? null });
+    if (truthy(caps.has_single_setpoint)) {
+      out.push([c("SET_SETPOINT_SINGLE", "Set NAME setpoint to SETPOINT", setpoint("heat")), "capability has_single_setpoint"]);
+    } else {
+      cap("can_heat", c("SET_SETPOINT_HEAT", "Set NAME heat setpoint to SETPOINT", setpoint("heat")));
+      cap("can_cool", c("SET_SETPOINT_COOL", "Set NAME cool setpoint to SETPOINT", setpoint("cool")));
+    }
+    const list = (k: string) => (caps[k] ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+    const hvac = list("hvac_modes"), fan = list("fan_modes");
+    if (hvac.length) out.push([c("SET_MODE_HVAC", "Set NAME mode to MODE", p("MODE", "LIST", { items: hvac })), "capability hvac_modes"]);
+    if (fan.length) out.push([c("SET_MODE_FAN", "Set NAME fan to MODE", p("MODE", "LIST", { items: fan })), "capability fan_modes"]);
+  }
   // A proxy that reports its power takes power commands.
   const power = vars.find((v) => v.owner === x.id && /^(POWER_STATE|LIGHT_STATE)$/i.test(v.name));
   if (power) out.push([c("ON", "Turn on NAME"), `variable ${power.name}`], [c("OFF", "Turn off NAME"), `variable ${power.name}`]);

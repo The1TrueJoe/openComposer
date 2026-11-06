@@ -672,6 +672,20 @@ const CAPS = new Map<number, Record<string, string>>();
     add(65, "Living Cable Box", "proxy", 64, "satellite.c4i");
     vars(64, { POWER_STATE: "On", CURRENT_CHANNEL: "206" });
 
+    // A thermostat whose proxy lists no commands: its controls come from its <capabilities>, as a
+    // real ThermostatV2's do (heat/cool setpoints, HVAC and fan modes, humidity).
+    add(66, "Living Thermostat", "device", 10, "total_connect_comfort.c4z", { manufacturer: "Honeywell", model: "T6 Pro",
+      driver_name: "Total Connect Comfort", control_method: "IP", proxies: ["thermostatV2"] });
+    add(67, "Living Thermostat", "proxy", 66, "thermostatV2.c4i", { model: "Thermostat", driver_name: "Thermostat V2" });
+    const tstat = { can_heat: "true", can_cool: "true", can_do_auto: "false", has_single_setpoint: "false", has_humidity: "true",
+      hvac_modes: "Off,Heat,Cool", fan_modes: "Auto,On,Circulate", hvac_states: "Off,Heating,Cooling", fan_states: "Off,On",
+      setpoint_heat_min_f: "40", setpoint_heat_max_f: "90", setpoint_heat_resolution_f: "1",
+      setpoint_cool_min_f: "40", setpoint_cool_max_f: "90", setpoint_cool_resolution_f: "1" };
+    CAPS.set(66, tstat);
+    CAPS.set(67, tstat);
+    vars(67, { TEMPERATURE_F: "71", HEAT_SETPOINT_F: "68", COOL_SETPOINT_F: "74", HVAC_MODE: "Cool", HVAC_STATE: "Cooling",
+      FAN_MODE: "Auto", FAN_STATE: "On", HUMIDITY: "44", SCALE: "FAHRENHEIT" });
+
     add(62, "Theater Matrix", "device", 12, "atlona_omni_matrix.c4z", { manufacturer: "Atlona", model: "AT-UHD-PRO3-44M", driver_name: "Atlona 4x4 Matrix",
       control_method: "IP", proxies: ["avswitch"], commands: [cmd("ON"), cmd("OFF"), cmd("RECALL_PRESET", prm("PRESET", "LIST", { items: ["Movie night", "Game day", "All to 1"] }))] });
     add(63, "Theater Matrix", "proxy", 62, "avswitch.c4i", { model: "AV Switch", driver_name: "AV Switch", connections: [
@@ -799,7 +813,11 @@ function command(target: number, cmd: string, params: CommandParam[]): string[] 
     case "STOP": setVar(d, "PLAY_STATE", "Stopped"); break;
     case "SET_SETPOINT_HEAT": setVar(d, "HEAT_SETPOINT_F", p("SETPOINT")); break;
     case "SET_SETPOINT_COOL": setVar(d, "COOL_SETPOINT_F", p("SETPOINT")); break;
-    case "SET_MODE_HVAC": setVar(d, "HVAC_MODE", p("MODE")); break;
+    case "SET_MODE_HVAC":
+      setVar(d, "HVAC_MODE", p("MODE"));
+      setVar(d, "HVAC_STATE", /heat/i.test(p("MODE")) ? "Heating" : /cool/i.test(p("MODE")) ? "Cooling" : "Off");
+      break;
+    case "SET_MODE_FAN": setVar(d, "FAN_MODE", p("MODE")); break;
   }
   return [];
 }
