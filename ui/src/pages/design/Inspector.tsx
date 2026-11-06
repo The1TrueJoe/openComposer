@@ -28,7 +28,7 @@ const TABS: { id: InspectorTab; label: string }[] = [
   { id: "network", label: "Network" },
   { id: "variables", label: "Variables" },
   { id: "events", label: "Events" },
-  { id: "lua", label: "Lua" },
+  { id: "lua", label: "Log" },
 ];
 
 /** Everything about one item, the way Composer's properties pane shows it. */
