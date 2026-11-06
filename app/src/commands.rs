@@ -289,6 +289,7 @@ pub async fn action(app: S<'_>, name: String, args: Option<Value>) -> R<Value> {
         "load_backup" => actions::load_backup(app, req(a)?, UI_SOURCE).await,
         "driver_status" => actions::driver_status(app, req(a)?).await,
         "install_driver" => actions::install_driver(app, req(a)?, UI_SOURCE).await,
+        "update_driver" => actions::update_driver(app, req(a)?, UI_SOURCE).await,
         "controller_drivers" => actions::controller_drivers(app, self::args(a)?).await,
         "library_drivers" => Ok(actions::library_drivers(app)),
         "import_driver" => actions::import_driver(app, req(a)?),
@@ -300,7 +301,7 @@ pub async fn action(app: S<'_>, name: String, args: Option<Value>) -> R<Value> {
         "agent_view" => actions::agent_view(app, req(a)?).await,
         other => return Err(format!("unknown action {other}")),
     };
-    if matches!(name.as_str(), "propose_changes" | "load_backup" | "backup_project" | "install_driver" | "add_driver" | "import_driver" | "send_command") {
+    if matches!(name.as_str(), "propose_changes" | "load_backup" | "backup_project" | "install_driver" | "update_driver" | "add_driver" | "import_driver" | "send_command") {
         app.log(UI_SOURCE, &name, String::new(), r.is_ok(), t.elapsed().as_millis() as u64);
     }
     r.map_err(err)

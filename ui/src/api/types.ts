@@ -610,6 +610,8 @@ export type Op =
   | { op: "remove_email_template"; agent: number; id: number }
   /** Only ever produced by `install_driver`; the file's bytes are not serialized back. */
   | { op: "install_driver"; filename: string; source: string }
+  /** Reload a driver in the devices using it (Composer's "Update Driver"); keeps their properties. */
+  | { op: "update_driver"; filename: string }
   /** Only ever produced by `load_backup`; the XML is not serialized back. */
   | { op: "load_project"; label: string };
 

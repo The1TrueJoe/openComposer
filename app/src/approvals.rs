@@ -267,6 +267,9 @@ async fn check_drivers(app: &Arc<App>, session: &Session, ops: &[Op]) -> AppResu
         .iter()
         .filter_map(|o| match o {
             Op::AddDevice { driver, .. } if !installing.contains(&driver.as_str()) => Some(driver.as_str()),
+            // You can only reload a driver the controller already has (unless this same
+            // batch is installing it first, as install_driver's install+reload does).
+            Op::UpdateDriver { filename } if !installing.contains(&filename.as_str()) => Some(filename.as_str()),
             _ => None,
         })
         .collect();

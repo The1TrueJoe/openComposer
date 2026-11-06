@@ -237,6 +237,13 @@ pub enum Op {
         #[schemars(skip)]
         bytes: Vec<u8>,
     },
+    /// Reload a driver's code in the devices already using it — what Composer's "Update
+    /// Driver" does. The `.c4z` must already be on the controller (install it first);
+    /// Director re-reads it and swaps the code in each existing device while keeping that
+    /// device's properties and encrypted logins. No project data changes. This is why
+    /// updating a driver no longer means removing and re-adding the device (which would
+    /// lose everything the device stored, including a signed-in cloud account).
+    UpdateDriver { filename: String },
     /// Replace the whole project (Composer's "Load Project"). `xml` is a `<currentstate>`.
     LoadProject {
         label: String,
@@ -409,6 +416,23 @@ impl Op {
             agent_op!() => crate::agent_ops::describe(self, p).unwrap_or_default(),
             Op::InstallDriver { filename, source, bytes } => {
                 format!("Install driver file {filename} ({} KB) from {source}", bytes.len().div_ceil(1024))
+            }
+            Op::UpdateDriver { filename } => {
+                let mut devices: Vec<String> = p
+                    .items
+                    .iter()
+                    .filter(|(_, it)| it.driver.as_deref() == Some(filename.as_str()))
+                    .map(|(id, _)| p.name_of(*id))
+                    .collect();
+                devices.sort();
+                match devices.len() {
+                    0 => format!("Reload {filename}: no device uses it yet, so nothing reloads"),
+                    1 => format!("Reload {filename} in {} — it keeps its properties", devices[0]),
+                    n => format!(
+                        "Reload {filename} in {n} devices ({}) — each keeps its properties",
+                        devices.join(", ")
+                    ),
+                }
             }
             Op::LoadProject { label, .. } => format!("Replace the whole project with {label}"),
         }
@@ -697,6 +721,9 @@ impl Op {
             }
             agent_op!() => crate::agent_ops::predict(self, p).unwrap_or(Ok(()))?,
             Op::InstallDriver { .. } => {}
+            // A reload changes no project data — the device keeps every property. Nothing
+            // to apply to the model; the point is that the before/after projects match.
+            Op::UpdateDriver { .. } => {}
             Op::LoadProject { xml, .. } => {
                 *p = Project::parse(xml).map_err(|e| OpError::BadProject(e.to_string()))?;
             }
@@ -850,6 +877,12 @@ impl Op {
             }
             agent_op!() => crate::agent_ops::calls(self).unwrap_or_default(),
             Op::InstallDriver { .. } => vec![],
+            // The file goes on the controller over the web API (InstallDriver); this is the
+            // c4soap half of Composer's "Update Driver": Director re-reads the named .c4z and
+            // reloads it in every device that uses it, keeping their properties. The reply
+            // comes back before the reload necessarily finishes, which is fine — we only need
+            // Director to have accepted the command.
+            Op::UpdateDriver { filename } => vec![Call::new("UpdateProjectC4i").str("name", filename)],
             Op::LoadProject { xml, .. } => {
                 let body = xml.trim_start();
                 let body = match body.strip_prefix("<?xml") {
