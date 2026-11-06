@@ -733,6 +733,8 @@ export interface Events {
   mcp: McpStatus;
   director: DirectorEvent;
   "project-changed": { director: string };
+  /** A live line of driver Lua output (Session capture). */
+  lua: LuaRecord;
   backups: BackupInfo[];
   "ui-command": UiCommand;
   "mcp-auth": AuthRequest;
@@ -926,4 +928,16 @@ export interface TakeoverReport {
   issued_cn: string;
   ca_label: string;
   mqtt_patched?: boolean;
+}
+
+/** One captured line of a driver's Lua print() output (app/src/state.rs LuaRecord). */
+export interface LuaRecord {
+  seq: number;
+  director: string;
+  device: number;
+  /** Director's unix timestamp. */
+  at: number;
+  /** When openComposer received it (unix seconds). */
+  recv: number;
+  text: string;
 }

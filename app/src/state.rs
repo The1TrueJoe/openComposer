@@ -61,6 +61,22 @@ pub struct Session {
     broker: tokio::sync::Mutex<Option<(Instant, Arc<c4::broker::Broker>)>>,
     /// Driver file → icon as a data URL (or None when it has none we can fetch).
     pub icons: tokio::sync::Mutex<HashMap<String, Option<String>>>,
+    /// Recent Lua `print()` output from this Director's drivers, newest at the back — the Lua tab
+    /// and the `driver_lua_output` tool read from it, filtered by device.
+    pub lua: Mutex<VecDeque<LuaRecord>>,
+    lua_seq: AtomicU64,
+}
+
+/// One captured line of driver Lua output. `at` is Director's clock; `recv` is openComposer's,
+/// used for the `seconds` window so a drifted controller clock doesn't hide recent lines.
+#[derive(Clone, Debug, Serialize)]
+pub struct LuaRecord {
+    pub seq: u64,
+    pub director: String,
+    pub device: u32,
+    pub at: u64,
+    pub recv: u64,
+    pub text: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -245,8 +261,11 @@ impl App {
             write_lock: Default::default(),
             broker: Default::default(),
             icons: Default::default(),
+            lua: Mutex::new(VecDeque::new()),
+            lua_seq: AtomicU64::new(0),
         });
         tokio::spawn(Session::watch(Arc::downgrade(&s), self.emitter.get().cloned()));
+        tokio::spawn(Session::capture_lua(Arc::downgrade(&s), self.emitter.get().cloned()));
         sessions.insert(saved.id.clone(), s.clone());
         drop(sessions);
         self.emit("director", serde_json::json!({ "id": saved.id, "connected": true, "info": s.director.info }));
@@ -337,6 +356,14 @@ impl App {
     }
 }
 
+/// Current unix time in seconds (0 if the clock is before the epoch).
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 impl Session {
     /// The project. Served from memory when there is a copy (the watcher keeps it current);
     /// `refresh` reads it from the Director now — before and after a write, where only the
@@ -364,6 +391,57 @@ impl Session {
     /// Re-reads the project every `WATCH_EVERY` while the session is in use and, when the
     /// Director's copy differs from ours, swaps it in and tells the UI (`project-changed`), so
     /// changes made elsewhere show up without every click waiting on an Upload.
+    /// Capture the driver Lua output Director streams on this connection into a recent window.
+    /// Director forwards every driver `print()` line (when its Debug/Print mode is on) to all
+    /// clients as an `OnDataToUI`/`LUA_OUTPUT` event; parse those and buffer them per device, and
+    /// emit each so an open Lua tab streams live. Ends when the connection closes.
+    async fn capture_lua(me: std::sync::Weak<Session>, emit: Option<SharedEmitter>) {
+        let (mut rx, id) = match me.upgrade() {
+            Some(s) => (s.director.conn.events(), s.id.clone()),
+            None => return,
+        };
+        loop {
+            let ev = match rx.recv().await {
+                Ok(ev) => ev,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(_) => return,
+            };
+            let Some(line) = c4::director::lua_output(&ev) else { continue };
+            let Some(s) = me.upgrade() else { return };
+            let rec = LuaRecord {
+                seq: s.lua_seq.fetch_add(1, Ordering::Relaxed),
+                director: id.clone(),
+                device: line.device,
+                at: line.at,
+                recv: now_unix(),
+                text: line.text,
+            };
+            {
+                let mut buf = s.lua.lock().unwrap();
+                buf.push_back(rec.clone());
+                while buf.len() > 2000 {
+                    buf.pop_front();
+                }
+            }
+            if let Some(f) = &emit {
+                f("lua", serde_json::to_value(&rec).unwrap_or_default());
+            }
+        }
+    }
+
+    /// Recent Lua output for one device: lines received in the last `seconds` (0 = all buffered),
+    /// oldest first, at most `limit`.
+    pub fn lua(&self, device: u32, seconds: u64, limit: usize) -> Vec<LuaRecord> {
+        let cutoff = if seconds == 0 { 0 } else { now_unix().saturating_sub(seconds) };
+        let buf = self.lua.lock().unwrap();
+        let mut out: Vec<LuaRecord> =
+            buf.iter().filter(|r| r.device == device && r.recv >= cutoff).cloned().collect();
+        if out.len() > limit {
+            out = out.split_off(out.len() - limit);
+        }
+        out
+    }
+
     async fn watch(me: std::sync::Weak<Session>, emit: Option<SharedEmitter>) {
         loop {
             tokio::time::sleep(WATCH_EVERY).await;

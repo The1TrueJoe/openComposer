@@ -338,3 +338,12 @@
   color: var(--dim); font: inherit; line-height: 1.45;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+
+/* Driver Lua output tab (pages/design/LuaTab.tsx): a live console of a driver's print() lines. */
+.lua-tab { display: flex; flex-direction: column; min-height: 0; height: 100%; }
+.lua-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); flex: none; }
+.lua-log { flex: 1; min-height: 0; overflow-y: auto; font-family: var(--mono); font-size: 12px; background: var(--bar); padding: 4px 0; }
+.lua-line { display: flex; gap: 10px; padding: 1px 10px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.lua-line:hover { background: var(--hover); }
+.lua-time { flex: none; color: var(--rule); user-select: none; }
+.lua-text { color: var(--text); }

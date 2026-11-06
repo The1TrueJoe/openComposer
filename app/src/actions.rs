@@ -48,6 +48,28 @@ pub struct ItemArgs {
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct LuaArgs {
+    #[serde(default)]
+    pub director: Option<String>,
+    /// The device id (from get_item / project_overview).
+    pub device: u32,
+    /// Only output from the last this-many seconds; omit for everything buffered.
+    #[serde(default)]
+    pub seconds: Option<u64>,
+    /// Most lines to return (default 500).
+    #[serde(default)]
+    pub limit: Option<usize>,
+}
+
+/// Recent Lua `print()` output from one device's driver. Director streams it to openComposer
+/// while the driver's Debug Mode is On; this returns the recent buffered lines.
+pub async fn lua_output(app: &Arc<App>, a: LuaArgs) -> AppResult<Value> {
+    let s = app.session(a.director.as_deref()).await?;
+    let lines = s.lua(a.device, a.seconds.unwrap_or(0), a.limit.unwrap_or(500));
+    Ok(json!({ "device": a.device, "lines": lines }))
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct ConnectionsArgs {
     #[serde(default)]
     pub director: Option<String>,

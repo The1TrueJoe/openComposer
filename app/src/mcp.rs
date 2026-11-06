@@ -99,6 +99,15 @@ impl OpenComposerMcp {
         self.run("get_item", s, actions::get_item(&self.app, a)).await
     }
 
+    #[tool(description = "Recent Lua print() output from a driver — its print() lines and Director's Lua errors \
+        (e.g. \"attempt to call a nil value\"), the way Composer's Lua tab shows them. The device's Debug Mode \
+        property must be On for the driver to emit output. `seconds` limits to the last N seconds; omit for all buffered.",
+        annotations(read_only_hint = true))]
+    async fn driver_lua_output(&self, Parameters(a): Parameters<LuaArgs>) -> Result<CallToolResult, McpError> {
+        let s = format!("device {}", a.device);
+        self.run("driver_lua_output", s, actions::lua_output(&self.app, a)).await
+    }
+
     #[tool(description = "Connection (binding) definitions across the project with what each is connected to. \
         Filter by device, class (HDMI, IR_OUT, STEREO…) or only unconnected ones.", annotations(read_only_hint = true))]
     async fn list_connections(&self, Parameters(a): Parameters<ConnectionsArgs>) -> Result<CallToolResult, McpError> {

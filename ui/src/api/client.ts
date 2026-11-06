@@ -3,7 +3,7 @@ import type {
   DirectorInfo, DriverDoc, Events, ItemDetail, McpStatus, NetworkView, Op, Outcome, Overview,
   ProgrammingEvent, VariableRow, Provider, ProviderStatus, SavedDirector, AccessMode, TreeNode, ZigbeeQuery, BackupResult,
   AddDriverArgs, ControllerDriver, LibraryDriver, UiContext, CommandParam, DeviceState, Effort, AuthRequest, McpGrant, DriverTab, AgentView,
-  TakeoverStatus, TakeoverParams, TakeoverReport, RevertParams, SidecarDetection, FoundCert, EraProbe,
+  TakeoverStatus, TakeoverParams, TakeoverReport, RevertParams, SidecarDetection, FoundCert, EraProbe, LuaRecord,
 } from "./types";
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -66,6 +66,8 @@ export const api = {
   setActiveDirector: (id: string) => call<void>("set_active_director", { id }),
   forgetFingerprint: (id: string) => call<void>("forget_fingerprint", { id }),
   connect: (id: string) => call<{ id: string; mode: AccessMode; info: DirectorInfo }>("connect_director", { id }),
+  /** Recent Lua output for a device (initial fill; live lines arrive on the `lua` event). */
+  driverLuaOutput: (device: number, seconds?: number) => call<{ device: number; lines: LuaRecord[] }>("driver_lua_output", { device, seconds }),
   disconnect: (id: string) => call<void>("disconnect_director", { id }),
   discoverControllers: () => call<Announcement[]>("discover_controllers"),
 

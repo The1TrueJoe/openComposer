@@ -4,7 +4,7 @@ import type { AddDriverArgs, AppStatus, Approval, DirectorInfo, KindLabel, Op, O
 
 export type View = "design" | "network" | "programming" | "agent" | "backups" | "activity" | "settings";
 
-export const INSPECTOR_TABS = ["properties", "connections", "network", "variables", "events"] as const;
+export const INSPECTOR_TABS = ["properties", "connections", "network", "variables", "events", "lua"] as const;
 export type InspectorTab = (typeof INSPECTOR_TABS)[number];
 
 /** The Design selection, resolved against the tree: what "this" means to an assistant. */
