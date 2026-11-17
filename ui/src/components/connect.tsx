@@ -7,7 +7,9 @@
  *  3. Connecting — and the project opens. */
 
 import { createColumnHelper } from "@tanstack/react-table";
-import { ArrowLeft, Cable, KeyRound, ArrowRight, Check, Plug, Plus, Radar, RefreshCw } from "lucide-react";
+import { ArrowLeft, Cable, KeyRound, ArrowRight, Check, Plug, Plus, Radar, RefreshCw, Trash2 } from "lucide-react";
+import { toast } from "sonner";
+import { useDialog } from "./Dialogs";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, errText, type Announcement, type AppStatus, type DirectorInfo, type SavedDirector, type SidecarDetection, type SidecarSession } from "../api";
 import { cx } from "../lib/ui";
@@ -34,6 +36,13 @@ const STEPS = ["Connection", "Controller", "Certificate", "Open project"] as con
 export function ConnectScreen({ status, info, onChanged, onEnter }: {
   status: AppStatus; info: Map<string, DirectorInfo>; onChanged: () => void; onEnter: () => void;
 }) {
+  const { confirm } = useDialog();
+  const removeDirector = async (id: string, name: string) => {
+    if (await confirm({ title: `Remove ${name}?`, description: "Only openComposer's settings for it are removed; nothing on the controller changes.", confirmLabel: "Remove", danger: true })) {
+      try { await api.removeDirector(id); onChanged(); }
+      catch (e) { toast.error(errText(e)); }
+    }
+  };
   const { directors, active_director } = status.config;
   const [step, setStep] = useState<Step>({ kind: "method" });
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -80,6 +89,7 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
       onEnter();
     } catch (e) {
       const msg = errText(e);
+      toast.error(msg);
       if (NEEDS_CERT.test(msg)) {
         setStep({ kind: "certificate", target: t, why: msg });
       } else {
@@ -103,7 +113,9 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
       onChanged();
       await connect({ id: d.id, name: d.name });
     } catch (e) {
-      setErrors((x) => ({ ...x, [key]: errText(e) }));
+      const msg = errText(e);
+      toast.error(msg);
+      setErrors((x) => ({ ...x, [key]: msg }));
     } finally {
       setBusy(null);
     }
@@ -120,7 +132,9 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
       onChanged();
       await connect({ id: d.id, name: d.name });
     } catch (e) {
-      setErrors((x) => ({ ...x, [key]: errText(e) }));
+      const msg = errText(e);
+      toast.error(msg);
+      setErrors((x) => ({ ...x, [key]: msg }));
     } finally {
       setBusy(null);
     }
@@ -153,7 +167,7 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
     .sort((a, b) => Number(a.secondary) - Number(b.secondary));
   const savedRows: ControllerRow[] = others.map((d) => ({
     key: d.id, name: d.name, address: d.host, model: null, os: info.get(d.id)?.version ?? null, readOnly: d.mode === "read_only",
-    secondary: false, open: status.connected.includes(d.id), error: errors[d.id] || null, last: d.id === first, go: () => connect(d),
+    secondary: false, open: status.connected.includes(d.id), error: errors[d.id] || null, last: d.id === first, go: () => connect(d), remove: () => void removeDirector(d.id, d.name),
   }));
 
   return (
@@ -325,6 +339,8 @@ interface ControllerRow {
   /** The one used last time. */
   last: boolean;
   go: () => void;
+  /** Saved Directors only: forget openComposer's settings for this one. */
+  remove?: () => void;
 }
 
 const col = createColumnHelper<ControllerRow>();
@@ -350,15 +366,24 @@ function ControllerTable({ rows, busy, label }: { rows: ControllerRow[]; busy: s
     col.accessor("model", { header: "Model", meta: { className: "nowrap-cell" }, cell: (c) => c.getValue() ?? <span className="dim">—</span> }),
     col.accessor("os", { header: "OS", meta: { width: 104, className: "mono nowrap-cell" }, cell: (c) => c.getValue() ?? <span className="dim">—</span> }),
     col.display({
-      id: "go", meta: { width: 112, align: "right" },
+      id: "go", meta: { width: 150, align: "right" },
       cell: (c) => {
         const r = c.row.original;
         if (r.secondary) return <Tip text="Only the main controller runs a Director"><span className="tag">secondary</span></Tip>;
         return (
-          <button className="act small primary" disabled={!!busy} onClick={r.go}>
-            {busy === r.key ? <Spinner /> : r.open ? <ArrowRight size={13} strokeWidth={1.8} /> : <Plug size={13} strokeWidth={1.8} />}
-            {r.open ? "Open" : "Connect"}
-          </button>
+          <span className="row nowrap" style={{ gap: 6, justifyContent: "flex-end" }}>
+            <button className="act small primary" disabled={!!busy} onClick={r.go}>
+              {busy === r.key ? <Spinner /> : r.open ? <ArrowRight size={13} strokeWidth={1.8} /> : <Plug size={13} strokeWidth={1.8} />}
+              {r.open ? "Open" : "Connect"}
+            </button>
+            {r.remove && !r.open && (
+              <Tip text="Remove this saved controller">
+                <button className="act small quiet" aria-label={`Remove ${r.name}`} disabled={!!busy} onClick={r.remove}>
+                  <Trash2 size={13} strokeWidth={1.8} />
+                </button>
+              </Tip>
+            )}
+          </span>
         );
       },
     }),
