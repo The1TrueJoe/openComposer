@@ -36,6 +36,56 @@ pub fn is_control4_mac(mac: &str) -> bool {
     C4_OUI.iter().any(|p| m.starts_with(p))
 }
 
+/// Normalise a loosely-formatted MAC (any separators, octets with or without a leading
+/// zero — e.g. macOS `arp` prints `0:f:ff:94:ee:2`) to `AA:BB:CC:DD:EE:FF`. `None` unless
+/// it is six hex octets.
+pub fn normalize_mac(mac: &str) -> Option<String> {
+    let octets: Vec<String> = mac
+        .split(|c| c == ':' || c == '-')
+        .map(|o| o.trim())
+        .filter(|o| !o.is_empty())
+        .collect::<Vec<_>>()
+        .iter()
+        .map(|o| o.to_string())
+        .collect();
+    if octets.len() != 6 || octets.iter().any(|o| o.len() > 2 || !o.chars().all(|c| c.is_ascii_hexdigit())) {
+        return None;
+    }
+    Some(octets.iter().map(|o| format!("{:0>2}", o.to_uppercase())).collect::<Vec<_>>().join(":"))
+}
+
+/// Best-effort MAC for an IPv4 host from the OS ARP cache, so the takeover form can fill it
+/// in for the owner. Pings first to populate the cache, then parses `arp`. Returns a
+/// Control4-OUI MAC only (the derived password is meaningless for anything else), or `None`.
+pub fn mac_for_host(host: &str) -> Option<String> {
+    use std::process::Command;
+    // ARP is IPv4-only; bail on hostnames/IPv6 rather than guess.
+    if host.parse::<std::net::Ipv4Addr>().is_err() {
+        return None;
+    }
+    // Populate the cache (one quick ping; ignore the result).
+    let _ = if cfg!(windows) {
+        Command::new("ping").args(["-n", "1", "-w", "500", host]).output()
+    } else {
+        Command::new("ping").args(["-c", "1", "-t", "1", host]).output()
+    };
+    let out = if cfg!(windows) {
+        Command::new("arp").args(["-a", host]).output().ok()?
+    } else {
+        Command::new("arp").args(["-n", host]).output().ok()?
+    };
+    let text = String::from_utf8_lossy(&out.stdout);
+    // The line that mentions the host carries its MAC as the one HH:HH:HH:HH:HH:HH /
+    // HH-HH-...-HH token (macOS drops leading octet zeros, hence normalize_mac).
+    let line = text.lines().find(|l| l.contains(host))?;
+    let tok = line.split_whitespace().find(|w| {
+        let parts: Vec<&str> = w.split(|c| c == ':' || c == '-').collect();
+        parts.len() == 6 && parts.iter().all(|p| !p.is_empty() && p.len() <= 2 && p.chars().all(|c| c.is_ascii_hexdigit()))
+    })?;
+    let mac = normalize_mac(tok)?;
+    is_control4_mac(&mac).then_some(mac)
+}
+
 /// Normalise a MAC to the form the derivation hashes: 12 uppercase hex digits, no
 /// separators. Returns `None` if it is not 12 hex digits.
 fn canon_mac(mac: &str) -> Option<String> {
@@ -73,6 +123,16 @@ pub fn derive_root_pw(mac: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normalize_mac_pads_and_uppercases() {
+        // macOS arp drops each octet's leading zero; we restore it.
+        assert_eq!(normalize_mac("0:f:ff:94:ee:2").as_deref(), Some("00:0F:FF:94:EE:02"));
+        assert_eq!(normalize_mac("00-0f-ff-94-ee-02").as_deref(), Some("00:0F:FF:94:EE:02"));
+        assert_eq!(normalize_mac("00:0F:FF:94:EE:02").as_deref(), Some("00:0F:FF:94:EE:02"));
+        assert_eq!(normalize_mac("not a mac"), None);
+        assert_eq!(normalize_mac("00:0f:ff:94:ee"), None); // five octets
+    }
 
     // The EA3 lab unit (MAC 00:0F:FF:1F:35:65) has a confirmed-working derived root
     // password; this pins the whole chain (canon, KDF params, base64).

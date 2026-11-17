@@ -142,6 +142,8 @@ export const api = {
   // Controller takeover (SSH + cert swap). Not part of the agent/MCP surface — a user action.
   /** Whether openComposer has a takeover CA yet, and where it came from. */
   takeoverStatus: () => call<TakeoverStatus>("takeover_status"),
+  /** The controller's MAC from the ARP cache (Control4 OUI only), to fill in the takeover form. */
+  macForHost: (host: string) => call<string | null>("mac_for_host", { host }),
   /** Adopt an existing "Gary tool" Certs folder's CA (its public.pem + private.key). */
   adoptGaryCa: (folder: string) => call<string>("adopt_gary_ca", { folder }),
   /** Take over a controller. `confirm` is sent true: the UI must confirm before calling. */

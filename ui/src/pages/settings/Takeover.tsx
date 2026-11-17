@@ -1,25 +1,34 @@
 import { CircleCheck, FolderOpen, RotateCcw, ShieldCheck, TriangleAlert } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { api, errText, type TakeoverReport } from "../../api";
 import { useDialog } from "../../components/Dialogs";
 import { Spinner, Switch } from "../../components/controls";
 import { pickDir } from "../../lib/files";
-import type { Shell } from "../../lib/shell";
 import { useLoad } from "../../lib/ui";
 
 /** Taking over a controller you own: install openComposer's CA so its certificate is
  *  trusted. Writes to the controller and reboots it, so every run is confirmed first. */
-export function Takeover({ shell }: { shell: Shell }) {
+export function Takeover({ onChanged, initialHost, onDone }: { onChanged: () => void; initialHost?: string; onDone?: () => void }) {
   const ca = useLoad(() => api.takeoverStatus(), []);
   const { confirm } = useDialog();
 
-  const [host, setHost] = useState("");
+  const [host, setHost] = useState(initialHost ?? "");
+  useEffect(() => { if (initialHost) setHost(initialHost); }, [initialHost]);
   const [osVersion, setOsVersion] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [dealer, setDealer] = useState("");
   const [mac, setMac] = useState("");
+  // Offer the MAC-derived root password without the owner reading the MAC off a label:
+  // resolve it from the ARP cache once the host is a bare IPv4 and the field is still empty.
+  useEffect(() => {
+    const ip = host.trim();
+    if (mac.trim() || !/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) return;
+    let live = true;
+    api.macForHost(ip).then((m) => { if (live && m && !mac.trim()) setMac(m); }, () => {});
+    return () => { live = false; };
+  }, [host, mac]);
   const [reboot, setReboot] = useState(true);
   const [mqtt, setMqtt] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -70,7 +79,8 @@ export function Takeover({ shell }: { shell: Shell }) {
       setReport(r);
       setPassword("");
       toast.success(`Took over ${host.trim()} — client certificate imported`);
-      shell.refreshStatus();
+      onChanged();
+      onDone?.();
     } catch (e) {
       toast.error(errText(e));
     } finally {

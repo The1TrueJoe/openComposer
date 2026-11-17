@@ -17,10 +17,12 @@ import { Spinner } from "./controls";
 import { DataTable } from "./DataTable";
 import { Tip } from "./Dialogs";
 import { AddDirectorForm, CertificateForm } from "./setup";
+import { Takeover } from "../pages/settings/Takeover";
 import { ReadOnlyLock } from "./shell";
 
-/** Errors that mean "this controller wants a (different) client certificate". */
-const NEEDS_CERT = /certificate|access denied|handshake|tls/i;
+/** Errors that mean "this controller wants a (different) client certificate". A Director
+ *  that closes the connection right after the TLS handshake is rejecting the client cert. */
+const NEEDS_CERT = /certificate|access denied|handshake|tls|closed/i;
 
 type Target = { id: string; name: string };
 /** How to reach the controller, chosen in step 1; step 2 shows what that method finds. */
@@ -29,6 +31,7 @@ type Step =
   | { kind: "method" }
   | { kind: "controller"; method: Method }
   | { kind: "certificate"; target: Target; why: string | null }
+  | { kind: "takeover"; target: Target }
   | { kind: "connecting"; target: Target };
 
 const STEPS = ["Connection", "Controller", "Certificate", "Open project"] as const;
@@ -148,7 +151,7 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
     .filter((d) => !seen.has(d.id))
     .sort((a, b) => (a.id === first ? -1 : b.id === first ? 1 : a.name.localeCompare(b.name)));
 
-  const at = step.kind === "method" ? 0 : step.kind === "controller" ? 1 : step.kind === "certificate" ? 2 : 3;
+  const at = step.kind === "method" ? 0 : step.kind === "controller" ? 1 : step.kind === "certificate" || step.kind === "takeover" ? 2 : 3;
   const sidecarReady = !!sidecar && sidecar.sessions.length > 0;
   /** Jump to step 2 for a chosen method. */
   const choose = (method: Method) => { setLastMethod(method); setStep({ kind: "controller", method }); };
@@ -300,7 +303,26 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
               : <>Controllers only talk to a client holding a certificate they trust: a <code>.pem</code> with its <code>.key</code>, or a <code>.p12</code>. openComposer doesn't include one.</>}
           </p>
           <CertificateForm identity={status.identity} onChanged={() => { onChanged(); void connect(step.target, true); }} />
+          <p className="dim small" style={{ marginTop: 12 }}>
+            No certificate the controller trusts? If you own this controller, you can{" "}
+            <button className="link" onClick={() => setStep({ kind: "takeover", target: step.target })}>take it over</button>{" "}
+            to install openComposer's own — it needs SSH access to the controller, not a certificate.
+          </p>
           <BackFoot onBack={() => setStep({ kind: "controller", method: lastMethod })} />
+        </>}
+
+        {step.kind === "takeover" && <>
+          <h1>Take over {step.target.name}</h1>
+          <p className="lede">
+            Install openComposer's own certificate authority on this controller so the certificate it
+            issues is trusted — no dealer certificate needed. Only do this on a controller you own.
+          </p>
+          <Takeover
+            onChanged={onChanged}
+            initialHost={directors.find((d) => d.id === step.target.id)?.host}
+            onDone={() => setStep({ kind: "certificate", target: step.target, why: null })}
+          />
+          <BackFoot onBack={() => setStep({ kind: "certificate", target: step.target, why: null })} />
         </>}
 
         {step.kind === "connecting" && (
@@ -358,7 +380,6 @@ function ControllerTable({ rows, busy, label }: { rows: ControllerRow[]; busy: s
             {c.row.original.last && <span className="dim small">last used</span>}
           </span>
           {c.row.original.secondary && <span className="dim small">Secondary controller — the project lives on the Director.</span>}
-          {c.row.original.error && <span className="err small">{c.row.original.error}</span>}
         </span>
       ),
     }),

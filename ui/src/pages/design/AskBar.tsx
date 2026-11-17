@@ -84,8 +84,10 @@ export function AskBar({ shell, focus, project }: { shell: Shell; focus: FocusIt
     const el = box.current;
     if (!el) return;
     const fit = () => {
+      // An empty field keeps its one-row height: measuring scrollHeight here would grow
+      // the box to fit a long (wrapping) placeholder and push the whole bar up.
       el.style.height = "auto";
-      el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+      el.style.height = el.value ? `${Math.min(el.scrollHeight, 140)}px` : "";
     };
     fit();
     let w = el.clientWidth;
@@ -206,7 +208,7 @@ export function AskBar({ shell, focus, project }: { shell: Shell; focus: FocusIt
             <span className="ask-chip"><Eye size={11} strokeWidth={1.8} /><span>{chip}</span></span>
           </Tip>
           <textarea ref={box} rows={1} value={text} aria-label="Ask the agent"
-                    placeholder={busy ? "Working… (Stop to interrupt)" : "Ask about this project, or tell me what to change…"}
+                    placeholder={busy ? "Working… (Stop to interrupt)" : "Ask or describe a change…"}
                     onChange={(e) => setText(e.target.value)}
                     onFocus={() => { if (conv?.entries.length && !open) setOpen(true); }}
                     onKeyDown={(e) => {

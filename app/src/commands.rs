@@ -438,6 +438,15 @@ pub async fn mcp_revoke(app: S<'_>, id: String) -> R<()> {
 // Deliberately not exposed to the agent or MCP: a takeover writes to a controller and
 // reboots it, so it runs only from an explicit, confirmed user action in the app.
 
+/// The controller's MAC from the ARP cache (Control4 OUI only), so the takeover form can
+/// offer the MAC-derived root password without the owner reading it off a label.
+#[tauri::command]
+pub async fn mac_for_host(host: String) -> R<Option<String>> {
+    Ok(tokio::task::spawn_blocking(move || c4::takeover::authderive::mac_for_host(&host))
+        .await
+        .unwrap_or(None))
+}
+
 /// Whether openComposer has a takeover CA yet, and where it came from.
 #[tauri::command]
 pub async fn takeover_status(app: S<'_>) -> R<Value> {

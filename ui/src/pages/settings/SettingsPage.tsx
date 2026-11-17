@@ -18,7 +18,7 @@ export function SettingsPage({ shell }: { shell: Shell }) {
         <CertificateForm identity={shell.status.identity} onChanged={shell.refreshStatus} />
       </section>
       <Directors shell={shell} />
-      <Takeover shell={shell} />
+      <Takeover onChanged={shell.refreshStatus} />
       <Mcp shell={shell} />
       <Agent shell={shell} />
     </div>
