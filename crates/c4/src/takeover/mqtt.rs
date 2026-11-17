@@ -72,7 +72,7 @@ pub fn generate() -> Result<Signing> {
     params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     let cert = params.self_signed(&key).map_err(|e| MqttError::Cert(e.to_string()))?;
 
-    Ok(Signing { cert_pem: cert.pem(), key_pem: key_pem.clone() })
+    Ok(Signing { cert_pem: crate::takeover::ca::lf(cert.pem()), key_pem: key_pem.clone() })
 }
 
 impl Signing {

@@ -43,6 +43,12 @@ pub enum CaError {
 type Result<T, E = CaError> = std::result::Result<T, E>;
 
 /// Generate a fresh RSA 2048 private key as PKCS#8 PEM.
+/// rcgen's PEM follows the host's line endings (CRLF on Windows); everything here
+/// ends up on the controller, a Linux box, and is compared as text, so use LF.
+pub(crate) fn lf(pem: String) -> String {
+    pem.replace("\r\n", "\n")
+}
+
 fn generate_rsa_pem() -> Result<String> {
     let key = RsaPrivateKey::new(&mut OsRng, 2048).map_err(|e| CaError::KeyGen(e.to_string()))?;
     Ok(key.to_pkcs8_pem(LineEnding::LF).map_err(|e| CaError::KeyGen(e.to_string()))?.to_string())
@@ -74,7 +80,7 @@ impl Ca {
         params.key_usages = vec![KeyUsagePurpose::KeyCertSign, KeyUsagePurpose::CrlSign];
         let cert = params.self_signed(&key).map_err(|e| CaError::Issue(e.to_string()))?;
 
-        Ok(Self { key_pem, cert_pem: cert.pem(), cn: common_name.to_string() })
+        Ok(Self { key_pem, cert_pem: lf(cert.pem()), cn: common_name.to_string() })
     }
 
     /// Load an existing CA from its private key and certificate PEM (e.g. a Gary `Certs`
@@ -132,7 +138,7 @@ impl Ca {
             .signed_by(&leaf_key, &ca_cert, &ca_key)
             .map_err(|e| CaError::Issue(e.to_string()))?;
 
-        Ok(Issued { cert_pem: cert.pem(), key_pem: leaf_key_pem })
+        Ok(Issued { cert_pem: lf(cert.pem()), key_pem: leaf_key_pem })
     }
 }
 

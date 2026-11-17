@@ -1,17 +1,41 @@
 name: release
 
-# Builds the macOS universal .app/.dmg and the Windows NSIS installer, unsigned,
-# into a draft GitHub release. Run it from the Actions tab or push a v* tag.
+# Builds the macOS universal .app/.dmg and the Windows NSIS installer, unsigned.
+#   push to main   -> the rolling "dev" pre-release, rebuilt at every commit, always
+#                     downloadable: releases/tag/dev
+#   push a v* tag  -> a draft release for that version, published by hand
+#   Run workflow   -> same as a push to main
 on:
   push:
+    branches: [main]
     tags: ["v*"]
   workflow_dispatch:
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Recreate "dev" at this commit, so both builds upload into one existing release
+  # (and the tag moves with main).
+  dev-release:
+    if: github.ref_type != 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release delete dev --cleanup-tag --yes -R "$GITHUB_REPOSITORY" || true
+          gh release create dev -R "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
+            --title "openComposer dev (latest main)" \
+            --notes "Built from $GITHUB_SHA. Unsigned builds. macOS: after the first blocked launch, System Settings → Privacy & Security → Open Anyway (or run xattr -dr com.apple.quarantine /Applications/openComposer.app). Windows: SmartScreen → More info → Run anyway."
+
   build:
+    needs: dev-release
+    if: ${{ !cancelled() && (needs.dev-release.result == 'success' || needs.dev-release.result == 'skipped') }}
     strategy:
       fail-fast: false
       matrix:
@@ -42,8 +66,8 @@ jobs:
           projectPath: app
           tauriScript: npx -y @tauri-apps/cli@2.12.3
           args: ${{ matrix.args }}
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('build-{0}', github.run_number) }}
-          releaseName: openComposer ${{ github.ref_type == 'tag' && github.ref_name || format('build {0}', github.run_number) }}
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
+          releaseName: ${{ github.ref_type == 'tag' && format('openComposer {0}', github.ref_name) || 'openComposer dev (latest main)' }}
           releaseBody: "Unsigned builds. macOS: after the first blocked launch, System Settings → Privacy & Security → Open Anyway (or run xattr -dr com.apple.quarantine /Applications/openComposer.app). Windows: SmartScreen → More info → Run anyway."
-          releaseDraft: true
+          releaseDraft: ${{ github.ref_type == 'tag' }}
           prerelease: ${{ github.ref_type != 'tag' }}
