@@ -309,7 +309,7 @@ impl App {
     pub fn ensure_writable(&self, saved: &SavedDirector) -> AppResult<()> {
         match saved.mode {
             AccessMode::ReadOnly => Err(AppError::ReadOnly(saved.name.clone())),
-            AccessMode::Approve => Ok(()),
+            AccessMode::Approve | AccessMode::Auto => Ok(()),
         }
     }
 

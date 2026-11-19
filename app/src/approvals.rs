@@ -21,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::oneshot;
 
 use crate::backups;
+use crate::config::AccessMode;
 use crate::state::{App, AppError, AppResult, Session};
 
 const DECISION_TIMEOUT: Duration = Duration::from_secs(15 * 60);
@@ -178,22 +179,26 @@ pub async fn propose(
         restore_point: None,
         verification: None,
     };
-    let (tx, rx) = oneshot::channel();
-    app.approvals.waiters.lock().unwrap().insert(id.clone(), tx);
     app.approvals.all.lock().unwrap().push(approval.clone());
-    app.emit("approval", &approval);
-    app.emit("attention", serde_json::json!({ "kind": "approval", "id": id, "title": approval.descriptions.first() }));
 
-    let decision = tokio::time::timeout(DECISION_TIMEOUT, rx).await;
-    let (approved, note) = match decision {
-        Ok(Ok(d)) => d,
-        _ => {
-            app.approvals.waiters.lock().unwrap().remove(&id);
-            let a = app.approvals.update(app, &id, |a| {
-                a.status = Status::Expired;
-                a.decided = Some(Utc::now());
-            });
-            return Ok(a.unwrap_or(approval));
+    // A trusted ("auto") Director applies without a card; others pause for an approval.
+    let (approved, note) = if saved.mode == AccessMode::Auto {
+        (true, None)
+    } else {
+        let (tx, rx) = oneshot::channel();
+        app.approvals.waiters.lock().unwrap().insert(id.clone(), tx);
+        app.emit("approval", &approval);
+        app.emit("attention", serde_json::json!({ "kind": "approval", "id": id, "title": approval.descriptions.first() }));
+        match tokio::time::timeout(DECISION_TIMEOUT, rx).await {
+            Ok(Ok(d)) => d,
+            _ => {
+                app.approvals.waiters.lock().unwrap().remove(&id);
+                let a = app.approvals.update(app, &id, |a| {
+                    a.status = Status::Expired;
+                    a.decided = Some(Utc::now());
+                });
+                return Ok(a.unwrap_or(approval));
+            }
         }
     };
     if !approved {

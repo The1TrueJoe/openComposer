@@ -12,6 +12,7 @@ import { Select, Spinner } from "./controls";
 
 export const MODES: { value: AccessMode; label: string }[] = [
   { value: "approve", label: "Approve each write" },
+  { value: "auto", label: "Apply automatically (trusted controller)" },
   { value: "read_only", label: "Read only" },
 ];
 

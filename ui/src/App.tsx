@@ -150,7 +150,7 @@ export default function App() {
       status, director,
       info: director ? info.get(director.id) ?? null : null,
       connected: !!director && status.connected.includes(director.id),
-      writable: director?.mode === "approve",
+      writable: director?.mode === "approve" || director?.mode === "auto",
       rev, approvals, propose, addDriver, refreshStatus,
       openApprovals: () => setDrawer(true),
       go: setView,
