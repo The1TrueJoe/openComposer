@@ -13,6 +13,8 @@ pub enum AccessMode {
     ReadOnly,
     /// Writes pause for an approval card showing the predicted diff.
     Approve,
+    /// Writes apply at once, no approval card — for a controller you own and trust.
+    Auto,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
