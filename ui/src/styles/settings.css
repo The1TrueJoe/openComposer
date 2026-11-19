@@ -1,9 +1,9 @@
 /* Settings, the setup forms shared with onboarding, and the Backups library. */
-.settings .card { scroll-margin-top: 12px; }
-.settings .section.flush { padding-top: 16px; }
+.settings .card { scroll-margin-top: var(--s3); }
+.settings .section.flush { padding-top: var(--s5); }
 
-.kv { display: grid; grid-template-columns: 120px 1fr; gap: 10px 14px; align-items: center; margin-top: 12px; }
-.kv > .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; }
+.kv { display: grid; grid-template-columns: 128px 1fr; gap: var(--s3) var(--s4); align-items: center; margin-top: var(--s3); }
+.kv > .k { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; font-weight: 600; align-self: center; }
 .kv > input { max-width: 460px; }
 .token { font-size: 12px; padding: 3px 8px; }
 .providers { display: flex; flex-direction: column; gap: 4px; }
@@ -40,10 +40,10 @@
 .found-row:hover { background: color-mix(in srgb, var(--accent) 7%, transparent); }
 .found-row:hover .spread { color: var(--accent); }
 
-.dir { border: 1px solid var(--line); border-radius: 9px; padding: 9px 10px; margin-top: 10px; background: var(--bg); }
-.dir.active { border-color: color-mix(in srgb, var(--accent) 40%, transparent); }
-.dir-top, .dir-bottom { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.dir-bottom { margin-top: 8px; font-size: 12px; }
+.dir { border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--s3) var(--s3) var(--s3) var(--s4); margin-top: var(--s3); background: var(--bg); }
+.dir.active { border-color: color-mix(in srgb, var(--accent) 40%, transparent); box-shadow: inset 2px 0 0 var(--accent); }
+.dir-top, .dir-bottom { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.dir-bottom { margin-top: var(--s2); font-size: 12px; }
 .dir-name { font-weight: 600; flex: 1; min-width: 160px; }
 .dir-host { flex: 1; min-width: 150px; }
 .dir-name, .dir-host { background: transparent; border-color: transparent; }
