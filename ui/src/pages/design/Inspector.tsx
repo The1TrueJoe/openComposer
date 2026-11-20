@@ -92,18 +92,10 @@ export function Inspector({ id, shell, onSelect, actions }: {
   return (
     <div className="panel insp">
       <div className="insp-head">
+        <div className="insp-id">
         <span className="insp-ic"><DriverIcon driver={d.driver} kind={d.kind} proxy={d.device?.proxies[0] ?? (d.kind === "proxy" ? d.driver?.replace(/\.c4[iz]$/i, "") : null)} size={22} /></span>
         <div className="insp-title">
           <h2>{d.name} <span className="tag">{d.kind}</span> <span className="dim mono small">#{d.id}</span></h2>
-          {d.device ? (
-            <div className="insp-facts">
-              <span><b>{d.device.manufacturer}</b> {d.device.model}</span>
-              {d.driver && <code>{d.driver}</code>}
-              {d.device.version && <span className="dim">v{d.device.version}</span>}
-              {d.device.control_method && <span className="tag">{d.device.control_method}</span>}
-              {d.device.search_type && <span className="dim mono">{d.device.search_type}</span>}
-            </div>
-          ) : d.driver && <div className="insp-facts"><code>{d.driver}</code></div>}
         </div>
         <div className="insp-acts">
           {controllable && (
@@ -120,6 +112,16 @@ export function Inspector({ id, shell, onSelect, actions }: {
             {d.kind !== "proxy" && <Act icon={<Trash2 size={14} strokeWidth={1.8} />} label="Remove" danger why={why} onClick={() => actions.remove(d.id, d.name, d.kind)} />}
           </>}
         </div>
+        </div>
+        {d.device ? (
+          <div className="insp-facts">
+            <span><b>{d.device.manufacturer}</b> {d.device.model}</span>
+            {d.driver && <code>{d.driver}</code>}
+            {d.device.version && <span className="dim">v{d.device.version}</span>}
+            {d.device.control_method && <span className="tag">{d.device.control_method}</span>}
+            {d.device.search_type && <span className="dim mono">{d.device.search_type}</span>}
+          </div>
+        ) : d.driver && <div className="insp-facts"><code>{d.driver}</code></div>}
       </div>
       <Tabs<string> tabs={[
               ...(hasNative ? [{ id: "agent:", label: <>{nv?.title ?? d.name}</> }] : []),
