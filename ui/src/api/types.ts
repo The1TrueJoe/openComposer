@@ -398,7 +398,8 @@ export type ZigbeeQuery = "server" | "mesh" | "nodes" | "zaps";
 export type ZigbeeAction =
   | { zigbee: "permit_join"; seconds: number }
   | { zigbee: "remove_node"; address: string }
-  | { zigbee: "identify_access_point"; address: string };
+  | { zigbee: "identify_access_point"; address: string }
+  | { zigbee: "add_access_point"; ip: string };
 
 export interface DriverDoc {
   filename: string;
