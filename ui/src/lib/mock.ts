@@ -232,6 +232,11 @@ function describe(op: Op): string {
     case "set_property": return `Set ${n(op.device)} property “${op.name}” to “${masked(op.name, op.value)}”`;
     case "install_driver": return `Install driver file ${op.filename} from ${op.source}`;
     case "run_action": return `Run action “${op.command}” on ${n(op.device)}`;
+    case "zigbee_control":
+      return op.action.zigbee === "permit_join"
+        ? op.action.seconds === 0 ? "Close the Zigbee join window" : `Open the Zigbee mesh to pair a device for ${op.action.seconds}s`
+        : op.action.zigbee === "remove_node" ? `Remove Zigbee node ${op.action.address} from the mesh`
+          : `Flash the identify light on Zigbee access point ${op.action.address}`;
     case "send_command": {
       const ps = (op.params ?? []).map((p) => `${p.name}=${p.value}`).join(", ");
       return `Send ${op.command}${ps ? ` (${ps})` : ""} to ${n(op.device)}`;
@@ -348,6 +353,7 @@ function predict(ops: Op[]): Change[] {
       case "install_driver":
       case "run_action":
       case "send_command":
+      case "zigbee_control":
         break;
       case "add_schedule_entry":
       case "modify_schedule_entry":
@@ -452,6 +458,8 @@ function apply(op: Op): number[] {
       return [];
     }
     case "run_action":
+      return [];
+    case "zigbee_control":
       return [];
     case "load_project":
       return [];

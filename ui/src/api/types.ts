@@ -394,6 +394,12 @@ export interface PhysicalDevice {
 
 export type ZigbeeQuery = "server" | "mesh" | "nodes" | "zaps";
 
+/** A Zigbee mesh management action (crates/c4/src/zigbee.rs). */
+export type ZigbeeAction =
+  | { zigbee: "permit_join"; seconds: number }
+  | { zigbee: "remove_node"; address: string }
+  | { zigbee: "identify_access_point"; address: string };
+
 export interface DriverDoc {
   filename: string;
   name: string;
@@ -608,6 +614,8 @@ export type Op =
   | { op: "add_email_template"; agent: number; template: EmailTemplateSpec }
   | { op: "modify_email_template"; agent: number; id: number; template: EmailTemplateSpec }
   | { op: "remove_email_template"; agent: number; id: number }
+  /** Manage the Zigbee mesh (no project change; acts on live hardware, approved like a write). */
+  | { op: "zigbee_control"; iddevice: number; action: ZigbeeAction }
   /** Only ever produced by `install_driver`; the file's bytes are not serialized back. */
   | { op: "install_driver"; filename: string; source: string }
   /** Only ever produced by `load_backup`; the XML is not serialized back. */

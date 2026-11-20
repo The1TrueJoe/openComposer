@@ -20,6 +20,7 @@ pub mod sidecar;
 pub mod soap;
 pub mod takeover;
 pub mod xml;
+pub mod zigbee;
 
 pub use director::{Catalog, Director, DirectorError, DirectorInfo, Snapshot};
 pub use model::{Names, Project};

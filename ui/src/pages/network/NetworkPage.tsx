@@ -27,7 +27,7 @@ export function NetworkPage({ shell }: { shell: Shell }) {
       <div className="page-body">
         {tab === "project" && <ProjectNetwork shell={shell} onScan={() => setTab("sddp")} />}
         {tab === "sddp" && <Scan shell={shell} />}
-        {tab === "zigbee" && <Zigbee />}
+        {tab === "zigbee" && <Zigbee shell={shell} />}
       </div>
     </div>
   );
