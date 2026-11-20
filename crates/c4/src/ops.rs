@@ -57,6 +57,12 @@ pub enum Op {
     RemoveConnection { consumer_device: u32, consumer_binding: u32, class: String },
     /// Identify a device on the network (what Composer's "Identify" does for SDDP).
     /// `device: 0` means the device added earlier in the same batch.
+    ///
+    /// For an SDDP device, `address` is the discovered device's **USN** (its `uuid` from
+    /// `network_status` → `discovered`, format `<Type>-<Host>`, e.g.
+    /// `openhc:speakerpoint-speakerpoint-000fff18b81b`) — NOT its IP. The Director stores the
+    /// USN and resolves the dial address from it; a bare IP it can't resolve, so the device
+    /// stays offline (that silent failure is rejected up front in `predict`).
     AddNetworkBinding { device: u32, binding: u32, address_type: u32, address: String, search_type: String },
     RemoveNetworkBinding { device: u32, binding: u32 },
     /// Set a driver property (what typing into Composer's property grid does).
@@ -307,6 +313,13 @@ pub enum OpError {
     NotConnected { device: String, binding: u32, class: String },
     #[error("{device} has no network binding #{binding}")]
     NoNetworkBinding { device: String, binding: u32 },
+    #[error(
+        "can't identify {device} as {search_type} with the IP address {address}: an SDDP device is \
+         identified by its USN (e.g. {search_type}-<host>), which the Director resolves to the dial \
+         address — a bare IP is not a USN and the Director leaves the address empty (the device stays \
+         offline). Use the discovered device's `uuid` from network_status as the address."
+    )]
+    IdentifyWithIp { device: String, address: String, search_type: String },
     #[error("no programming line #{id} under that event")]
     NoSuchCode { id: u32 },
     #[error("#{0} is not a Scheduler agent")]
@@ -565,6 +578,17 @@ impl Op {
                 // 0 = the device an earlier op in this batch added (it took the last id).
                 let device = &if *device == 0 { p.next_item_id } else { *device };
                 p.item(*device).ok_or(OpError::NoSuchItem(*device))?;
+                // An SDDP identify (type 1, a `vendor:model` search type) must carry the device's
+                // USN as the address — the Director stores it and resolves the dial address from it.
+                // A bare IP is the common mistake: the Director can't resolve it and the device
+                // stays offline, silently. A USN is never a bare IP, so catch it here.
+                if *address_type == 1 && search_type.contains(':') && address.parse::<std::net::Ipv4Addr>().is_ok() {
+                    return Err(OpError::IdentifyWithIp {
+                        device: p.name_of(*device),
+                        address: address.clone(),
+                        search_type: search_type.clone(),
+                    });
+                }
                 p.network_bindings.retain(|n| !(n.device == *device && n.binding == *binding));
                 p.network_bindings.push(NetworkBinding {
                     device: *device,
@@ -1195,5 +1219,36 @@ mod tests {
             c[0].encode(false),
             r#"<c4soap name="RemoveBinding" session="0" operation="RWX" category="composer" async="False"><param name="idconsumerdevice" type="number">373</param><param name="idconsumerbinding" type="number">2</param><param name="class" type="string">AUDIO_SELECTION</param></c4soap>"#
         );
+    }
+
+    #[test]
+    fn sddp_identify_rejects_an_ip_and_accepts_a_usn() {
+        // Device 20 is the SDDP TV in the fixture. Proven against a live Director: the address
+        // must be the USN (the Director resolves it to the dial IP); a bare IP silently fails.
+        let ip = Op::AddNetworkBinding {
+            device: 20,
+            binding: 6001,
+            address_type: 1,
+            address: "10.0.0.111".into(),
+            search_type: "Samsung:QN75".into(),
+        };
+        assert!(matches!(ip.predict(&mut sample()), Err(OpError::IdentifyWithIp { .. })));
+
+        let usn = Op::AddNetworkBinding {
+            device: 20,
+            binding: 6001,
+            address_type: 1,
+            address: "Samsung:QN75-tv-00:11:22:33:44:55".into(),
+            search_type: "Samsung:QN75".into(),
+        };
+        let mut p = sample();
+        usn.predict(&mut p).unwrap();
+        let nb = p.network_bindings.iter().find(|n| n.device == 20 && n.binding == 6001).unwrap();
+        // The Director derives the stored USN from the address param; the model mirrors that.
+        assert_eq!(nb.uuid, "Samsung:QN75-tv-00:11:22:33:44:55");
+
+        // A Zigbee identify (type 3) or a manual IP with no SDDP search type is left alone.
+        let zig = Op::AddNetworkBinding { device: 20, binding: 6001, address_type: 3, address: "10.0.0.5".into(), search_type: String::new() };
+        assert!(zig.predict(&mut sample()).is_ok());
     }
 }

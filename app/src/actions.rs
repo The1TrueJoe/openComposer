@@ -170,10 +170,12 @@ pub struct InstallDriverArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct IdentifyArgs {
-    /// The device's network identity as Director knows it: the `uuid` of a discovered
-    /// physical device (network_status) or the SDDP `<Type>-<Host>`.
+    /// For an SDDP device: its **USN** — the `uuid` of the matching entry under `network_status`
+    /// → `discovered` (format `<Type>-<Host>`, e.g. `openhc:speakerpoint-speakerpoint-000fff18b81b`).
+    /// The Director resolves the USN to the dial address. Do NOT pass a bare IP here — the Director
+    /// can't resolve it and the device stays offline (it's rejected before it reaches the Director).
     pub address: String,
-    /// SDDP search type, e.g. Denon:AVR-X2100W.
+    /// SDDP search type, e.g. Denon:AVR-X2100W (the discovered entry's `device_type`).
     pub search_type: String,
     /// 1 = IP/SDDP (default), 3 = Zigbee.
     #[serde(default)]
