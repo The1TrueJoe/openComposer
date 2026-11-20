@@ -1763,6 +1763,16 @@ pub fn parse_screensaver(xml: &str) -> ScreenSaver {
 mod tests {
     use super::*;
 
+    #[test]
+    fn read_gate_allows_gets_and_refuses_mutations() {
+        // device_read / agent_read send a command only if this says it reads. Media browse
+        // (GET_AUDIO_MEDIA) and queries must pass; anything that acts must not.
+        assert!(is_read_command("GET_AUDIO_MEDIA"));
+        assert!(is_read_command("is_muted"));
+        assert!(!is_read_command("SELECT_AUDIO_DEVICE"));
+        assert!(!is_read_command("SET_VOLUME_LEVEL"));
+    }
+
     const ENTRIES: &str = "<entries><entry><eventid>1</eventid><description>Component Auto Update Event</description><category/><enabled>True</enabled><locked>False</locked><creatorid>100116</creatorid><creatorstate/><hidden>False</hidden><user_hidden>False</user_hidden><start><offset>0</offset><offset_minutes>201</offset_minutes><start_date><start_day>10</start_day><start_month>6</start_month><start_year>2024</start_year><start_period>0</start_period><start_weekday>0</start_weekday></start_date><randomize>0</randomize></start><next_occurrence><year>2026</year><month>10</month><day>21</day><hour>3</hour><min>21</min><timezone/></next_occurrence><repeat><frequency>2</frequency><rate>1</rate><daymask>111</daymask></repeat></entry><entry><eventid>6</eventid><description>Sunrise</description><category/><enabled>True</enabled><locked>False</locked><creatorid>0</creatorid><hidden>False</hidden><start><offset>1</offset><offset_minutes>15</offset_minutes><start_date><start_day>16</start_day><start_month>6</start_month><start_year>2024</start_year><start_period>0</start_period><start_weekday>0</start_weekday></start_date><randomize>0</randomize></start><repeat><frequency>1</frequency><rate>1</rate><daymask>0</daymask></repeat></entry></entries>";
 
     #[test]

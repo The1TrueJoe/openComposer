@@ -765,6 +765,33 @@ pub async fn device_state(app: &Arc<App>, a: StateArgs) -> AppResult<Value> {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct DeviceReadArgs {
+    #[serde(default)]
+    pub director: Option<String>,
+    /// Device, room or proxy to read from.
+    pub device: u32,
+    /// A read-only device command — `GET_*` or `IS_*`. e.g. `GET_AUDIO_MEDIA` to browse what
+    /// a room can play (the media list Composer shows), `GET_VOLUME_LEVEL`, `IS_MUTED`. A
+    /// command that changes something is refused here; send those through `send_command`.
+    pub command: String,
+    /// Command params as `{name, type, value}`, e.g. a browse cursor for `GET_AUDIO_MEDIA`.
+    #[serde(default)]
+    pub params: Vec<c4::ops::CodeParam>,
+}
+
+/// Read a device/room/proxy with a `GET_*`/`IS_*` command and return its reply — how Composer
+/// browses audio media or reads a device's live settings. No approval: it only reads. This is
+/// how an MCP client browses media (`GET_AUDIO_MEDIA`) to play a station into a room without
+/// the Composer UI.
+pub async fn device_read(app: &Arc<App>, a: DeviceReadArgs) -> AppResult<Value> {
+    let s = app.session(a.director.as_deref()).await?;
+    let params: Vec<(&str, &str, &str)> =
+        a.params.iter().map(|p| (p.name.as_str(), p.r#type.as_str(), p.value.as_str())).collect();
+    let reply = s.director.device_read(a.device, &a.command, &params).await?;
+    Ok(json!({ "device": a.device, "command": a.command, "reply": reply }))
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct TabsArgs {
     #[serde(default)]
     pub director: Option<String>,

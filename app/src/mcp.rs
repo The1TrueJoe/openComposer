@@ -272,8 +272,18 @@ impl OpenComposerMcp {
         self.run("device_state", format!("#{}", a.device), actions::device_state(&self.app, a)).await
     }
 
-    #[tool(description = "Send a command to a device now (e.g. ON, SET_LEVEL with LEVEL=50) — it acts on real \
-        equipment, so the user approves it first. Commands come from get_item → commands.",
+    #[tool(description = "Read a device/room/proxy with a GET_*/IS_* command and get its reply — how Composer \
+        browses a room's audio media (GET_AUDIO_MEDIA, to find and play a station into a room) or reads live \
+        settings (GET_VOLUME_LEVEL, IS_MUTED). Read-only, no approval. Non-read commands go through send_command.",
+        annotations(read_only_hint = true))]
+    async fn device_read(&self, Parameters(a): Parameters<DeviceReadArgs>) -> Result<CallToolResult, McpError> {
+        let s = format!("{} → #{}", a.command, a.device);
+        self.run("device_read", s, actions::device_read(&self.app, a)).await
+    }
+
+    #[tool(description = "Send a command to a device now (e.g. ON, SET_LEVEL with LEVEL=50, SET_VOLUME_LEVEL, \
+        SELECT_AUDIO_DEVICE, MUTE_TOGGLE) — it acts on real equipment, so the user approves it first. Commands \
+        come from get_item → commands. For GET_*/IS_* reads (media browse, current state) use device_read instead.",
         annotations(read_only_hint = false, destructive_hint = true))]
     async fn send_command(&self, Parameters(a): Parameters<CommandArgs>) -> Result<CallToolResult, McpError> {
         let s = format!("{} → #{}", a.command, a.device);

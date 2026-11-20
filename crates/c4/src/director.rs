@@ -502,6 +502,18 @@ impl Director {
         Ok(r.body().to_string())
     }
 
+    /// Read a device/room/proxy with a `GET_*`/`IS_*` device command and return the reply as
+    /// JSON — what Composer does to browse a room's audio media (`GET_AUDIO_MEDIA`) or read a
+    /// device's current settings. Only reads are sent (same gate as [`Self::agent_read`]); a
+    /// command that changes something is a write and goes through an [`Op`]/approval instead.
+    pub async fn device_read(&self, device: u32, command: &str, params: &[(&str, &str, &str)]) -> Result<serde_json::Value> {
+        let body = self.agent_read(device, command, params).await?;
+        Ok(match roxmltree::Document::parse(&body) {
+            Ok(d) => to_json(d.root_element()),
+            Err(_) => serde_json::Value::String(body),
+        })
+    }
+
     /// Perform one op. Callers are responsible for approval; this only executes.
     /// `template` is `Catalog::template_for(op)`: the item definition a new location copies.
     pub async fn apply(&self, op: &Op, room_template: Option<&str>) -> Result<Applied> {
