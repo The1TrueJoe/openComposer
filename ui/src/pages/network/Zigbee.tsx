@@ -1,4 +1,4 @@
-import { RadioTower, RefreshCw, Trash2, Wifi } from "lucide-react";
+import { Plus, RadioTower, RefreshCw, Trash2, Wifi } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api, type ZigbeeAction, type ZigbeeQuery } from "../../api";
 import { JsonTree } from "../../components/JsonTree";
@@ -23,9 +23,18 @@ export function Zigbee({ shell }: { shell: Shell }) {
   const [sortBy, setSortBy] = useState("");
   const { confirm } = useDialog();
   const server = shell.info?.device_id;
+  const [apDev, setApDev] = useState("");
+  const [apCoord, setApCoord] = useState(false);
 
   const act = (action: ZigbeeAction, reason: string) =>
     server != null && shell.propose([{ op: "zigbee_control", iddevice: server, action }], reason);
+
+  // enable/disable-zap target the AP's OWN device id — never the controller — so they don't
+  // use `act` (which targets the Director's Zigbee server). Refuse the Director's own id.
+  const apId = Number(apDev);
+  const apBad = !Number.isInteger(apId) || apId <= 0 || apId === server;
+  const zap = (action: ZigbeeAction, reason: string) =>
+    !apBad && shell.propose([{ op: "zigbee_control", iddevice: apId, action }], reason);
 
   const rows = useMemo(() => {
     if (!table || !sortBy) return table?.rows ?? [];
@@ -67,8 +76,18 @@ export function Zigbee({ shell }: { shell: Shell }) {
             <RadioTower size={13} strokeWidth={1.8} />Open to pair (60s)
           </button>
           <button className="act small" onClick={() => act({ zigbee: "permit_join", seconds: 0 }, "Close the Zigbee join window")}>Close</button>
+          <span className="sep" />
+          <input type="number" min={1} placeholder="AP device id" value={apDev} onChange={(e) => setApDev(e.target.value)} aria-label="Access point device id"
+                 onKeyDown={(e) => { if (e.key === "Enter" && !apBad) zap({ zigbee: "enable_zap", coordinator: apCoord }, `Enable device ${apId} as a Zigbee access point`); }} />
+          <label className="dim small" style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+            <input type="checkbox" checked={apCoord} onChange={(e) => setApCoord(e.target.checked)} />coordinator
+          </label>
+          <button className="act small" disabled={apBad} onClick={() => zap({ zigbee: "enable_zap", coordinator: apCoord }, `Enable device ${apId} as a Zigbee access point`)}>
+            <Plus size={13} strokeWidth={1.8} />Enable zap
+          </button>
+          <button className="act small" disabled={apBad} onClick={() => zap({ zigbee: "disable_zap" }, `Disable the Zigbee access point on device ${apId}`)}>Disable</button>
           <span className="spread" />
-          <span className="dim small">Mesh changes go through approval. Method names are not yet verified against a live Control4 network.</span>
+          <span className="dim small">Enabling a zap targets the AP’s own device id (not the controller); it must be radio-capable with a Target IP. Changes go through approval; method/params aren’t yet verified live.</span>
         </div>
       )}
 
