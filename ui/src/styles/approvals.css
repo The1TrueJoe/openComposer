@@ -1,14 +1,9 @@
 /* Approval cards (components/ApprovalCard.tsx): in the drawer and inline in the agent chat.
-   The status colours the left edge, so a stack of cards reads at a glance. */
-.ac { border: 1px solid var(--line); border-left: 3px solid var(--line); border-radius: 10px; background: var(--side); margin-bottom: 12px;
+   Status is read from the badge in the header, not a coloured edge. */
+.ac { border: 1px solid var(--line); border-radius: 10px; background: var(--side); margin-bottom: 12px;
   overflow: hidden; }
 .ac:focus { outline: none; }
 .ac:focus-visible, .ac.pending:focus-within { box-shadow: 0 0 0 1px color-mix(in srgb, var(--warn) 33.3%, transparent); }
-.ac.pending { border-left-color: var(--warn); }
-.ac.applying { border-left-color: var(--accent); }
-.ac.applied { border-left-color: var(--on); }
-.ac.failed { border-left-color: var(--bad); }
-.ac.denied, .ac.expired { border-left-color: var(--idle); }
 
 .ac-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 9px 12px; border: 0; background: none; color: var(--text);
   font: inherit; text-align: left; cursor: pointer; }

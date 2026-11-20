@@ -139,7 +139,9 @@ impl OpenComposerMcp {
         self.run("detect_sidecar", String::new(), actions::detect_sidecar()).await
     }
 
-    #[tool(description = "Zigbee mesh information from the controller: server, mesh, nodes or zaps.",
+    #[tool(description = "Zigbee mesh information from the controller: server, mesh, nodes or zaps. \
+        To manage the mesh (permit-join to pair, remove a node, flash an access point) propose a \
+        zigbee_control op; to pair a joined device to its driver use add_network_binding type 3.",
         annotations(read_only_hint = true))]
     async fn zigbee(&self, Parameters(a): Parameters<ZigbeeArgs>) -> Result<CallToolResult, McpError> {
         let s = format!("{:?}", a.query);
@@ -184,7 +186,8 @@ impl OpenComposerMcp {
         add_schedule_entry, modify_schedule_entry, remove_schedule_entry, and for other built-in agents (ids and current settings from agent_view): \
         add_lighting_scene, rename_lighting_scene, remove_lighting_scene, set_scene_light, remove_scene_light, add_announcement, modify_announcement, \
         remove_announcement, add_wake_sleep_room, modify_wake_sleep_room, remove_wake_sleep_room, add/modify/remove_push_notification, \
-        add/modify/remove_email_template). For add_code take the event id from the device's events and the command from the target's commands (both in get_item). \
+        add/modify/remove_email_template, and zigbee_control {iddevice (the controller's Zigbee server, = director_info device_id), action: {zigbee: permit_join, seconds} | {zigbee: remove_node, address} | {zigbee: identify_access_point, address}}). \
+        For add_code take the event id from the device's events and the command from the target's commands (both in get_item). \
         Programming: lines go at `before` (a line id, 0 = the end) under `parent` (an If/While/Else id, 0 = top level). add_conditional adds an If (`loop`: true for a While) \
         testing a device conditional (`{type: device, target, name, logic, params}` from the target's `conditionals` in get_item) or a variable \
         (`{type: variable, variable: {device, id}, logic, value | other}` from get_variables); add_else puts an Else right after an If (parent = the If's parent, before = the line after it); \
