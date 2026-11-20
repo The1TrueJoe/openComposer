@@ -123,11 +123,13 @@ export function DesignPage({ shell }: { shell: Shell }) {
         <Grip />
         <MainPane id="inspector">
           <div className="design-main">
-            <nav className="crumbs" aria-label="Selection">
-              {trail.length
-                ? trail.map((n, i) => i === trail.length - 1
-                    ? <b key={n.id}>{n.name}</b>
-                    : <span key={n.id} className="crumb"><button className="link" onClick={() => setSel(n.id)}>{n.name}</button><span className="sep">›</span></span>)
+            <nav className="crumbs" aria-label="Location">
+              {trail.length > 1
+                ? trail.slice(0, -1).map((n, i, a) => (
+                    <span key={n.id} className="crumb">
+                      <button className="link" onClick={() => setSel(n.id)}>{n.name}</button>
+                      {i < a.length - 1 && <span className="sep">›</span>}
+                    </span>))
                 : <span className="dim">{tree.data?.project ?? "Project"}</span>}
             </nav>
             {selected
