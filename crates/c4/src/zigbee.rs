@@ -65,10 +65,13 @@ impl ZigbeeAction {
             Self::IdentifyAccessPoint { address } => {
                 vec![Call::new("IdentifyZigbeeZap").num("iddevice", iddevice).str("address", address)]
             }
-            // ponytail: method is the node-broker "AddZap"; the IP param name is inferred from
-            // the broker's "AddZap with IP:" log line. Verify both against a live broker.
+            // Method `AddZaps` is pinned (the controller's Zigbee-manager agent catalog, same
+            // call tier as GetZigbeeZaps). The server fills euid/pan/channel/power itself after
+            // it connects; the caller only supplies the IP. ponytail: the param-key spelling is
+            // the one unverified bit — the zserver log reads "Adding Zap to Zserver: [address:
+            // <ip>", so `address` + `port`; confirm those two keys against a live capture.
             Self::AddAccessPoint { ip } => {
-                vec![Call::new("AddZap").num("iddevice", iddevice).str("ip", ip)]
+                vec![Call::new("AddZaps").num("iddevice", iddevice).str("address", ip).num("port", 7910)]
             }
         }
     }
@@ -126,8 +129,9 @@ mod tests {
         let add = ZigbeeAction::AddAccessPoint { ip: "10.0.0.105".into() };
         assert!(add.validate().is_ok());
         let xml = add.calls(15)[0].encode(false);
-        assert!(xml.contains(r#"name="AddZap""#), "{xml}");
-        assert!(xml.contains("<param name=\"ip\" type=\"string\">10.0.0.105</param>"), "{xml}");
+        assert!(xml.contains(r#"name="AddZaps""#), "{xml}");
+        assert!(xml.contains("<param name=\"address\" type=\"string\">10.0.0.105</param>"), "{xml}");
+        assert!(xml.contains("<param name=\"port\" type=\"number\">7910</param>"), "{xml}");
         assert!(ZigbeeAction::AddAccessPoint { ip: "not-an-ip".into() }.validate().is_err());
     }
 }
