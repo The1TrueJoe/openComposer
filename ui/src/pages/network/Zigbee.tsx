@@ -1,4 +1,4 @@
-import { RadioTower, RefreshCw, Trash2, Wifi } from "lucide-react";
+import { Plus, RadioTower, RefreshCw, Trash2, Wifi } from "lucide-react";
 import { useMemo, useState } from "react";
 import { api, type ZigbeeAction, type ZigbeeQuery } from "../../api";
 import { JsonTree } from "../../components/JsonTree";
@@ -23,6 +23,7 @@ export function Zigbee({ shell }: { shell: Shell }) {
   const [sortBy, setSortBy] = useState("");
   const { confirm } = useDialog();
   const server = shell.info?.device_id;
+  const [apIp, setApIp] = useState("");
 
   const act = (action: ZigbeeAction, reason: string) =>
     server != null && shell.propose([{ op: "zigbee_control", iddevice: server, action }], reason);
@@ -67,6 +68,12 @@ export function Zigbee({ shell }: { shell: Shell }) {
             <RadioTower size={13} strokeWidth={1.8} />Open to pair (60s)
           </button>
           <button className="act small" onClick={() => act({ zigbee: "permit_join", seconds: 0 }, "Close the Zigbee join window")}>Close</button>
+          <span className="sep" />
+          <input placeholder="AP IP (e.g. 10.0.0.105)" value={apIp} onChange={(e) => setApIp(e.target.value)} aria-label="Zigbee access point IP"
+                 onKeyDown={(e) => { if (e.key === "Enter" && apIp.trim()) act({ zigbee: "add_access_point", ip: apIp.trim() }, "Add a Zigbee access point by IP"); }} />
+          <button className="act small" disabled={!apIp.trim()} onClick={() => act({ zigbee: "add_access_point", ip: apIp.trim() }, "Add a Zigbee access point by IP")}>
+            <Plus size={13} strokeWidth={1.8} />Add AP
+          </button>
           <span className="spread" />
           <span className="dim small">Mesh changes go through approval. Method names are not yet verified against a live Control4 network.</span>
         </div>

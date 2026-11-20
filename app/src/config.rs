@@ -143,10 +143,20 @@ impl Paths {
 
 impl Config {
     pub fn load(path: &Path) -> Self {
-        std::fs::read(path)
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default()
+        let Ok(bytes) = std::fs::read(path) else { return Self::default() }; // no file yet: fresh start
+        match serde_json::from_slice(&bytes) {
+            Ok(cfg) => cfg,
+            Err(e) => {
+                // A config that EXISTS but won't parse must not be silently discarded: falling
+                // back to Default rotates the MCP token and drops saved Directors. Keep a copy so
+                // the token/fingerprints are recoverable (this already bit us once, on an unknown
+                // `mode` variant from a newer build read by an older one).
+                let bad = path.with_extension("json.bad");
+                let _ = std::fs::write(&bad, &bytes);
+                eprintln!("config at {} did not parse ({e}); kept a copy at {} and started fresh", path.display(), bad.display());
+                Self::default()
+            }
+        }
     }
 
     pub fn save(&self, path: &Path) -> anyhow::Result<()> {

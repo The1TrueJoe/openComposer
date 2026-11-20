@@ -42,6 +42,12 @@ pub enum ZigbeeAction {
     /// Flash an access point's identify light so the installer can find it physically
     /// (Composer's "Identify" on an access point), by the AP's Zigbee address.
     IdentifyAccessPoint { address: String },
+    /// Add a Zigbee access point by IP address. Unlike Composer's "Edit Zigbee Configuration"
+    /// dropdown — which only offers controllers the Director already sees as Zigbee-radio
+    /// hardware — this goes straight to the zserver's node broker, which dials the AP OUT over
+    /// TCP 7910 at the given IP (the broker logs "AddZap with IP:" then connects to `<ip>:7910`).
+    /// That IP path is how a standalone AP that the hardware list would never show gets added.
+    AddAccessPoint { ip: String },
 }
 
 impl ZigbeeAction {
@@ -59,6 +65,11 @@ impl ZigbeeAction {
             Self::IdentifyAccessPoint { address } => {
                 vec![Call::new("IdentifyZigbeeZap").num("iddevice", iddevice).str("address", address)]
             }
+            // ponytail: method is the node-broker "AddZap"; the IP param name is inferred from
+            // the broker's "AddZap with IP:" log line. Verify both against a live broker.
+            Self::AddAccessPoint { ip } => {
+                vec![Call::new("AddZap").num("iddevice", iddevice).str("ip", ip)]
+            }
         }
     }
 
@@ -69,6 +80,7 @@ impl ZigbeeAction {
             Self::PermitJoin { seconds } => format!("Open the Zigbee mesh to pair a device for {seconds}s"),
             Self::RemoveNode { address } => format!("Remove Zigbee node {address} from the mesh"),
             Self::IdentifyAccessPoint { address } => format!("Flash the identify light on Zigbee access point {address}"),
+            Self::AddAccessPoint { ip } => format!("Add Zigbee access point at {ip} (the server will dial it on :7910)"),
         }
     }
 
@@ -77,6 +89,10 @@ impl ZigbeeAction {
         match self {
             Self::RemoveNode { address } | Self::IdentifyAccessPoint { address } if address.trim().is_empty() => {
                 Err("a Zigbee address is required".into())
+            }
+            // A bad IP would have the server dial nowhere; catch it before it leaves.
+            Self::AddAccessPoint { ip } if ip.trim().parse::<std::net::IpAddr>().is_err() => {
+                Err(format!("“{ip}” is not a valid IP address"))
             }
             _ => Ok(()),
         }
@@ -103,5 +119,15 @@ mod tests {
         assert!(ZigbeeAction::RemoveNode { address: "  ".into() }.validate().is_err());
         assert!(ZigbeeAction::IdentifyAccessPoint { address: "".into() }.validate().is_err());
         assert!(ZigbeeAction::PermitJoin { seconds: 0 }.validate().is_ok());
+    }
+
+    #[test]
+    fn add_access_point_carries_the_ip_and_rejects_a_bad_one() {
+        let add = ZigbeeAction::AddAccessPoint { ip: "10.0.0.105".into() };
+        assert!(add.validate().is_ok());
+        let xml = add.calls(15)[0].encode(false);
+        assert!(xml.contains(r#"name="AddZap""#), "{xml}");
+        assert!(xml.contains("<param name=\"ip\" type=\"string\">10.0.0.105</param>"), "{xml}");
+        assert!(ZigbeeAction::AddAccessPoint { ip: "not-an-ip".into() }.validate().is_err());
     }
 }

@@ -233,10 +233,13 @@ function describe(op: Op): string {
     case "install_driver": return `Install driver file ${op.filename} from ${op.source}`;
     case "run_action": return `Run action “${op.command}” on ${n(op.device)}`;
     case "zigbee_control":
-      return op.action.zigbee === "permit_join"
-        ? op.action.seconds === 0 ? "Close the Zigbee join window" : `Open the Zigbee mesh to pair a device for ${op.action.seconds}s`
-        : op.action.zigbee === "remove_node" ? `Remove Zigbee node ${op.action.address} from the mesh`
-          : `Flash the identify light on Zigbee access point ${op.action.address}`;
+      switch (op.action.zigbee) {
+        case "permit_join": return op.action.seconds === 0 ? "Close the Zigbee join window" : `Open the Zigbee mesh to pair a device for ${op.action.seconds}s`;
+        case "remove_node": return `Remove Zigbee node ${op.action.address} from the mesh`;
+        case "identify_access_point": return `Flash the identify light on Zigbee access point ${op.action.address}`;
+        case "add_access_point": return `Add Zigbee access point at ${op.action.ip} (the server will dial it on :7910)`;
+      }
+      break;
     case "send_command": {
       const ps = (op.params ?? []).map((p) => `${p.name}=${p.value}`).join(", ");
       return `Send ${op.command}${ps ? ` (${ps})` : ""} to ${n(op.device)}`;
