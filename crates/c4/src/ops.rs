@@ -411,7 +411,7 @@ impl Op {
                 format!("Remove scheduled event “{}” from {}", old.unwrap_or_else(|| format!("#{id}")), n(*agent))
             }
             agent_op!() => crate::agent_ops::describe(self, p).unwrap_or_default(),
-            Op::ZigbeeControl { action, .. } => action.describe(),
+            Op::ZigbeeControl { iddevice, action } => action.describe(*iddevice),
             Op::InstallDriver { filename, source, bytes } => {
                 format!("Install driver file {filename} ({} KB) from {source}", bytes.len().div_ceil(1024))
             }

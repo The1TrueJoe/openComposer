@@ -399,7 +399,8 @@ export type ZigbeeAction =
   | { zigbee: "permit_join"; seconds: number }
   | { zigbee: "remove_node"; address: string }
   | { zigbee: "identify_access_point"; address: string }
-  | { zigbee: "add_access_point"; ip: string };
+  | { zigbee: "enable_zap"; coordinator: boolean; idowner?: number }
+  | { zigbee: "disable_zap" };
 
 export interface DriverDoc {
   filename: string;

@@ -237,7 +237,8 @@ function describe(op: Op): string {
         case "permit_join": return op.action.seconds === 0 ? "Close the Zigbee join window" : `Open the Zigbee mesh to pair a device for ${op.action.seconds}s`;
         case "remove_node": return `Remove Zigbee node ${op.action.address} from the mesh`;
         case "identify_access_point": return `Flash the identify light on Zigbee access point ${op.action.address}`;
-        case "add_access_point": return `Add Zigbee access point at ${op.action.ip} (the server will dial it on :7910)`;
+        case "enable_zap": return `Enable device ${op.iddevice} as a Zigbee access point${op.action.coordinator ? ", as the mesh coordinator" : ""}`;
+        case "disable_zap": return `Disable the Zigbee access point on device ${op.iddevice}`;
       }
       break;
     case "send_command": {
