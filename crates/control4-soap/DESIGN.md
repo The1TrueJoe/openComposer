@@ -53,7 +53,10 @@ Stays in openComposer (app-domain; never in the crate):
   tabs, Zigbee config. App/deployment concerns, not the protocol.
 - `approvals`, `mcp.rs`, `actions.rs`, `commands.rs`, `oauth.rs`, `certs.rs`,
   `library.rs` — MCP/UI/auth wiring.
-- **SDDP** → already its own crate, `control4-sddp` (done).
+- **SDDP** → openComposer now depends on the owner's existing shared `sddp`
+  crate (`github.com/The1TrueJoe/sddp`, also used by control4-audio-client and
+  openhc-control4); `crates/c4/src/sddp.rs` is just a thin projection +
+  controller heuristic on top. Not part of this crate.
 
 ## 3. Cargo features
 

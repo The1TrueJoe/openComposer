@@ -15,8 +15,7 @@ mod keys;
 pub mod model;
 pub mod ops;
 pub mod program;
-// SDDP lives in its own crate now; re-exported so `c4::sddp::…` call sites are unchanged.
-pub use control4_sddp as sddp;
+pub mod sddp;
 pub mod sidecar;
 pub mod soap;
 pub mod takeover;
