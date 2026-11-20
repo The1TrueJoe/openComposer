@@ -568,6 +568,7 @@ dependencies = [
 name = "c4"
 version = "0.1.0"
 dependencies = [
+ "control4-sddp",
  "hex",
  "md-5",
  "pbkdf2 0.12.2",
@@ -826,6 +827,15 @@ name = "const-oid"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
+
+[[package]]
+name = "control4-sddp"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "socket2",
+ "tokio",
+]
 
 [[package]]
 name = "cookie"

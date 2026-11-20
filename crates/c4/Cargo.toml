@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+control4-sddp = { path = "../control4-sddp" }
 hex = "0.4.3"
 md-5 = "0.10"
 # Controller takeover: MAC-derived stock root password (older OS) uses PBKDF2-HMAC-SHA384

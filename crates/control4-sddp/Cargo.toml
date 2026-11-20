@@ -1,0 +1,18 @@
+# control4-sddp — standalone SDDP (Simple Device Discovery Protocol) crate.
+# Extracted from openComposer's c4 crate so other Control4 tools can share it.
+# Publish metadata below is staged; see PUBLISH.md. `license` is intentionally
+# left for the owner to set before the first `cargo publish` (publish requires it).
+[package]
+name = "control4-sddp"
+version = "0.1.0"
+edition = "2024"
+description = "SDDP (Simple Device Discovery Protocol) parsing and UDP-multicast discovery, as used by Control4 and compatible devices."
+repository = "https://github.com/The1TrueJoe/control4-sddp"
+keywords = ["sddp", "control4", "discovery", "multicast", "lan"]
+categories = ["network-programming"]
+# license = "MIT OR Apache-2.0"  # set before publishing
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+socket2 = "0.6.5"
+tokio = { version = "1.54.0", features = ["net", "time"] }
