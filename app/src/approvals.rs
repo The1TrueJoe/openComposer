@@ -366,7 +366,10 @@ fn check_actions(ops: &[Op], cat: &c4::Catalog, p: &c4::Project) -> AppResult<()
 fn check_connections(ops: &[Op], cat: &c4::Catalog, p: &c4::Project) -> AppResult<()> {
     let declared = |dev: u32, binding: u32| cat.devices.get(&dev).and_then(|d| d.connections.iter().find(|c| c.id == binding));
     let proxy_owner = |dev: u32, binding: u32| {
-        p.item(dev).and_then(|i| i.children.iter().copied().find(|k| declared(*k, binding).is_some()))
+        // A room's children are the devices in it, not proxies.
+        p.item(dev)
+            .filter(|i| i.kind != c4::model::ItemKind::Room)
+            .and_then(|i| i.children.iter().copied().find(|k| declared(*k, binding).is_some()))
     };
     // A combo driver repeats its proxies' connection ids; only the proxy can be bound.
     let find = |dev: u32, binding: u32| declared(dev, binding).filter(|_| proxy_owner(dev, binding).is_none());
