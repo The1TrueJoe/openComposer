@@ -1,46 +1,33 @@
-# control4-soap — the c4soap wire protocol + connected-Director client, as a
-# shared crate for three consumers: control4-navigator-sink-lib,
-# control4-fake-navigator, and openComposer.
+# control4-soap — the c4soap wire protocol + client, shared by three consumers:
+# control4-navigator-sink-lib, control4-fake-navigator, and openComposer.
 #
-# SCAFFOLD ONLY. No code has moved yet — see DESIGN.md for the public API and
-# the migration plan, and PUBLISH.md (repo root) for publish steps. The real
-# extraction is gated on openComposer PRs #6 and #7 (both touch crates/c4/src/
-# ops.rs); the coordinating session will greenlight it once they merge.
-#
-# The dependency set and Cargo features below are the TARGET shape documented in
-# DESIGN.md. They are commented out so this stub compiles with zero new deps and
-# keeps `cargo test --workspace` fast; uncomment them as each layer's code moves.
+# This crate currently holds the PROTOCOL layer only (soap.rs + xml.rs). The
+# model/client layers are blocked by app-domain coupling in openComposer — see
+# DESIGN.md §2/§4. `publish = false` is a guard: the owner removes it to publish
+# (see PUBLISH.md); nothing is published tonight.
 [package]
 name = "control4-soap"
-version = "0.0.0"  # 0.0.0 = scaffold, not yet functional; bump to 0.1.0 when code lands
+version = "0.1.0"
 edition = "2024"
-description = "c4soap: the Control4 Director wire protocol (cert-pinned XML-over-TLS) and a connected-Director client."
+description = "c4soap: the Control4 Director wire protocol — cert-pinned XML-over-TLS, with a typed, byte-exact request builder."
 repository = "https://github.com/The1TrueJoe/control4-soap"
-keywords = ["control4", "c4soap", "director", "home-automation"]
+keywords = ["control4", "c4soap", "director", "home-automation", "tls"]
 categories = ["network-programming", "api-bindings"]
 # license = "..."  # set before publishing (see PUBLISH.md)
-publish = false  # scaffold guard: refuses an accidental `cargo publish` until removed
-
-# TARGET features (see DESIGN.md §3). Layered so the two external consumers can
-# take just `protocol` without openComposer's project/authoring machinery.
-# [features]
-# default = ["protocol"]
-# protocol = []                       # soap.rs: Connection/Call/Value/Reply/Event/Identity/tls
-# model    = ["protocol", "dep:serde", "dep:roxmltree"]  # typed Project/Item wire types
-# client   = ["model"]                # director.rs read verbs + drivers catalog + c4p backups
-# ops      = ["client"]               # Op::calls builder (GATED on #6/#7)
-
-# TARGET dependencies (mirror of what soap.rs + the model/client layers use today):
-# [dependencies]
-# rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
-# tokio = { version = "1.54.0", features = ["net", "io-util", "sync", "time"] }
-# tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12", "logging"] }
-# roxmltree = { version = "0.21.1", optional = true }
-# serde = { version = "1.0.229", features = ["derive"], optional = true }
-# sha2 = "0.11.1"
-# thiserror = "2.0.21"
-# tracing = "0.1.44"
-# x509-parser = "0.16"
+publish = false  # guard: refuses an accidental `cargo publish` until the owner removes it
 
 [dependencies]
-# (none yet — stub compiles on its own; see the TARGET block above)
+hex = "0.4.3"
+roxmltree = "0.21.1"
+# The TLS fallback key provider (keys.rs) signs with RustCrypto's `rsa` for the
+# sub-2048-bit RSA client keys `ring` rejects, hashing with sha2 0.10's traits.
+rand_core = { version = "0.6", features = ["getrandom"] }
+rsa = { version = "0.9", features = ["pem"] }
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "std", "tls12", "logging"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+sha2_10 = { version = "0.10", package = "sha2", features = ["oid"] }
+thiserror = "2.0.21"
+tokio = { version = "1.54.0", features = ["net", "io-util", "sync", "time", "rt"] }
+tokio-rustls = { version = "0.26.6", default-features = false, features = ["ring", "tls12", "logging"] }
+tracing = "0.1.44"

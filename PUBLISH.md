@@ -4,11 +4,14 @@
 (a public GitHub repo; a `cargo publish` can be yanked but never deleted). These
 are staged for the owner's explicit OK. Do them in order, top to bottom.
 
-One crate is being extracted from openComposer:
+One crate has been extracted from openComposer:
 
-- `control4-soap` — **scaffold only** (`crates/control4-soap`, `publish = false`).
-  Code moves after PRs #6/#7 merge; see its `DESIGN.md`. Do **not** publish it
-  until the real extraction lands and `publish = false` is removed.
+- `control4-soap` — **protocol layer extracted & wired, builds/tests green**
+  (`crates/control4-soap`, `publish = false`). Holds `soap.rs` + `xml.rs` +
+  `keys.rs` (the c4soap wire protocol). The heavier model/client layers are
+  **not** extracted — blocked by app-domain coupling (see `DESIGN.md §2.1`); they
+  are a future, owner-gated refactor and are **not** required to publish the
+  protocol. Do **not** publish until `publish = false` is removed and §0 is done.
 
 SDDP is **not** extracted into a new crate: openComposer now depends on the
 owner's existing shared `sddp` crate (`github.com/The1TrueJoe/sddp`, pinned by
@@ -19,8 +22,8 @@ discovery and openComposer keeps only a thin projection in `c4::sddp`.
 
 1. **License.** The repo has no `LICENSE` file and no `license` field anywhere.
    `cargo publish` fails without one. Pick a license (suggest `MIT OR
-   Apache-2.0`), add the `LICENSE` file(s), and set `license = "..."` in each
-   crate's `Cargo.toml` (the field is left commented in both, with a marker).
+   Apache-2.0`), add the `LICENSE` file(s), and set `license = "..."` in the
+   crate's `Cargo.toml` (the field is left commented, with a marker).
 2. **Owner/account.** Confirm the crates.io account and the GitHub org/owner
    (`The1TrueJoe`) that will own the repo. The `repository = ...` URL in the
    soap `Cargo.toml` assumes `github.com/The1TrueJoe/control4-soap`.
@@ -31,17 +34,16 @@ published crates, so the three consumers should depend by version, not path/git.
 (The `sddp` crate is a git dep today and that is fine for openComposer; the
 owner can publish it separately if they want the dependents graph for it too.)
 
-## 1. control4-soap (GATED — not yet)
+## 1. control4-soap (protocol extracted; publish still gated on §0)
 
-Do **not** attempt until:
-- [ ] PRs #6 and #7 are merged.
-- [ ] The extraction in `DESIGN.md §7` is executed and `cargo test --workspace`
-      is green with `calls_match_composer` passing from its new home.
-- [ ] `publish = false` removed from `crates/control4-soap/Cargo.toml` and
-      `version` bumped `0.0.0` → `0.1.0`.
-- [ ] §0 blockers resolved.
+Already done: PRs #6/#7 merged, extraction executed (protocol layer), `cargo
+test --workspace` green with `calls_match_composer` passing, `version` is 0.1.0.
 
-Then the same `cargo publish --dry-run` → `cargo publish` flow.
+Before publishing, still:
+- [ ] Remove `publish = false` from `crates/control4-soap/Cargo.toml`.
+- [ ] §0 blockers resolved (license, owner/account, USER_AGENT per §6.1).
+
+Then the `cargo publish --dry-run` → `cargo publish` flow.
 
 ```bash
 cd control4-soap               # once it leaves this repo, see §2

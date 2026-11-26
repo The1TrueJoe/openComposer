@@ -11,15 +11,16 @@ pub mod dialect;
 pub mod diff;
 pub mod director;
 pub mod drivers;
-mod keys;
 pub mod model;
 pub mod ops;
 pub mod program;
 pub mod sddp;
 pub mod sidecar;
-pub mod soap;
+// The c4soap protocol + its XML helpers live in the shared `control4-soap` crate
+// now; re-exported so `c4::soap::…` / `c4::xml::…` and in-crate `crate::soap`/
+// `crate::xml` paths are unchanged.
+pub use control4_soap::{soap, xml};
 pub mod takeover;
-pub mod xml;
 pub mod zigbee;
 
 pub use director::{Catalog, Director, DirectorError, DirectorInfo, Snapshot};

@@ -1,15 +1,22 @@
-//! control4-soap — the c4soap wire protocol and a connected-Director client.
+//! control4-soap — the c4soap wire protocol for Control4 Directors.
 //!
-//! **Scaffold only.** No protocol code lives here yet. The public API and the
-//! migration plan are in `DESIGN.md` next to this file; the move is gated on
-//! openComposer PRs #6 and #7 (both edit `crates/c4/src/ops.rs`).
+//! c4soap is the Director's own protocol: a single XML document per message,
+//! NUL-terminated, over cert-pinned mutual TLS on port 5021. This crate is the
+//! client side of it, shared by openComposer and the Control4 navigator tools.
 //!
-//! The shared asset is the cert-pinned XML-over-TLS protocol that openComposer's
-//! `c4::soap` already implements and test-locks. When it lands, this crate will
-//! re-export the `protocol` layer at the root (`Connection`, `Call`, `Value`,
-//! `Reply`, `Event`, `Identity`, `tls_config`, `split_addr`) and gate the typed
-//! `model`, `client`, and `ops` layers behind Cargo features. See `DESIGN.md`.
+//! - [`soap`] — the protocol: [`soap::Connection`], the typed [`soap::Call`]
+//!   builder (byte-exact, test-locked — not a generic serializer), [`soap::Reply`],
+//!   [`soap::Event`], [`soap::Identity`], and the TLS/pinning setup.
+//! - [`xml`] — small read helpers over `roxmltree` used by the protocol.
+//!
+//! Only the protocol layer lives here. openComposer's project model, Director
+//! client, agents, and op-authoring stay in openComposer: they are coupled to
+//! app-domain modules (agents, takeover, ops) and are not part of the shared
+//! wire protocol. See `DESIGN.md` for the boundary and why.
 
-// Intentionally empty until the extraction (post #6/#7). Keeping the crate a
-// real workspace member now means the three consumers and the publish tooling
-// can reference it, and the design is reviewable, before any code moves.
+pub mod soap;
+pub mod xml;
+
+// The legacy-RSA key provider the TLS layer falls back to for the sub-2048-bit
+// RSA client keys Composer issues and `ring` refuses. Internal to the protocol.
+mod keys;

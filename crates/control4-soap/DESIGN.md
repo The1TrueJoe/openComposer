@@ -1,8 +1,15 @@
 # control4-soap — API & migration design
 
-Status: **scaffold**. Code moves after openComposer PRs #6 and #7 merge (both
-touch `crates/c4/src/ops.rs`, which this extraction also edits). This document
-is the contract to build against meanwhile.
+Status: **protocol layer extracted and wired** (rebased on main `1750475`, with
+PRs #6/#7). `soap.rs`, `xml.rs`, and `keys.rs` now live in this crate; c4
+depends on it by path and re-exports it as `c4::soap` / `c4::xml`. The byte-exact
+`calls_match_composer` lock passes with `Op::calls` in openComposer and
+`Call::encode` here — the `Call` seam holds. `cargo test --workspace` green.
+
+The **model and client layers did not move**: they are walled off by app-domain
+coupling discovered during extraction (see §2.1). Moving them is a decoupling
+*refactor*, not a mechanical move, and needs an owner decision — it is deferred,
+not done. Nothing has been published (`publish = false`; see PUBLISH.md).
 
 ## 1. Why this crate
 
@@ -31,17 +38,42 @@ read side without touching the write side. `Call::encode` moves into this crate
 
 From `crates/c4/`:
 
-| Module | Destination | Layer |
+| Module | Status | Why |
 |---|---|---|
-| `soap.rs` | **move** (verbatim) | `protocol` |
-| `xml.rs` | **move** (escape/helpers; `soap.rs` uses `xml::escape`) | `protocol` |
-| `model.rs` | **move** (`Project`, `Item`, `ItemKind`, `Binding`, `NetworkBinding`, `Variable`, `CodeItem`, `Names`, `event_key`) | `model` |
-| `dialect.rs` | **move** (OS-version wire differences) | `model` |
-| `keys.rs` | **move** (wire key helpers) | `model` |
-| `director.rs` | **move** read verbs + `Catalog`/`Snapshot`/`DeviceInfo`; see §4 for `apply` | `client` |
-| `drivers.rs` | **move** (driver catalog types) | `client` |
-| `c4p.rs` | **move** (`.c4p` backup read/write) | `client` |
-| `ops.rs` | **partial** — see §4 | `ops` (gated) |
+| `soap.rs` | **MOVED** (verbatim) | the protocol; no app coupling |
+| `xml.rs` | **MOVED** | `roxmltree` read helpers; `soap.rs`/`model.rs` use them |
+| `keys.rs` | **MOVED** (private `mod keys`) | legacy-RSA TLS key provider; used only by `soap.rs` |
+| `model.rs` | **BLOCKED** (§2.1) | `Project` embeds `crate::agents::{ScheduleEntry, AgentData}` |
+| `dialect.rs` | **BLOCKED** (§2.1) | `client_ca_chains()` uses `crate::takeover::paths` |
+| `director.rs` | **BLOCKED** (§2.1) | uses `crate::ops`, `crate::model`, `crate::dialect` |
+| `drivers.rs` | deferred | clean leaf, but no current consumer needs it (YAGNI) |
+| `c4p.rs` | deferred | clean leaf (`.c4p` backups), no current consumer needs it |
+| `ops.rs` | **stays in openComposer** — see §4 | `Op` is app-domain authoring |
+
+### 2.1 The coupling wall (why model/client did not move)
+
+Extraction surfaced that the "client" layers are not separable without a
+refactor the owner should sign off on:
+
+- **`model::Project` depends on `agents.rs`.** `Project` has
+  `schedules: BTreeMap<u32, Vec<agents::ScheduleEntry>>` and
+  `agent_data: BTreeMap<u32, agents::AgentData>`, and its parser calls
+  `agents::schedule_from_item` / `data_from_item` (fully-qualified, so a `use`
+  grep misses them). `agents.rs` (~1200 lines of Announcements / Advanced
+  Lighting / Wake-Sleep / notifications) is squarely app-domain and stays. So
+  `model` cannot move without either dragging `agents` into the shared crate
+  (wrong) or **decoupling `Project` from agent data** — e.g. store agent blobs
+  as raw XML / a model-local type and parse them in openComposer. That touches
+  `agent_ops`, `agent_views`, `diff`, and the approval flow: a real change.
+- **`dialect::Dialect::client_ca_chains()` uses `crate::takeover::paths`.**
+  `takeover` (controller CA/takeover) is app-domain and stays. Either move the
+  three path constants to a neutral spot or invert the dependency.
+- **`director.rs` sits on top of all three** (`ops`, `model`, `dialect`), so it
+  can't move until they're resolved, plus the `apply`/`Op` split in §4.
+
+None of this blocks the two external consumers: they need the **protocol**
+(`soap`), which is done. Treat §2.1 as the agenda for a future `model`/`client`
+extraction, each its own reviewed change.
 
 Stays in openComposer (app-domain; never in the crate):
 
@@ -60,22 +92,18 @@ Stays in openComposer (app-domain; never in the crate):
 
 ## 3. Cargo features
 
-Layered so the two external consumers can take just the protocol without
-openComposer's project model or authoring machinery:
+**None today.** With only the protocol layer present, every dep is required, so
+feature-gating would be dead config (YAGNI). The crate exposes `control4_soap::soap`
+and `control4_soap::xml`; all three consumers that need the protocol take the
+same thing. Introduce a `model`/`client` feature split only if and when those
+layers are actually extracted (§2.1) — that is the point at which a consumer
+could want the protocol without the heavier layers.
 
-```toml
-[features]
-default = ["protocol"]
-protocol = []                 # soap.rs: Connection/Call/Value/Reply/Event/Identity/tls
-model    = ["protocol", ...]  # typed Project/Item wire types (+ serde, roxmltree)
-client   = ["model"]          # director.rs read verbs, drivers catalog, c4p backups
-ops      = ["client"]         # Op::calls builder — GATED on #6/#7, may land later or stay in-app
-```
-
-- **fake-navigator** and **navigator-sink-lib** are expected to need only
-  `protocol` (hand-build `Call::new("GetItems")`, `SendToDevice`, `EnableEvents`;
-  read `Reply`; subscribe to `Event`), optionally `model` to parse snapshots.
-- **openComposer** enables `client` (and keeps its own `Op` layer in-app, §4).
+- **fake-navigator** and **navigator-sink-lib** use `control4_soap::soap`
+  directly (hand-build `Call::new("GetItems")`, `SendToDevice`, `EnableEvents`;
+  read `Reply`; subscribe to `Event`).
+- **openComposer** depends on it by path and re-exports as `c4::soap`/`c4::xml`;
+  its `Op` layer, `model`, and `Director` stay in-app (§2.1, §4).
 
 ## 4. The `ops.rs` seam (the reason for the gate)
 
@@ -121,7 +149,7 @@ Re-exported verbatim from the moved `soap.rs` — signatures already exist today
 
 ```rust
 pub const TLS_PORT: u16;              // 5021
-pub const USER_AGENT: &str;           // see §6 — becomes caller-overridable
+pub const USER_AGENT: &str;           // "openComposer/<crate ver>" today — see §6.1
 
 pub struct Identity { /* client cert + key */ }
 impl Identity { pub fn from_pem(cert_pem: &[u8], key_pem: &[u8]) -> Result<Self>; pub fn fingerprint(&self) -> String; }
@@ -161,38 +189,47 @@ pub fn tls_config(identity: &Identity, pin: Option<&str>) -> Result<(rustls::Cli
 pub fn split_addr(addr: &str, default_port: u16) -> (String, u16);
 ```
 
-`client` feature adds `Director`, `Catalog`, `Snapshot`, `DeviceInfo`,
-`PhysicalDevice`, `ZigbeeQuery`, etc. from `director.rs` (read verbs only).
+A future `model`/`client` extraction (§2.1) would add `Project`, `Director`,
+`Catalog`, `Snapshot`, etc. — not present today.
 
-## 6. Open decisions (need the owner, flagged for morning)
+## 6. Open decisions (for the owner)
 
-1. **`USER_AGENT`** is `concat!("openComposer/", env!("CARGO_PKG_VERSION"))`. In a
-   shared crate the product name no longer fits. Keep transport-parity honesty
-   (CLAUDE.md): default to `control4-soap/<ver>` and let the caller override it
-   (openComposer sets `openComposer/<ver>`). Do **not** impersonate Composer.
+1. **`USER_AGENT`** is `concat!("openComposer/", env!("CARGO_PKG_VERSION"))`.
+   Moved verbatim, so it now reads `openComposer/<control4-soap version>` —
+   identical to before tonight (both 0.1.0), and the only HTTP consumers
+   (`broker`, `webui`, `state`) are openComposer's. **Deferred, not resolved:**
+   for the other two consumers the product name no longer fits. When wiring them,
+   default to `control4-soap/<ver>` and let the caller override (openComposer
+   sets `openComposer/<ver>`). Do **not** impersonate Composer. `ponytail:` the
+   override plumbing is skipped until a second consumer needs it — it threads a
+   UA through `broker`/`webui`/`state` HTTP-client construction.
 2. **License** — repo has no `LICENSE` and no `license` field anywhere. `cargo
    publish` requires one. Owner picks (e.g. `MIT OR Apache-2.0`) before publish.
-3. **Crate vs. two crates** — one `control4-soap` with features (recommended,
-   per brief) vs. splitting `protocol` into its own `control4-c4soap`. Features
-   are simpler and keep one "Used by" graph; stay with one crate unless a
-   consumer needs `protocol` with a wildly lighter dep set.
-4. **`ops` feature** — ship any op-building helpers at all, or leave all op
-   authoring in openComposer? Default: leave it out of v0.1.0 (§4).
+3. **Crate vs. two crates** — one `control4-soap` (current) vs. a separate
+   `control4-c4soap` for just the protocol. One crate is simpler and keeps a
+   single "Used by" graph; revisit only if a `model`/`client` split lands and a
+   consumer wants the protocol with a much lighter dep set.
+4. **model/client extraction** — whether to pursue §2.1 at all, and how to
+   decouple `Project` from `agents`. Not needed by the external consumers.
 
-## 7. Migration steps (execute post-#6/#7)
+## 7. Migration — done vs. remaining
 
-1. `git mv` `soap.rs` + `xml.rs` into `crates/control4-soap/src/`; split into
-   `protocol` module; wire `[features] protocol`. Uncomment core deps.
-2. Point `c4` at `control4-soap` by path; re-export (`pub use control4_soap as
-   soap;`) so `c4::soap::…` call sites are unchanged — same trick as
-   `control4-sddp`.
-3. `cargo test --workspace` — `calls_match_composer` and all soap tests green
-   from their new home (or from openComposer for `Op::calls`).
-4. Move `model.rs`/`dialect.rs`/`keys.rs` behind `model`; repeat the re-export
-   wiring and re-run tests.
-5. Move `director.rs` (read verbs) + `drivers.rs` + `c4p.rs` behind `client`;
-   split `apply` per §4; re-run tests.
-6. Resolve §6 decisions, fill publish metadata, follow PUBLISH.md.
+**Done** (this change):
+1. `git mv soap.rs + xml.rs + keys.rs` into `crates/control4-soap/src/`
+   (`keys` private; `xml`/`soap` public). Real deps in the crate `Cargo.toml`.
+2. `c4` depends by path and re-exports `pub use control4_soap::{soap, xml};` so
+   `c4::soap::…` / `c4::xml::…` and in-crate `crate::soap`/`crate::xml` are
+   unchanged. `keys` dropped from c4 (moved).
+3. `cargo test --workspace` green — `calls_match_composer` passes with
+   `Call::encode` here and `Op::calls` in openComposer; soap's own tests run from
+   the crate.
 
-Each step is its own commit and leaves the workspace green via the re-export
-shim, so openComposer never sees a breaking change.
+**Remaining** (future, owner-gated — each its own reviewed change):
+4. Resolve §2.1 coupling for `model` (decouple `Project` from `agents`) and
+   `dialect` (neutralize the `takeover::paths` reference), then move them.
+5. Split `director.rs` per §4 (crate keeps connection + read verbs + generic
+   `send_calls`; openComposer keeps `apply(op)` = predict → calls → send →
+   verify) and move it; optionally `drivers.rs`/`c4p.rs` if a consumer needs them.
+6. Resolve §6 decisions, set the license, follow PUBLISH.md to publish.
+
+Each step stays green via the re-export shim, so openComposer never breaks.
