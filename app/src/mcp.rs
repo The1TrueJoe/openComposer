@@ -281,6 +281,25 @@ impl OpenComposerMcp {
         self.run("device_read", s, actions::device_read(&self.app, a)).await
     }
 
+    #[tool(description = "What a room can play: its Watch/Listen source lists from the controller (the same lists Control4's \
+        navigator and real Composer show). Audio sources like TuneIn are under listen_devices. Pass the room id.",
+        annotations(read_only_hint = true))]
+    async fn media_sources(&self, Parameters(a): Parameters<MediaArgs>) -> Result<CallToolResult, McpError> {
+        self.run("media_sources", format!("room #{}", a.room), actions::media_sources(&self.app, a)).await
+    }
+
+    #[tool(description = "Saved favorites on the controller — a user's pinned stations and menus (e.g. TuneIn favorites). \
+        Each favorite's path is a menu or a /rooms/:r/items/:i pin.", annotations(read_only_hint = true))]
+    async fn favorites(&self, Parameters(a): Parameters<DirectorArg>) -> Result<CallToolResult, McpError> {
+        self.run("favorites", String::new(), actions::favorites(&self.app, a)).await
+    }
+
+    #[tool(description = "A room's live now-playing and selected-source state from the controller's REST variable bus. \
+        Pass the room id.", annotations(read_only_hint = true))]
+    async fn now_playing(&self, Parameters(a): Parameters<MediaArgs>) -> Result<CallToolResult, McpError> {
+        self.run("now_playing", format!("room #{}", a.room), actions::now_playing(&self.app, a)).await
+    }
+
     #[tool(description = "Send a command to a device now (e.g. ON, SET_LEVEL with LEVEL=50, SET_VOLUME_LEVEL, \
         SELECT_AUDIO_DEVICE, MUTE_TOGGLE) — it acts on real equipment, so the user approves it first. Commands \
         come from get_item → commands. For GET_*/IS_* reads (media browse, current state) use device_read instead.",

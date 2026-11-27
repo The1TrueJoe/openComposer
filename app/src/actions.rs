@@ -792,6 +792,42 @@ pub async fn device_read(app: &Arc<App>, a: DeviceReadArgs) -> AppResult<Value> 
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct MediaArgs {
+    #[serde(default)]
+    pub director: Option<String>,
+    /// Room id (from project_overview / network paths), e.g. the GARAGE room.
+    pub room: u32,
+}
+
+/// What a room can play — its Watch/Listen source lists from the controller's REST API, the
+/// same list Control4's navigator and real Composer show. Audio sources (TuneIn, etc.) are
+/// under `listen_devices`. Read-only.
+pub async fn media_sources(app: &Arc<App>, a: MediaArgs) -> AppResult<Value> {
+    let s = app.session(a.director.as_deref()).await?;
+    let b = app.broker(&s).await?;
+    let media = b.room_media(a.room).await.map_err(|e| AppError::Other(e.to_string()))?;
+    Ok(json!({ "room": a.room, "media": media }))
+}
+
+/// Saved favorites from the controller (a user's pinned stations/menus — e.g. TuneIn favorites).
+/// Each has a `path` that is a menu or a `/rooms/:r/items/:i` pin. Read-only.
+pub async fn favorites(app: &Arc<App>, a: DirectorArg) -> AppResult<Value> {
+    let s = app.session(a.director.as_deref()).await?;
+    let b = app.broker(&s).await?;
+    let favs = b.favorites().await.map_err(|e| AppError::Other(e.to_string()))?;
+    Ok(json!({ "favorites": favs }))
+}
+
+/// A room's live state over the REST API — now-playing and the selected source (the variable
+/// bus `GET /api/v1/items/:id/variables`). Pass the room id. Read-only.
+pub async fn now_playing(app: &Arc<App>, a: MediaArgs) -> AppResult<Value> {
+    let s = app.session(a.director.as_deref()).await?;
+    let b = app.broker(&s).await?;
+    let vars = b.item_variables(a.room).await.map_err(|e| AppError::Other(e.to_string()))?;
+    Ok(json!({ "room": a.room, "variables": vars }))
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct TabsArgs {
     #[serde(default)]
     pub director: Option<String>,
