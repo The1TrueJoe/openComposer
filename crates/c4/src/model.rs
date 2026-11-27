@@ -171,14 +171,9 @@ pub struct Project {
     pub programming: BTreeMap<String, Vec<CodeItem>>,
     /// Director's next-id counter (`iditemcurrent`).
     pub next_item_id: u32,
-    /// Scheduler agent id → its scheduled events, from the agent's stored state. Each entry
-    /// id is also an event id of the agent in `programming`.
-    #[serde(default)]
-    pub schedules: BTreeMap<u32, Vec<crate::agents::ScheduleEntry>>,
-    /// Advanced Lighting, Announcements, Wake/Sleep and notification agents' stored data,
-    /// by agent id.
-    #[serde(default)]
-    pub agent_data: BTreeMap<u32, crate::agents::AgentData>,
+    // Built-in agents' stored state (Scheduler entries, lighting scenes, announcements…) is NOT
+    // here: it is app-domain and lives in `agents::AgentState`, parsed from the same document and
+    // carried beside the project (see `director::Snapshot`), so the model names no agent types.
 }
 
 /// Programming is keyed `"device:event"` so the map serialises as a JSON object.
@@ -297,12 +292,6 @@ impl Project {
             properties: child_text(node, "state").map(parse_persisted_properties).unwrap_or_default(),
         };
         self.items.insert(id, item);
-        if let Some(entries) = crate::agents::schedule_from_item(node) {
-            self.schedules.insert(id, entries);
-        }
-        if let Some(data) = crate::agents::data_from_item(node) {
-            self.agent_data.insert(id, data);
-        }
         if let Some(p) = parent.and_then(|p| self.items.get_mut(&p)) {
             p.children.push(id);
         }

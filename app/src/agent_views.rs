@@ -8,7 +8,7 @@
 //! reads add what only the agent knows (next runs, active scenes, media sources). This
 //! module only reads: changes are ops (`c4::agent_ops`), proposed like any other change.
 
-use c4::agents::{self, AgentKind};
+use c4::agents::{self, AgentKind, AgentState};
 use c4::director::Catalog;
 use c4::model::{CodeItem, event_key};
 use c4::{Director, Project};
@@ -40,7 +40,7 @@ fn programming(p: &Project, agent: u32, event: u32) -> Vec<Value> {
 }
 
 /// The view for one agent, or `view: null` when Composer shows it with the generic tabs only.
-pub async fn view(d: &Director, p: &Project, _cat: &Catalog, id: u32) -> AppResult<Value> {
+pub async fn view(d: &Director, p: &Project, ag: &AgentState, _cat: &Catalog, id: u32) -> AppResult<Value> {
     let Some(it) = p.item(id) else { return Err(crate::state::AppError::Other(format!("no item #{id} in this project"))) };
     let Some(kind) = it.driver.as_deref().and_then(AgentKind::from_driver) else {
         return Ok(json!({ "id": id, "view": null }));
@@ -48,12 +48,12 @@ pub async fn view(d: &Director, p: &Project, _cat: &Catalog, id: u32) -> AppResu
     let agent = json!({ "id": id, "name": it.name });
     let data = match kind {
         AgentKind::Scheduler => scheduler(d, p, id).await?,
-        AgentKind::AdvancedLighting => advanced_lighting(d, p, id).await?,
-        AgentKind::Announcements => announcements(p, id),
-        AgentKind::WakeSleep => wake_sleep(d, p, id).await?,
-        AgentKind::PushNotification => push_notification(d, p, id).await?,
-        AgentKind::EmailNotification => email_notification(p, id),
-        AgentKind::ScreenSaver => screen_saver(p, id),
+        AgentKind::AdvancedLighting => advanced_lighting(d, p, ag, id).await?,
+        AgentKind::Announcements => announcements(p, ag, id),
+        AgentKind::WakeSleep => wake_sleep(d, p, ag, id).await?,
+        AgentKind::PushNotification => push_notification(d, p, ag, id).await?,
+        AgentKind::EmailNotification => email_notification(ag, id),
+        AgentKind::ScreenSaver => screen_saver(p, ag, id),
     };
     Ok(json!({ "id": id, "view": kind, "title": kind.title(), "agent": agent, "data": data }))
 }
@@ -112,18 +112,18 @@ fn rooms(p: &Project) -> Vec<Value> {
     v.into_iter().map(|i| json!({ "id": i.id, "name": i.name, "room": null })).collect()
 }
 
-fn agent_data(p: &Project, id: u32) -> Option<&agents::AgentData> {
-    p.agent_data.get(&id)
+fn agent_data(ag: &AgentState, id: u32) -> Option<&agents::AgentData> {
+    ag.agent_data.get(&id)
 }
 
 fn step_json(st: &agents::LightStep) -> Value {
     json!({ "delay_ms": st.delay_ms, "level": st.level, "rate_ms": st.rate_ms, "color": st.color, "text": st.text() })
 }
 
-async fn advanced_lighting(d: &Director, p: &Project, id: u32) -> AppResult<Value> {
+async fn advanced_lighting(d: &Director, p: &Project, ag: &AgentState, id: u32) -> AppResult<Value> {
     // Which scenes are on right now is the agent's to say; the rest is stored in the project.
     let live = d.agent_read(id, "GET_SCENE_LIST", &[]).await.map(|x| agents::parse_scene_list(&x)).unwrap_or_default();
-    let stored = match agent_data(p, id) {
+    let stored = match agent_data(ag, id) {
         Some(agents::AgentData::Lighting { scenes }) => scenes.clone(),
         _ => vec![],
     };
@@ -147,8 +147,8 @@ async fn advanced_lighting(d: &Director, p: &Project, id: u32) -> AppResult<Valu
     Ok(json!({ "scenes": scenes, "lights": items_with(p, &agents::SCENE_LIGHT_DRIVERS) }))
 }
 
-fn announcements(p: &Project, id: u32) -> Value {
-    let list = match agent_data(p, id) {
+fn announcements(p: &Project, ag: &AgentState, id: u32) -> Value {
+    let list = match agent_data(ag, id) {
         Some(agents::AgentData::Announcements { announcements }) => announcements.clone(),
         _ => vec![],
     };
@@ -178,8 +178,8 @@ fn announcements(p: &Project, id: u32) -> Value {
         "touchscreens": pick(c4::agent_ops::is_touchscreen), "sounds": sounds, "display_seconds": agents::DISPLAY_SECONDS })
 }
 
-async fn wake_sleep(d: &Director, p: &Project, id: u32) -> AppResult<Value> {
-    let list = match agent_data(p, id) {
+async fn wake_sleep(d: &Director, p: &Project, ag: &AgentState, id: u32) -> AppResult<Value> {
+    let list = match agent_data(ag, id) {
         Some(agents::AgentData::WakeSleep { rooms }) => rooms.clone(),
         _ => vec![],
     };
@@ -227,8 +227,8 @@ async fn wake_sleep(d: &Director, p: &Project, id: u32) -> AppResult<Value> {
         "lights": items_with(p, &["light.c4i", "light_v2.c4i", "outlet_light.c4i"]), "blinds": items_with(p, &["blind.c4i", "blindV2.c4i"]) }))
 }
 
-async fn push_notification(d: &Director, p: &Project, id: u32) -> AppResult<Value> {
-    let (templates, categories, severities) = match agent_data(p, id) {
+async fn push_notification(d: &Director, p: &Project, ag: &AgentState, id: u32) -> AppResult<Value> {
+    let (templates, categories, severities) = match agent_data(ag, id) {
         Some(agents::AgentData::Push { templates, categories, severities }) => (templates.clone(), categories.clone(), severities.clone()),
         _ => (vec![], vec![], vec![]),
     };
@@ -256,8 +256,8 @@ async fn push_notification(d: &Director, p: &Project, id: u32) -> AppResult<Valu
     Ok(json!({ "templates": rows, "categories": list(&categories), "severities": list(&severities), "attachment_providers": providers }))
 }
 
-fn email_notification(p: &Project, id: u32) -> Value {
-    let templates = match agent_data(p, id) {
+fn email_notification(ag: &AgentState, id: u32) -> Value {
+    let templates = match agent_data(ag, id) {
         Some(agents::AgentData::Email { templates }) => templates.clone(),
         _ => vec![],
     };
@@ -268,8 +268,8 @@ fn email_notification(p: &Project, id: u32) -> Value {
     json!({ "templates": rows })
 }
 
-fn screen_saver(p: &Project, id: u32) -> Value {
-    let s = match agent_data(p, id) {
+fn screen_saver(p: &Project, ag: &AgentState, id: u32) -> Value {
+    let s = match agent_data(ag, id) {
         Some(agents::AgentData::ScreenSaver(s)) => s.clone(),
         _ => agents::ScreenSaver::default(),
     };

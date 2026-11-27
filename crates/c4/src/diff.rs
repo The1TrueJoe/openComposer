@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::agents::{ScheduleEntry, ScheduleSpec};
+use crate::agents::{AgentState, ScheduleEntry, ScheduleSpec};
 use crate::model::{Binding, CodeItem, ItemKind, Names, NetworkBinding, Project, Variable};
 
 #[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
@@ -168,6 +168,8 @@ impl Change {
 struct Ctx<'a> {
     before: &'a Project,
     after: &'a Project,
+    before_ag: &'a AgentState,
+    after_ag: &'a AgentState,
     names: &'a Names,
 }
 
@@ -212,8 +214,8 @@ fn location(p: &Project, id: u32) -> Location {
     p.ancestors(id).iter().map(|i| i.name.clone()).collect()
 }
 
-pub fn diff(before: &Project, after: &Project, names: &Names, opts: DiffOptions) -> Diff {
-    let cx = Ctx { before, after, names };
+pub fn diff(before: &Project, after: &Project, before_ag: &AgentState, after_ag: &AgentState, names: &Names, opts: DiffOptions) -> Diff {
+    let cx = Ctx { before, after, before_ag, after_ag, names };
     let mut changes = Vec::new();
 
     // Items. Report the top of a removed/added subtree once, with a descendant count.
@@ -380,11 +382,11 @@ pub fn diff(before: &Project, after: &Project, names: &Names, opts: DiffOptions)
     }
 
     // Scheduler events.
-    let agents: BTreeSet<u32> = before.schedules.keys().chain(after.schedules.keys()).copied().collect();
+    let agents: BTreeSet<u32> = before_ag.schedules.keys().chain(after_ag.schedules.keys()).copied().collect();
     for agent in agents {
         let none = Vec::new();
-        let b: BTreeMap<u32, &ScheduleEntry> = before.schedules.get(&agent).unwrap_or(&none).iter().map(|e| (e.id, e)).collect();
-        let a: BTreeMap<u32, &ScheduleEntry> = after.schedules.get(&agent).unwrap_or(&none).iter().map(|e| (e.id, e)).collect();
+        let b: BTreeMap<u32, &ScheduleEntry> = before_ag.schedules.get(&agent).unwrap_or(&none).iter().map(|e| (e.id, e)).collect();
+        let a: BTreeMap<u32, &ScheduleEntry> = after_ag.schedules.get(&agent).unwrap_or(&none).iter().map(|e| (e.id, e)).collect();
         for (id, e) in &b {
             match a.get(id) {
                 None => changes.push(Change::ScheduleRemoved {
@@ -420,12 +422,13 @@ pub fn diff(before: &Project, after: &Project, names: &Names, opts: DiffOptions)
 /// Other agents' records (scenes, announcements…), compared setting by setting.
 fn agent_records(cx: &Ctx<'_>, removed: &BTreeSet<u32>, changes: &mut Vec<Change>) {
     let (before, after) = (cx.before, cx.after);
-    let agents: BTreeSet<u32> = before.agent_data.keys().chain(after.agent_data.keys()).copied().collect();
+    let (before_ag, after_ag) = (cx.before_ag, cx.after_ag);
+    let agents: BTreeSet<u32> = before_ag.agent_data.keys().chain(after_ag.agent_data.keys()).copied().collect();
     for agent in agents {
-        let recs = |p: &Project| -> BTreeMap<(&'static str, u32), crate::agents::Record> {
-            p.agent_data.get(&agent).map(|d| d.records(p)).unwrap_or_default().into_iter().map(|r| ((r.what, r.id), r)).collect()
+        let recs = |p: &Project, ag: &AgentState| -> BTreeMap<(&'static str, u32), crate::agents::Record> {
+            ag.agent_data.get(&agent).map(|d| d.records(p)).unwrap_or_default().into_iter().map(|r| ((r.what, r.id), r)).collect()
         };
-        let (b, a) = (recs(before), recs(after));
+        let (b, a) = (recs(before, before_ag), recs(after, after_ag));
         for (k, r) in &b {
             match a.get(k) {
                 None => changes.push(Change::AgentRecordRemoved {
@@ -556,7 +559,7 @@ mod tests {
     #[test]
     fn identical_projects_have_no_changes() {
         let p = sample();
-        assert!(diff(&p, &p, &Names::default(), DiffOptions::default()).changes.is_empty());
+        assert!(diff(&p, &p, &AgentState::default(), &AgentState::default(), &Names::default(), DiffOptions::default()).changes.is_empty());
     }
 
     #[test]
@@ -569,7 +572,7 @@ mod tests {
         after.items.get_mut(&10).unwrap().children.retain(|c| *c != 20);
         after.bindings.retain(|b| b.consumer_device != 20);
         after.network_bindings.retain(|n| n.device != 20);
-        let d = diff(&before, &after, &Names::default(), DiffOptions::default());
+        let d = diff(&before, &after, &AgentState::default(), &AgentState::default(), &Names::default(), DiffOptions::default());
         let removed: Vec<_> = d.changes.iter().filter(|c| matches!(c, Change::ItemRemoved { .. })).collect();
         assert_eq!(removed.len(), 1, "proxy under the TV is folded into its parent");
         assert!(matches!(removed[0], Change::ItemRemoved { descendants: 1, .. }));
@@ -585,7 +588,7 @@ mod tests {
         let mut extra = code[0].children[0].clone();
         extra.display = "Dim Kitchen to 40%".into();
         code[0].children.push(extra);
-        let d = diff(&before, &after, &Names::default(), DiffOptions::default());
+        let d = diff(&before, &after, &AgentState::default(), &AgentState::default(), &Names::default(), DiffOptions::default());
         let Change::ProgrammingChanged { lines, .. } = &d.changes[0] else { panic!("{:?}", d.changes) };
         let added: Vec<_> = lines.iter().filter(|l| l.op == LineOp::Added).map(|l| l.text.as_str()).collect();
         assert_eq!(added, ["Dim Kitchen to 40%"]);
