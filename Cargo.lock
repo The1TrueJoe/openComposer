@@ -832,7 +832,7 @@ checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
 [[package]]
 name = "control4-soap"
 version = "0.1.0"
-source = "git+https://github.com/The1TrueJoe/control4-soap?rev=715f4ee#715f4eee87d26b8cf22a341536d2722beedb528e"
+source = "git+https://github.com/The1TrueJoe/control4-soap?rev=c815176#c8151765b3445d2d73a58e3ad06ffdb622c0c727"
 dependencies = [
  "hex",
  "rand_core 0.6.4",

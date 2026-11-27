@@ -7,7 +7,7 @@ edition.workspace = true
 # The c4soap wire protocol and SDDP discovery come from shared crates, not copies.
 # c4 re-exports control4-soap as `c4::soap` / `c4::xml`; `c4::sddp` is openComposer's
 # serializable projection plus the Control4-controller heuristic on top of sddp.
-control4-soap = { git = "https://github.com/The1TrueJoe/control4-soap", rev = "715f4ee" }
+control4-soap = { git = "https://github.com/The1TrueJoe/control4-soap", rev = "c815176" }
 sddp = { git = "https://github.com/The1TrueJoe/sddp", rev = "f1cbff62e434eec6558a2f83b07dd4b62cd60576" }
 hex = "0.4.3"
 md-5 = "0.10"
