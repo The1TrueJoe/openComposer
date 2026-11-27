@@ -4,6 +4,14 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
+# The c4soap wire protocol (soap.rs + xml.rs) lives in the shared control4-soap
+# crate; c4 depends on it by path and re-exports it as `c4::soap` / `c4::xml`.
+control4-soap = { path = "../control4-soap" }
+# SDDP discovery comes from the owner's shared crate (also used by
+# control4-audio-client and openhc-control4), not a copy. Pinned by rev; it is
+# not on crates.io. `crates/c4/src/sddp.rs` is now just openComposer's
+# serializable projection + the Control4-controller heuristic on top of it.
+sddp = { git = "https://github.com/The1TrueJoe/sddp", rev = "f1cbff62e434eec6558a2f83b07dd4b62cd60576" }
 hex = "0.4.3"
 md-5 = "0.10"
 # Controller takeover: MAC-derived stock root password (older OS) uses PBKDF2-HMAC-SHA384
