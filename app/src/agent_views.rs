@@ -26,7 +26,7 @@ fn named(p: &Project, id: u32) -> Value {
 
 fn lines(p: &Project, code: &[CodeItem], depth: usize, out: &mut Vec<Value>) {
     for c in code {
-        out.push(json!({ "depth": depth, "text": c.text(p), "enabled": c.enabled, "id": c.id, "target": c.device }));
+        out.push(json!({ "depth": depth, "text": c4::program::code_text(c, p), "enabled": c.enabled, "id": c.id, "target": c.device }));
         lines(p, &c.children, depth + 1, out);
     }
 }

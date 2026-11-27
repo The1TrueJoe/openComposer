@@ -989,7 +989,7 @@ fn code_text(p: &Project, device: u32, event: u32, id: u32) -> String {
     p.programming
         .get(&crate::model::event_key(device, event))
         .and_then(|code| crate::program::find(code, id))
-        .map(|c| c.text(p))
+        .map(|c| crate::program::code_text(c, p))
         .unwrap_or_else(|| format!("line #{id}"))
 }
 
@@ -1106,7 +1106,7 @@ mod tests {
         let shape: Vec<(u32, usize, bool)> = code.iter().map(|c| (c.kind, c.children.len(), c.enabled)).collect();
         assert_eq!(shape, [(kind::CONDITIONAL, 1, true), (kind::ELSE, 0, true), (kind::LOOP, 0, true)]);
         assert!(!code[0].children[0].enabled);
-        assert_eq!(code[0].text(&p), "If Receiver is on");
+        assert_eq!(crate::program::code_text(&code[0], &p), "If Receiver is on");
 
         // Moving the If to the end takes its Else along; an Else can't move on its own.
         Op::MoveCode { device: 20, event: 2, id: 1, parent: 0, before: 0 }.predict(&mut p).unwrap();
@@ -1145,7 +1145,7 @@ mod tests {
         assert_eq!((display.as_str(), *var_type), (r#"#!"{VNAME} = True";VNAME="VNAME:100001,1125""#, 4));
         assert_eq!(action, &VarAction::Set { value: "1".into() });
         op.predict(&mut p).unwrap();
-        assert_eq!(p.programming["20:1"].last().unwrap().text(&p), "Garage Timer = True");
+        assert_eq!(crate::program::code_text(p.programming["20:1"].last().unwrap(), &p), "Garage Timer = True");
         let mut bad = Op::AddVariableCommand {
             device: 20, event: 1, parent: 0, before: 0, variable: VarRef { device: 100001, id: 1125 },
             action: VarAction::Add { value: "1".into() }, display: String::new(), var_type: 0,

@@ -508,7 +508,7 @@ fn schedule_fields(b: &ScheduleSpec, a: &ScheduleSpec) -> Vec<(&'static str, Str
 fn flatten(code: &[CodeItem], p: &Project) -> Vec<(usize, String, bool)> {
     fn walk(items: &[CodeItem], p: &Project, depth: usize, out: &mut Vec<(usize, String, bool)>) {
         for c in items {
-            out.push((depth, c.text(p), c.enabled));
+            out.push((depth, crate::program::code_text(c, p), c.enabled));
             walk(&c.children, p, depth + 1, out);
         }
     }

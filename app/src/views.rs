@@ -147,8 +147,8 @@ fn connections_of(p: &Project, cat: &Catalog, id: u32) -> Vec<Value> {
 fn code_lines(p: &Project, code: &[CodeItem], depth: usize, out: &mut Vec<Value>) {
     for c in code {
         // The command and its parameters, so a line can be re-added elsewhere (moved).
-        let (command, params) = c.command().unzip();
-        out.push(json!({ "depth": depth, "text": c.text(p), "enabled": c.enabled, "id": c.id, "target": c.device,
+        let (command, params) = c4::program::code_command(c).unzip();
+        out.push(json!({ "depth": depth, "text": c4::program::code_text(c, p), "enabled": c.enabled, "id": c.id, "target": c.device,
             "kind": c.kind, "role": c4::program::role(c), "display": c.display, "command": command,
             "params": params.unwrap_or_default() }));
         code_lines(p, &c.children, depth + 1, out);
