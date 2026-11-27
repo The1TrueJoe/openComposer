@@ -120,7 +120,7 @@ impl App {
             activity: Mutex::new(VecDeque::new()),
             activity_seq: AtomicU64::new(0),
             http: reqwest::Client::builder()
-                .user_agent(c4::soap::USER_AGENT)
+                .user_agent(c4::USER_AGENT)
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .expect("http client"),

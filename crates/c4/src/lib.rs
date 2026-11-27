@@ -16,10 +16,13 @@ pub mod ops;
 pub mod program;
 pub mod sddp;
 pub mod sidecar;
-// The c4soap protocol + its XML helpers live in the shared `control4-soap` crate
-// now; re-exported so `c4::soap::…` / `c4::xml::…` and in-crate `crate::soap`/
-// `crate::xml` paths are unchanged.
+// The c4soap protocol and its XML helpers come from the shared `control4-soap` crate.
 pub use control4_soap::{soap, xml};
+
+/// How openComposer identifies itself to a controller's HTTP services (the web API broker and
+/// driver web tabs): the honest product name and version. It deliberately does not impersonate
+/// Composer.
+pub const USER_AGENT: &str = concat!("openComposer/", env!("CARGO_PKG_VERSION"));
 pub mod takeover;
 pub mod zigbee;
 

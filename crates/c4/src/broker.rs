@@ -12,7 +12,8 @@
 
 use std::time::Duration;
 
-use crate::soap::{Identity, SoapError, USER_AGENT, tls_config};
+use crate::USER_AGENT;
+use crate::soap::{Identity, SoapError, tls_config};
 
 #[derive(Debug, thiserror::Error)]
 pub enum BrokerError {
