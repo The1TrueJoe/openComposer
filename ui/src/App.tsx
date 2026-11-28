@@ -51,12 +51,6 @@ export default function App() {
   const [focus, setFocus] = useState<FocusItem | null>(null);
   const [chat, setChat] = useState<string | null>(null);
 
-  // Follow along: once past the reconnect-on-launch burst, a director connecting (an MCP client
-  // opening it, say) switches the window to it and shows its project. The delay lets the app still
-  // open on the connect screen instead of jumping straight into a reconnected project.
-  const followReady = useRef(false);
-  useEffect(() => { const t = setTimeout(() => { followReady.current = true; }, 2500); return () => clearTimeout(t); }, []);
-
   const refreshStatus = useCallback(() => {
     api.status().then((s) => { setStatus(s); setError(null); }, (e) => setError(errText(e)));
   }, []);
@@ -92,12 +86,6 @@ export default function App() {
       ...s, connected: d.connected ? [...new Set([...s.connected, d.id])] : s.connected.filter((x) => x !== d.id),
     });
     if (d.info) setInfo((m) => new Map(m).set(d.id, d.info!));
-    if (d.connected && followReady.current) {
-      void api.setActiveDirector(d.id).then(refreshStatus, () => {});
-      setEntered(true);
-      setView("design");
-      setRev((r) => r + 1);
-    }
   });
   useBackendEvent("project-changed", (p) => { if (p.director === activeId) setRev((r) => r + 1); });
   useBackendEvent("approval", (a) => {
@@ -165,7 +153,7 @@ export default function App() {
       status, director,
       info: director ? info.get(director.id) ?? null : null,
       connected: !!director && status.connected.includes(director.id),
-      writable: director?.mode === "approve" || director?.mode === "auto",
+      writable: director?.mode === "approve",
       rev, approvals, propose, addDriver, refreshStatus,
       openApprovals: () => setDrawer(true),
       go: setView,

@@ -13,7 +13,6 @@ import { Select, Spinner } from "./controls";
 export const MODES: { value: AccessMode; label: string }[] = [
   { value: "approve", label: "Approve each write" },
   { value: "read_only", label: "Read only" },
-  { value: "auto", label: "Auto-apply (test — no approval)" },
 ];
 
 /** Certificate files by drag-and-drop or picking: a .pem + its .key (a lone

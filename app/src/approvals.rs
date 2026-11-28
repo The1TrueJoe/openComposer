@@ -182,30 +182,18 @@ pub async fn propose(
     app.approvals.waiters.lock().unwrap().insert(id.clone(), tx);
     app.approvals.all.lock().unwrap().push(approval.clone());
     app.emit("approval", &approval);
+    app.emit("attention", serde_json::json!({ "kind": "approval", "id": id, "title": approval.descriptions.first() }));
 
-    // On a controller in auto-apply mode (a test controller the owner marked), the change is
-    // applied at once — no card to decide, no attention nudge. Otherwise it waits for the
-    // person's decision, up to the timeout.
-    let (approved, note) = if saved.mode == crate::config::AccessMode::Auto {
-        app.approvals.waiters.lock().unwrap().remove(&id);
-        (true, None)
-    } else {
-        let summary = match approval.descriptions.as_slice() {
-            [] => "A change needs your approval".to_string(),
-            [one] => one.clone(),
-            [first, ..] => format!("{} changes — {first} …", approval.descriptions.len()),
-        };
-        app.emit("attention", serde_json::json!({ "kind": "approval", "id": id, "title": summary }));
-        match tokio::time::timeout(DECISION_TIMEOUT, rx).await {
-            Ok(Ok(d)) => d,
-            _ => {
-                app.approvals.waiters.lock().unwrap().remove(&id);
-                let a = app.approvals.update(app, &id, |a| {
-                    a.status = Status::Expired;
-                    a.decided = Some(Utc::now());
-                });
-                return Ok(a.unwrap_or(approval));
-            }
+    let decision = tokio::time::timeout(DECISION_TIMEOUT, rx).await;
+    let (approved, note) = match decision {
+        Ok(Ok(d)) => d,
+        _ => {
+            app.approvals.waiters.lock().unwrap().remove(&id);
+            let a = app.approvals.update(app, &id, |a| {
+                a.status = Status::Expired;
+                a.decided = Some(Utc::now());
+            });
+            return Ok(a.unwrap_or(approval));
         }
     };
     if !approved {
