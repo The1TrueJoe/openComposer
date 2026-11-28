@@ -743,7 +743,7 @@ pub async fn send_command(app: &Arc<App>, a: CommandArgs, source: &str) -> AppRe
     let op = Op::SendCommand { device: a.device, command: a.command, params: a.params };
     if source == crate::commands::UI_SOURCE {
         let s = app.session(Some(&saved.id)).await?;
-        let r = s.director.apply(&op, None).await?;
+        let r = op.apply(&s.director, None).await?;
         return Ok(json!({ "status": "sent", "reply": r.notes }));
     }
     let r = approvals::propose(app, Some(&saved.id), vec![op], None, source).await?;

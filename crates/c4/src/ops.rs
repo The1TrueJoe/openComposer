@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::agents::AgentState;
+use crate::director::{Applied, Catalog, Director, DirectorError};
 use crate::model::{Binding, Item, ItemKind, NetworkBinding, Project};
 use crate::soap::Call;
 
@@ -1005,11 +1006,69 @@ fn prune_code(code: &mut Vec<crate::model::CodeItem>, gone: &[u32]) {
     }
 }
 
+/// The item definition Director wants in `AddItem` for a new location, copied from one that
+/// exists. Lives here with the op authoring, not on `Catalog`, so the director/catalog carry no
+/// `Op` knowledge.
+pub fn template_for<'a>(catalog: &'a Catalog, op: &Op) -> Option<&'a str> {
+    match op {
+        Op::AddRoom { .. } => catalog.room_template.as_deref(),
+        Op::AddLocation { kind, .. } => catalog.location_templates.get(&kind.item_kind().code()).map(String::as_str),
+        _ => None,
+    }
+}
+
+/// `template` with its `<itemdata><tag>` replaced by (or given) a new one, in the form Composer
+/// uses: a v4 UUID with underscores, e.g. `18132870_8761_424b_9559_cb6bc5f2b305`.
+fn with_fresh_tag(template: &str) -> String {
+    use rand_core::{OsRng, RngCore};
+    let mut b = [0u8; 16];
+    OsRng.fill_bytes(&mut b);
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    let tag = format!("<tag>{}_{}_{}_{}_{}</tag>", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..]);
+    match (template.find("<tag>"), template.find("</tag>")) {
+        (Some(a), Some(z)) if a < z => format!("{}{tag}{}", &template[..a], &template[z + "</tag>".len()..]),
+        _ => template.replacen("</itemdata>", &format!("{tag}</itemdata>"), 1).replacen("<itemdata />", &format!("<itemdata>{tag}</itemdata>"), 1),
+    }
+}
+
+impl Op {
+    /// Execute this op against a director: build its calls and send them. Approval is the
+    /// caller's responsibility (`approvals::propose`); this only sends. `room_template` is
+    /// [`template_for`]`(catalog, op)` \u2014 the item definition a new location copies.
+    pub async fn apply(&self, director: &Director, room_template: Option<&str>) -> Result<Applied, DirectorError> {
+        if matches!(self, Op::AddRoom { .. }) && room_template.is_none() {
+            return Err(DirectorError::Other("adding a room needs an existing room to copy its definition from".into()));
+        }
+        if let (Op::AddLocation { kind, .. }, None) = (self, room_template) {
+            return Err(DirectorError::Other(format!(
+                "adding a {} needs an existing one in the project to copy its definition from",
+                kind.item_kind().label()
+            )));
+        }
+        // Every location has its own tag; one copied from the template would be shared.
+        let fresh = room_template.map(with_fresh_tag);
+        director.send_calls(self.calls(fresh.as_deref())).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::diff::{Change, DiffOptions, diff};
     use crate::model::Names;
+
+    #[test]
+    fn fresh_tags() {
+        let room = "<item><itemdata><small_image>x</small_image><tag>old</tag></itemdata></item>";
+        let a = with_fresh_tag(room);
+        assert!(!a.contains("<tag>old</tag>") && a.contains("<small_image>x</small_image><tag>"));
+        assert_ne!(a, with_fresh_tag(room));
+        let b = with_fresh_tag("<item><itemdata><small_image>x</small_image></itemdata></item>");
+        let tag = &b[b.find("<tag>").unwrap() + 5..b.find("</tag>").unwrap()];
+        assert_eq!(tag.split('_').map(str::len).collect::<Vec<_>>(), [8, 4, 4, 4, 12]);
+    }
 
     fn sample() -> Project {
         Project::parse(include_str!("../tests/fixtures/sample-project.xml")).unwrap()
