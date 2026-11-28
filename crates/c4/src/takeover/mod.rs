@@ -40,3 +40,29 @@ pub mod paths {
     /// The bundle the `mosquitto-jwt-auth` plugin reads (OS 4.2+); patched for the MQTT JWT.
     pub const API_PEM: &str = "/opt/control4/etc/ssl/certs/api.pem";
 }
+
+/// The client-CA chain files a controller of this era is expected to have, newest-layout first.
+/// The swap still probes each for existence — this only sets expectation and labels. Keyed off
+/// the version era [`crate::dialect`] reports; the path strings live in [`paths`]. This lives here,
+/// not on `Dialect`, so the dialect (version/protocol policy) carries no controller-filesystem
+/// knowledge and stays free of `takeover`.
+pub fn client_ca_chains(era: crate::dialect::TakeoverEra) -> &'static [&'static str] {
+    use crate::dialect::TakeoverEra;
+    use paths::*;
+    match era {
+        TakeoverEra::Modern => &[SSL_CLIENT_CA, OPENVPN_CLIENT_CA, MOSQUITTO_CA_CHAIN],
+        _ => &[OPENVPN_CLIENT_CA],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::dialect::TakeoverEra;
+
+    #[test]
+    fn chain_lists_by_era() {
+        assert_eq!(super::client_ca_chains(TakeoverEra::Legacy), &["/etc/openvpn/clientca-prod.pem"]);
+        assert_eq!(super::client_ca_chains(TakeoverEra::Derived), &["/etc/openvpn/clientca-prod.pem"]);
+        assert_eq!(super::client_ca_chains(TakeoverEra::Modern).len(), 3);
+    }
+}
