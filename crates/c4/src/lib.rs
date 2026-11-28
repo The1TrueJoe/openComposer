@@ -11,6 +11,7 @@ pub mod dialect;
 pub mod diff;
 pub mod director;
 pub mod drivers;
+pub mod lua_output;
 pub mod model;
 pub mod ops;
 pub mod program;

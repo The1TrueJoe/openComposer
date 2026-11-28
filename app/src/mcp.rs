@@ -214,6 +214,14 @@ impl OpenComposerMcp {
         self.run("install_driver", s, actions::install_driver(&self.app, a, self.source)).await
     }
 
+    #[tool(description = "What a driver printed (the Lua output Composer shows) for a device id: lines buffered since \
+        openComposer connected (up to 500) plus lines arriving during `seconds` (default 30, max 300). Optional `contains` filter. \
+        Lines with new=true arrived during the wait.", annotations(read_only_hint = true))]
+    async fn lua_output(&self, Parameters(a): Parameters<LuaOutputArgs>) -> Result<CallToolResult, McpError> {
+        let s = format!("#{}", a.iddevice);
+        self.run("lua_output", s, actions::lua_output(&self.app, a)).await
+    }
+
     #[tool(description = "Driver files installed on the controller (manufacturer, model, version, SDDP search types).",
         annotations(read_only_hint = true))]
     async fn controller_drivers(&self, Parameters(a): Parameters<DirectorArg>) -> Result<CallToolResult, McpError> {

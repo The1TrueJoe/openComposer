@@ -269,6 +269,8 @@ pub struct Director {
     pub conn: Connection,
     pub dialect: Dialect,
     pub info: DirectorInfo,
+    /// Drivers' `LUA_OUTPUT` lines, filled from the event stream for as long as this connection lives.
+    pub lua: crate::lua_output::LuaLog,
 }
 
 impl Director {
@@ -291,8 +293,34 @@ impl Director {
             verified_version: dialect.verified,
             server_fingerprint: conn.server_fingerprint.clone(),
         };
+        let lua = crate::lua_output::LuaLog::default();
+        // Subscribe before EnableEvents so no line is missed; ends when the connection closes.
+        let mut rx = conn.events();
+        let sink = lua.clone();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(e) if e.name == "OnDataToUI" => {
+                        if let Some((device, time, text)) = crate::lua_output::parse_lua_output(&e.raw) {
+                            sink.push(device, time, text);
+                        }
+                    }
+                    Ok(e) if e.name == "Disconnected" => break,
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
         conn.enable_events().await?;
-        Ok(Self { conn, dialect, info })
+        Ok(Self { conn, dialect, info, lua })
+    }
+
+    /// Lines a driver printed: what is buffered, then whatever arrives within `wait`.
+    /// Returns `(line, arrived_during_wait)`.
+    pub async fn lua_output(&self, device: u32, wait: Duration, contains: Option<&str>) -> Vec<(crate::lua_output::LuaLine, bool)> {
+        let mark = self.lua.mark();
+        tokio::time::sleep(wait).await;
+        self.lua.lines(device, contains).into_iter().map(|l| { let new = l.seq > mark; (l, new) }).collect()
     }
 
     /// The whole project, as a backup would capture it.
