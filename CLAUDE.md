@@ -1,7 +1,9 @@
 # openComposer — working notes
 
 ## Ground rules
-- Commit on `main`; never force-push. No `Co-Authored-By` or other attribution trailers.
+- Commit on `main`; never force-push. No `Co-Authored-By`, `Claude-Session` or other attribution trailers in
+  commits or PR text (`.claude/settings.json` turns Claude Code's off). Squash-merge outside PRs
+  with an explicit message so their trailers don't reach `main`.
 - **Never write to a real controller without the owner's explicit OK.** Develop and test
   writes against the Windows Virtual Director (`optiplex.local`, OS 3.3.3). The real EA-1
   (`192.168.1.172`) is read-only unless the owner says otherwise.
