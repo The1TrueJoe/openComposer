@@ -316,6 +316,35 @@ impl OpenComposerMcp {
         let s = a.backup.clone();
         self.run("load_backup", s, actions::load_backup(&self.app, a, self.source)).await
     }
+
+    #[tool(description = "Undo a change that was applied (by approval_id from its result): proposes the changes that \
+        take the project back, which the user approves like any change. Removed items and programming lines, \
+        commands and driver installs can't be undone this way; the result says what wasn't put back \
+        (load_backup with the change's restore_point covers those).",
+        annotations(read_only_hint = false, destructive_hint = true))]
+    async fn undo_change(&self, Parameters(a): Parameters<UndoArgs>) -> Result<CallToolResult, McpError> {
+        let s = a.approval_id.clone();
+        self.run("undo_change", s, actions::undo_change(&self.app, a, self.source)).await
+    }
+
+    #[tool(description = "Export Advanced Lighting scenes (all, or those named) as a file: each scene's lights by room \
+        and name with their steps, so import_scenes can bring them into this or another project.",
+        annotations(read_only_hint = true))]
+    async fn export_scenes(&self, Parameters(mut a): Parameters<ExportScenesArgs>) -> Result<CallToolResult, McpError> {
+        a.path = None; // MCP clients get the file back; only the app's Save dialog writes to disk.
+        let s = format!("{} scene(s)", a.scenes.len());
+        self.run("export_scenes", s, actions::export_scenes(&self.app, a)).await
+    }
+
+    #[tool(description = "Import Advanced Lighting scenes from a file export_scenes made (from this or another \
+        project), as one approval: scenes that don't exist are added, ones that do (by name) get the file's \
+        lights. Lights are matched by room and name; the result lists any that weren't found.",
+        annotations(read_only_hint = false, destructive_hint = false))]
+    async fn import_scenes(&self, Parameters(mut a): Parameters<ImportScenesArgs>) -> Result<CallToolResult, McpError> {
+        a.path = None; // the file comes in the call; only the app's Open dialog reads from disk.
+        let s = a.file.as_ref().map(|f| format!("{} scene(s)", f.scenes.len())).unwrap_or_default();
+        self.run("import_scenes", s, actions::import_scenes(&self.app, a, self.source)).await
+    }
 }
 
 #[tool_handler(router = self.tool_router)]

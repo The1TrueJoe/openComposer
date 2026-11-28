@@ -40,5 +40,7 @@
 .ac-side-head { display: flex; align-items: center; gap: 6px; width: 100%; border: 0; background: var(--hover-soft); color: var(--text); font: inherit;
   font-size: 12.5px; padding: 6px 10px; cursor: pointer; text-align: left; }
 .ac-side-head:hover { background: var(--fill-faint); }
+.ac-undo { display: flex; flex-direction: column; gap: 6px; }
+.ac-undo .ac-actions { justify-content: flex-start; }
 .ac-restore { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--dim); flex-wrap: wrap; }
 .ac-restore code { color: var(--text); max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
