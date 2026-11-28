@@ -620,6 +620,8 @@ export type Op =
   | { op: "zigbee_control"; iddevice: number; action: ZigbeeAction }
   /** Only ever produced by `install_driver`; the file's bytes are not serialized back. */
   | { op: "install_driver"; filename: string; source: string }
+  /** Only ever produced by `update_driver`: replaces a driver devices already run. */
+  | { op: "update_driver"; filename: string; source: string; agent: number; restart: boolean }
   /** Only ever produced by `load_backup`; the XML is not serialized back. */
   | { op: "load_project"; label: string };
 

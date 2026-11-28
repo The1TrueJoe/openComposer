@@ -293,6 +293,7 @@ fn inverse(
             }
         }
         Op::InstallDriver { filename, .. } => skip(format!("the driver file {filename} stays on the controller")),
+        Op::UpdateDriver { filename, .. } => skip(format!("the update of {filename} (install the old file again to go back)")),
         Op::ZigbeeControl { .. } => skip("a Zigbee mesh action".into()),
         Op::LoadProject { label, .. } => skip(format!("loading {label} (load the restore point instead)")),
     }

@@ -245,6 +245,18 @@ pub enum Op {
         #[schemars(skip)]
         bytes: Vec<u8>,
     },
+    /// Replace a driver devices already use: put the file on the controller, then have its
+    /// Driver Update agent swap it in (see [`crate::driver_update`]). `agent` is that agent's
+    /// item id; `restart` is what its evaluation said about a Director restart.
+    UpdateDriver {
+        filename: String,
+        source: String,
+        agent: u32,
+        restart: bool,
+        #[serde(skip, default)]
+        #[schemars(skip)]
+        bytes: Vec<u8>,
+    },
     /// Manage the Zigbee mesh (permit-join, remove a node, flash an access point). Changes
     /// no project data; acts on the live mesh, so it is approved like a write. `iddevice` is
     /// the controller's Zigbee server (the Director's device id). See [`crate::zigbee`].
@@ -429,6 +441,16 @@ impl Op {
             Op::ZigbeeControl { iddevice, action } => action.describe(*iddevice),
             Op::InstallDriver { filename, source, bytes } => {
                 format!("Install driver file {filename} ({} KB) from {source}", bytes.len().div_ceil(1024))
+            }
+            Op::UpdateDriver { filename, source, bytes, restart, .. } => {
+                let using = p.items.values().filter(|i| i.driver.as_deref().is_some_and(|d| d.eq_ignore_ascii_case(filename))).count();
+                format!(
+                    "Update driver {filename} ({} KB) from {source}; {} use{} it{}",
+                    bytes.len().div_ceil(1024),
+                    if using == 1 { "1 device".to_string() } else { format!("{using} devices") },
+                    if using == 1 { "s" } else { "" },
+                    if *restart { "; Director will restart" } else { "" }
+                )
             }
             Op::LoadProject { label, .. } => format!("Replace the whole project with {label}"),
         }
@@ -729,7 +751,7 @@ impl Op {
             agent_op!() => crate::agent_ops::predict(self, p, agents).unwrap_or(Ok(()))?,
             // Mesh management changes no project data (like SendCommand); just validate it.
             Op::ZigbeeControl { action, .. } => action.validate().map_err(OpError::BadAgentChange)?,
-            Op::InstallDriver { .. } => {}
+            Op::InstallDriver { .. } | Op::UpdateDriver { .. } => {}
             Op::LoadProject { xml, .. } => {
                 *p = Project::parse(xml).map_err(|e| OpError::BadProject(e.to_string()))?;
             }
@@ -883,7 +905,8 @@ impl Op {
             }
             agent_op!() => crate::agent_ops::calls(self).unwrap_or_default(),
             Op::ZigbeeControl { iddevice, action } => action.calls(*iddevice),
-            Op::InstallDriver { .. } => vec![],
+            // Sent by the app: the file goes over the web API, then the agent call is async.
+            Op::InstallDriver { .. } | Op::UpdateDriver { .. } => vec![],
             Op::LoadProject { xml, .. } => {
                 let body = xml.trim_start();
                 let body = match body.strip_prefix("<?xml") {

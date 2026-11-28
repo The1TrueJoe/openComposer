@@ -548,6 +548,21 @@ async fn apply_all(app: &Arc<App>, session: &Session, mut ops: Vec<Op>, new_scen
                     .map_err(|e| e.to_string()),
                 Err(e) => Err(e.to_string()),
             },
+            Op::UpdateDriver { filename, bytes, agent, restart, .. } => match app.broker(session).await {
+                Ok(b) => match b.install_driver(filename, bytes.clone()).await {
+                    Ok(()) => session
+                        .director
+                        .update_driver(*agent, filename, *restart)
+                        .await
+                        .map(|_| Applied { created: vec![], notes: vec![format!("uploaded {filename} and asked the Driver Update agent to apply it")] })
+                        // Half done: say which half, so nobody assumes the devices moved over.
+                        .map_err(|e| {
+                            format!("{filename} was uploaded, but the Driver Update agent didn't take the update ({e}); devices still run the old version")
+                        }),
+                    Err(e) => Err(format!("{filename} couldn't be uploaded, nothing changed: {e}")),
+                },
+                Err(e) => Err(e.to_string()),
+            },
             _ => op.apply(&session.director, catalog.as_ref().and_then(|c| c4::ops::template_for(c, op))).await.map_err(|e| e.to_string()),
         };
         match result {

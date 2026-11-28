@@ -10,6 +10,7 @@ pub mod c4p;
 pub mod dialect;
 pub mod diff;
 pub mod director;
+pub mod driver_update;
 pub mod drivers;
 pub mod lua_output;
 pub mod model;

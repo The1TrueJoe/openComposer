@@ -214,6 +214,16 @@ impl OpenComposerMcp {
         self.run("install_driver", s, actions::install_driver(&self.app, a, self.source)).await
     }
 
+    #[tool(description = "Replace a driver that devices already use with a newer file, as Composer's Update Driver does. \
+        The controller's Driver Update agent is asked first; if versions are equal or older nothing happens unless force=true. \
+        The file comes from `path:<absolute path>`, `backup:<library file>` or `director:<another Director>`. Needs approval \
+        (a restore point is made). Returns the agent's evaluation and the installed version a few seconds later.",
+        annotations(read_only_hint = false, destructive_hint = true))]
+    async fn update_driver(&self, Parameters(a): Parameters<UpdateDriverArgs>) -> Result<CallToolResult, McpError> {
+        let s = format!("{} from {}", a.filename, a.from);
+        self.run("update_driver", s, actions::update_driver(&self.app, a, self.source)).await
+    }
+
     #[tool(description = "What a driver printed (the Lua output Composer shows) for a device id: lines buffered since \
         openComposer connected (up to 500 per device). Answers at once; pass `seconds` (max 60) to also wait for new \
         lines, which come back with new=true. Optional `contains` filter (any case). Most drivers only print with \
