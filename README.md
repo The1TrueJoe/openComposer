@@ -65,15 +65,14 @@ poc         read-only Python probes
 
 ## License
 
-Source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE): you may use,
-modify and share it for any **noncommercial** purpose, but **not** for commercial use. A
-separate commercial license is available only with the copyright holder's written
-permission. See [LICENSE](LICENSE) for the full terms.
+openComposer is free for homeowners. Use it on your own system, change it, and share it with other DIYers.
 
-Contributions are accepted under the same license, and contributors agree that the copyright
-holder may also offer them under a commercial license.
+It's licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE), which means commercial use needs my permission. What I'm trying to prevent is simple: a large dealer or company taking this and billing people hundreds of dollars an hour for work they could have done themselves for free.
 
-These terms cover every version of openComposer in this repository, back to the first commit,
-including the versions published before the LICENSE file was added.
+**Small dealers and independent integrators:** email me at [joseph@telaak.dev](mailto:joseph@telaak.dev) and tell me a little about what you do. I'll most likely say yes, free of charge. I'd just like to know who's using it.
+
+**Larger dealers and companies:** please get in touch before using it commercially.
+
+Contributions are accepted under the same license, and contributors agree that I may also offer them under a commercial license. These terms cover every version of openComposer back to the first commit.
 
 Copyright © 2024–2026 Joseph Telaak.
