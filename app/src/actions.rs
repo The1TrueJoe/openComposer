@@ -476,10 +476,10 @@ pub struct LuaOutputArgs {
     pub director: Option<String>,
     /// The driver's device id (as in project_overview).
     pub iddevice: u32,
-    /// How long to keep listening for new lines (default 30, at most 300).
+    /// How long to wait for new lines before answering (default 0: answer at once; at most 60).
     #[serde(default)]
     pub seconds: Option<u64>,
-    /// Only lines containing this text.
+    /// Only lines containing this text (any case).
     #[serde(default)]
     pub contains: Option<String>,
 }
@@ -488,11 +488,18 @@ pub struct LuaOutputArgs {
 /// to this Director (up to 500 per device) plus any that arrive during the wait.
 pub async fn lua_output(app: &Arc<App>, a: LuaOutputArgs) -> AppResult<Value> {
     let s = app.session(a.director.as_deref()).await?;
-    let secs = a.seconds.unwrap_or(30).min(300);
+    // Waiting is opt-in: a long default blocks the UI and outlasts some MCP clients' timeouts.
+    let secs = a.seconds.unwrap_or(0).min(60);
     let lines = s.director.lua_output(a.iddevice, std::time::Duration::from_secs(secs), a.contains.as_deref()).await;
     let new = lines.iter().filter(|(_, n)| *n).count();
     let out: Vec<Value> = lines.iter().map(|(l, n)| json!({ "time": l.time, "text": l.text, "new": n })).collect();
-    Ok(json!({ "iddevice": a.iddevice, "waited_seconds": secs, "new_lines": new, "lines": out }))
+    let mut r = json!({ "iddevice": a.iddevice, "waited_seconds": secs, "new_lines": new, "lines": out });
+    if out.is_empty() {
+        // The usual reason: most drivers only print with their debug property on.
+        r["hint"] = json!("Nothing printed since openComposer connected. Most drivers only print with their Debug Mode \
+            (or Debug Level) property turned on; set it, make the driver do something, then ask again.");
+    }
+    Ok(r)
 }
 
 async fn load_source(app: &Arc<App>, src: &str) -> AppResult<(String, Project, c4::agents::AgentState, c4::Names)> {

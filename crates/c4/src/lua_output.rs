@@ -51,7 +51,10 @@ impl LuaLog {
         let g = self.inner.lock().unwrap();
         g.lines
             .get(&device)
-            .map(|q| q.iter().filter(|l| contains.is_none_or(|c| l.text.contains(c))).cloned().collect())
+            .map(|q| {
+                let want = contains.map(str::to_lowercase);
+                q.iter().filter(|l| want.as_deref().is_none_or(|c| l.text.to_lowercase().contains(c))).cloned().collect()
+            })
             .unwrap_or_default()
     }
 }
@@ -91,6 +94,7 @@ mod tests {
         let log = LuaLog::default();
         log.push(483, 1, "a".into());
         assert_eq!(log.lines(483, Some("a")).len(), 1);
+        assert_eq!(log.lines(483, Some("A")).len(), 1, "the filter ignores case");
         assert!(log.lines(483, Some("z")).is_empty());
     }
 

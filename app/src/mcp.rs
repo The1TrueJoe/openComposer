@@ -215,8 +215,9 @@ impl OpenComposerMcp {
     }
 
     #[tool(description = "What a driver printed (the Lua output Composer shows) for a device id: lines buffered since \
-        openComposer connected (up to 500) plus lines arriving during `seconds` (default 30, max 300). Optional `contains` filter. \
-        Lines with new=true arrived during the wait.", annotations(read_only_hint = true))]
+        openComposer connected (up to 500 per device). Answers at once; pass `seconds` (max 60) to also wait for new \
+        lines, which come back with new=true. Optional `contains` filter (any case). Most drivers only print with \
+        their Debug Mode property on.", annotations(read_only_hint = true))]
     async fn lua_output(&self, Parameters(a): Parameters<LuaOutputArgs>) -> Result<CallToolResult, McpError> {
         let s = format!("#{}", a.iddevice);
         self.run("lua_output", s, actions::lua_output(&self.app, a)).await

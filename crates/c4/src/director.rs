@@ -294,7 +294,9 @@ impl Director {
     /// Returns `(line, arrived_during_wait)`.
     pub async fn lua_output(&self, device: u32, wait: Duration, contains: Option<&str>) -> Vec<(crate::lua_output::LuaLine, bool)> {
         let mark = self.lua.mark();
-        tokio::time::sleep(wait).await;
+        if !wait.is_zero() {
+            tokio::time::sleep(wait).await;
+        }
         self.lua.lines(device, contains).into_iter().map(|l| { let new = l.seq > mark; (l, new) }).collect()
     }
 
