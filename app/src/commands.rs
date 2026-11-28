@@ -193,13 +193,6 @@ pub async fn connect_director(app: S<'_>, id: String) -> R<Value> {
     actions::director_info(&app, actions::DirectorArg { director: Some(id) }).await.map_err(err)
 }
 
-/// Recent Lua output for a device's driver (the Lua tab's initial fill; live lines then arrive on
-/// the `lua` event).
-#[tauri::command]
-pub async fn driver_lua_output(app: S<'_>, director: Option<String>, device: u32, seconds: Option<u64>) -> R<Value> {
-    actions::lua_output(&app, actions::LuaArgs { director, device, seconds, limit: Some(1000) }).await.map_err(err)
-}
-
 #[tauri::command]
 pub async fn disconnect_director(app: S<'_>, id: String) -> R<()> {
     app.disconnect(&id).await;

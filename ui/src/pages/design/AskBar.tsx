@@ -16,7 +16,7 @@ import type { FocusItem, InspectorTab, Shell } from "../../lib/shell";
 import { cx, useBackendEvent } from "../../lib/ui";
 
 const TAB_LABEL: Record<InspectorTab, string> = {
-  properties: "Properties", connections: "Connections", network: "Network", variables: "Variables", events: "Events", lua: "Lua",
+  properties: "Properties", connections: "Connections", network: "Network", variables: "Variables", events: "Events",
 };
 
 // The Design conversation, for as long as the app runs: every question asked from this bar

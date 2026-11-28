@@ -6,7 +6,6 @@ import { Tip, useDialog } from "../../components/Dialogs";
 import { Select, Spinner, Tabs } from "../../components/controls";
 import { DriverIcon } from "../../components/icons";
 import { Failure, Loading } from "../../components/shell";
-import { LuaTab } from "./LuaTab";
 import type { InspectorTab, Shell } from "../../lib/shell";
 import { cx, useLoad } from "../../lib/ui";
 import { Connections } from "./Connections";
@@ -28,7 +27,6 @@ const TABS: { id: InspectorTab; label: string }[] = [
   { id: "network", label: "Network" },
   { id: "variables", label: "Variables" },
   { id: "events", label: "Events" },
-  { id: "lua", label: "Lua" },
 ];
 
 /** Everything about one item, the way Composer's properties pane shows it. */
@@ -88,8 +86,6 @@ export function Inspector({ id, shell, onSelect, actions }: {
     network: d.network.length > 0 || d.network_connections.length > 0 || !!d.device?.search_type,
     variables: true,
     events: true,
-    // Driver-backed items can print Lua output; sites/rooms/agents don't.
-    lua: d.kind === "device" || d.kind === "proxy",
   };
   const shown = has[tab] ? tab : "properties";
 
@@ -144,7 +140,7 @@ export function Inspector({ id, shell, onSelect, actions }: {
               }
             }} />
       {/* An agent's own tab lays out its table and detail itself, like a web tab or Connections. */}
-      <div className={cx("panel-body", ((agentOn && hasNative) || webTab || shown === "connections" || shown === "lua") && "fill")}>
+      <div className={cx("panel-body", ((agentOn && hasNative) || webTab || shown === "connections") && "fill")}>
         {agentOn && nv && <AgentPanel v={nv} shell={shell} onSelect={onSelect} reload={native.reload} />}
         {agentOn && !nv && nativeError && <Failure error={nativeError} retry={native.reload} />}
         {!webTab && !(agentOn && hasNative) && shown === "properties" && <Properties d={d} shell={shell} />}
@@ -152,7 +148,6 @@ export function Inspector({ id, shell, onSelect, actions }: {
         {!webTab && !(agentOn && hasNative) && shown === "network" && <Network d={d} shell={shell} />}
         {!webTab && !(agentOn && hasNative) && shown === "variables" && <Variables d={d} />}
         {!webTab && !(agentOn && hasNative) && shown === "events" && <Events d={d} shell={shell} />}
-        {!webTab && !(agentOn && hasNative) && shown === "lua" && <LuaTab device={d.id} />}
         {webTabs.filter((t) => visited.includes(t.name)).map((t) => (
           <WebTab key={`${d.id}:${t.name}`} name={t.name} url={t.url} shown={webTab === t.name} />
         ))}

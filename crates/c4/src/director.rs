@@ -579,68 +579,10 @@ impl Director {
     }
 }
 
-/// One line of a driver's Lua `print()` output, as Director forwards it.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct LuaLine {
-    pub device: u32,
-    /// Director's unix timestamp for the line.
-    pub at: u64,
-    pub text: String,
-}
-
-/// A driver's Lua `print()` output as it streams from Director. When a driver's Debug/Log mode
-/// includes Print, Director forwards each `print()` line (and its Lua errors) to every connected
-/// client as an `OnDataToUI` event whose `data` is `<devicecommand><command>LUA_OUTPUT</command>`
-/// with a `Text` param — no per-client subscription, connecting with events enabled is enough.
-/// (`OnDataToUI` also carries `UPDATE_PROPERTY` / `UPDATE_PROPERTY_LIST`, which this ignores.)
-pub fn lua_output(ev: &crate::soap::Event) -> Option<LuaLine> {
-    if ev.name != "OnDataToUI" {
-        return None;
-    }
-    let doc = roxmltree::Document::parse(&ev.raw).ok()?;
-    let root = doc.root_element();
-    let top = |name: &str| root.children().find(|n| n.has_tag_name("param") && n.attribute("name") == Some(name));
-    let device: u32 = top("iddevice")?.text()?.trim().parse().ok()?;
-    let at: u64 = top("time").and_then(|n| n.text()).and_then(|t| t.trim().parse().ok()).unwrap_or(0);
-    let dc = doc.descendants().find(|n| n.has_tag_name("devicecommand"))?;
-    if dc.children().find(|n| n.has_tag_name("command")).and_then(|n| n.text()) != Some("LUA_OUTPUT") {
-        return None;
-    }
-    let text = dc
-        .descendants()
-        .filter(|n| n.has_tag_name("param"))
-        .find_map(|p| {
-            let name = p.children().find(|c| c.has_tag_name("name")).and_then(|c| c.text())?;
-            if name != "Text" {
-                return None;
-            }
-            let stat = p.descendants().find(|c| c.has_tag_name("static"))?;
-            Some(stat.text().unwrap_or("").to_string())
-        })?;
-    Some(LuaLine { device, at, text })
-}
-
 #[cfg(test)]
 mod tests {
     use super::{Catalog, with_fresh_tag};
     use crate::ops::{LocationKind, Op};
-    use crate::soap::Event;
-
-    #[test]
-    fn parses_lua_output_from_ondatatoui() {
-        let raw = r#"<c4soap async="1" name="OnDataToUI" result="0"><param name="iddevice" type="ulong">29</param><param name="data" type="xml"><devicecommand><command>LUA_OUTPUT</command><params><param><name>Text</name><value type="XML"><static>[Tuya] Error: the Tuya Bridge has not seen this device on the LAN yet</static></value></param></params></devicecommand></param><param name="time" type="ulong">1793931841</param></c4soap>"#;
-        let ev = Event { name: "OnDataToUI".into(), raw: raw.into() };
-        let line = super::lua_output(&ev).expect("a lua line");
-        assert_eq!(line.device, 29);
-        assert_eq!(line.at, 1793931841);
-        assert!(line.text.contains("[Tuya] Error"));
-        // A non-LUA_OUTPUT OnDataToUI (a property update on the same channel) is ignored.
-        let prop = Event { name: "OnDataToUI".into(), raw: raw.replace("LUA_OUTPUT", "UPDATE_PROPERTY") };
-        assert!(super::lua_output(&prop).is_none());
-        // A different event is ignored.
-        let other = Event { name: "OnAlive".into(), raw: "<c4soap async=\"1\" name=\"OnAlive\"/>".into() };
-        assert!(super::lua_output(&other).is_none());
-    }
 
     #[test]
     fn fallback_templates_for_a_blank_project() {

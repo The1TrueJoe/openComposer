@@ -67,7 +67,6 @@ pub fn run() {
             commands::set_active_director,
             commands::forget_fingerprint,
             commands::connect_director,
-            commands::driver_lua_output,
             commands::disconnect_director,
             commands::discover_controllers,
             commands::action,
