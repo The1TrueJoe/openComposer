@@ -44,3 +44,15 @@ app         Tauri app: state, approvals, MCP server, stdio bridge, agent runner,
 ui          React front end
 poc         read-only Python probes
 ```
+
+## License
+
+Source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE): you may use,
+modify and share it for any **noncommercial** purpose, but **not** for commercial use. A
+separate commercial license is available only with the copyright holder's written
+permission. See [LICENSE](LICENSE) for the full terms.
+
+Contributions are accepted under the same license, and contributors agree that the copyright
+holder may also offer them under a commercial license.
+
+Copyright © 2024–2026 Joseph Telaak.
