@@ -32,7 +32,7 @@ you provide.
 ## Platforms
 
 macOS, Windows and Linux. Builds of the latest `main` (macOS `.dmg`, Windows installer,
-Linux `.deb` / `.rpm` / `.AppImage`) are on the [dev release](https://github.com/The1TrueJoe/openComposer/releases/tag/dev).
+Linux `.deb` / `.rpm` / `.AppImage` for x86_64 and ARM64) are on the [dev release](https://github.com/The1TrueJoe/openComposer/releases/tag/dev).
 
 On Linux the certificate's key is kept in the desktop's Secret Service keyring (GNOME Keyring
 or KWallet), so one has to be running and unlocked.

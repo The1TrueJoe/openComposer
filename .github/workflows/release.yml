@@ -1,7 +1,7 @@
 name: release
 
 # Builds the macOS universal .app/.dmg, the Windows NSIS installer and the Linux
-# .deb/.rpm/.AppImage, unsigned.
+# .deb/.rpm/.AppImage for x86_64 and ARM64, unsigned.
 #   push to main   -> the rolling "dev" pre-release, rebuilt at every commit, always
 #                     downloadable: releases/tag/dev
 #   push a v* tag  -> a draft release for that version, published by hand
@@ -32,7 +32,7 @@ jobs:
           gh release delete dev --cleanup-tag --yes -R "$GITHUB_REPOSITORY" || true
           gh release create dev -R "$GITHUB_REPOSITORY" --prerelease --target "$GITHUB_SHA" \
             --title "openComposer dev (latest main)" \
-            --notes "Built from $GITHUB_SHA. Unsigned builds. macOS: after the first blocked launch, System Settings → Privacy & Security → Open Anyway (or run xattr -dr com.apple.quarantine /Applications/openComposer.app). Windows: SmartScreen → More info → Run anyway. Linux: install the .deb or .rpm, or chmod +x the .AppImage and run it; stored certificates need a Secret Service keyring (GNOME Keyring or KWallet)."
+            --notes "Built from $GITHUB_SHA. Unsigned builds. macOS: after the first blocked launch, System Settings → Privacy & Security → Open Anyway (or run xattr -dr com.apple.quarantine /Applications/openComposer.app). Windows: SmartScreen → More info → Run anyway. Linux (x86_64 and ARM64): install the .deb or .rpm, or chmod +x the .AppImage and run it; stored certificates need a Secret Service keyring (GNOME Keyring or KWallet)."
 
   build:
     needs: dev-release
@@ -49,6 +49,10 @@ jobs:
             rust_targets: ""
           # The oldest supported runner, so the AppImage/.deb run on older glibc too.
           - os: ubuntu-22.04
+            args: ""
+            rust_targets: ""
+          # Built natively on ARM (a cross-compile would need an ARM WebKitGTK sysroot).
+          - os: ubuntu-22.04-arm
             args: ""
             rust_targets: ""
     runs-on: ${{ matrix.os }}
@@ -78,6 +82,6 @@ jobs:
           args: ${{ matrix.args }}
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || 'dev' }}
           releaseName: ${{ github.ref_type == 'tag' && format('openComposer {0}', github.ref_name) || 'openComposer dev (latest main)' }}
-          releaseBody: "Unsigned builds. macOS: after the first blocked launch, System Settings → Privacy & Security → Open Anyway (or run xattr -dr com.apple.quarantine /Applications/openComposer.app). Windows: SmartScreen → More info → Run anyway. Linux: install the .deb or .rpm, or chmod +x the .AppImage and run it; stored certificates need a Secret Service keyring (GNOME Keyring or KWallet)."
+          releaseBody: "Unsigned builds. macOS: after the first blocked launch, System Settings → Privacy & Security → Open Anyway (or run xattr -dr com.apple.quarantine /Applications/openComposer.app). Windows: SmartScreen → More info → Run anyway. Linux (x86_64 and ARM64): install the .deb or .rpm, or chmod +x the .AppImage and run it; stored certificates need a Secret Service keyring (GNOME Keyring or KWallet)."
           releaseDraft: ${{ github.ref_type == 'tag' }}
           prerelease: ${{ github.ref_type != 'tag' }}
