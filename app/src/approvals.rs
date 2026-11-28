@@ -447,7 +447,7 @@ async fn apply_all(app: &Arc<App>, session: &Session, ops: &[Op]) -> (Vec<Applie
                     .map_err(|e| e.to_string()),
                 Err(e) => Err(e.to_string()),
             },
-            _ => session.director.apply(op, catalog.as_ref().and_then(|c| c.template_for(op))).await.map_err(|e| e.to_string()),
+            _ => op.apply(&session.director, catalog.as_ref().and_then(|c| c4::ops::template_for(c, op))).await.map_err(|e| e.to_string()),
         };
         match result {
             Ok(a) => {
