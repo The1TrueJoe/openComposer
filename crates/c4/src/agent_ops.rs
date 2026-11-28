@@ -12,7 +12,7 @@
 //! change is predicted on; ops that weren't prepared fall back to what the op alone says.
 
 use crate::Project;
-use crate::agents::{self, AgentData, AgentKind, LightStep};
+use crate::agents::{self, AgentData, AgentKind, AgentState, LightStep};
 use crate::model::ItemKind;
 use crate::ops::{Op, OpError};
 use crate::soap::Call;
@@ -38,18 +38,19 @@ fn bad(msg: impl Into<String>) -> OpError {
     OpError::BadAgentChange(msg.into())
 }
 
-/// The agent's data, or why `agent` isn't that kind of agent.
-fn data_of<'a>(p: &'a mut Project, agent: u32, want: AgentKind) -> Result<&'a mut AgentData, OpError> {
+/// The agent's data, or why `agent` isn't that kind of agent. `p` validates the agent's kind;
+/// the data itself lives in the `agents` overlay, not on the project.
+fn data_of<'a>(p: &Project, agents: &'a mut AgentState, agent: u32, want: AgentKind) -> Result<&'a mut AgentData, OpError> {
     let it = p.item(agent).ok_or(OpError::NoSuchItem(agent))?;
     let kind = it.driver.as_deref().and_then(AgentKind::from_driver);
     if kind != Some(want) {
         return Err(OpError::WrongAgent { id: agent, name: it.name.clone(), want: want.title() });
     }
-    Ok(p.agent_data.entry(agent).or_insert_with(|| AgentData::empty(want).expect("not the Scheduler")))
+    Ok(agents.agent_data.entry(agent).or_insert_with(|| AgentData::empty(want).expect("not the Scheduler")))
 }
 
-fn data_ref(p: &Project, agent: u32) -> Option<&AgentData> {
-    p.agent_data.get(&agent)
+fn data_ref(agents: &AgentState, agent: u32) -> Option<&AgentData> {
+    agents.agent_data.get(&agent)
 }
 
 fn unique(name: &str, taken: impl Iterator<Item = (u32, String)>, own: Option<u32>, what: &str) -> Result<(), OpError> {
@@ -98,10 +99,10 @@ fn drop_programming(p: &mut Project, agent: u32, events: &[u32]) {
 }
 
 /// Fill in what the op's calls need from the project it will be applied to.
-pub fn prepare(op: &mut Op, p: &Project) {
+pub fn prepare(op: &mut Op, p: &Project, agents: &AgentState) {
     match op {
         Op::SetSceneLight { agent, scene, light, now, .. } => {
-            *now = match data_ref(p, *agent) {
+            *now = match data_ref(agents, *agent) {
                 Some(AgentData::Lighting { scenes }) => match scenes.iter().find(|s| s.id == *scene) {
                     Some(s) => match s.members.iter().find(|m| m.device == *light) {
                         Some(m) => MemberNow::Steps(m.steps.len()),
@@ -116,14 +117,14 @@ pub fn prepare(op: &mut Op, p: &Project) {
             *xml = announcement.to_xml(0, None, |id| room_id(p, id), |id| has_onscreen(p, id));
         }
         Op::ModifyAnnouncement { agent, id, announcement, xml } => {
-            let current = match data_ref(p, *agent) {
+            let current = match data_ref(agents, *agent) {
                 Some(AgentData::Announcements { announcements }) => announcements.iter().find(|a| a.id == *id),
                 _ => None,
             };
             *xml = announcement.to_xml(*id, current, |id| room_id(p, id), |id| has_onscreen(p, id));
         }
         Op::ModifyWakeSleepRoom { agent, id, room, .. } => {
-            if let Some(AgentData::WakeSleep { rooms }) = data_ref(p, *agent) {
+            if let Some(AgentData::WakeSleep { rooms }) = data_ref(agents, *agent) {
                 if let Some(w) = rooms.iter().find(|w| w.id == *id) {
                     *room = w.room;
                 }
@@ -156,29 +157,29 @@ fn has_onscreen(p: &Project, id: u32) -> bool {
 }
 
 /// One line for an approval card, or `None` for ops that aren't agent ops.
-pub fn describe(op: &Op, p: &Project) -> Option<String> {
+pub fn describe(op: &Op, p: &Project, agents: &AgentState) -> Option<String> {
     let n = |id: u32| format!("“{}”", p.name_of(id));
-    let scene_name = |agent: u32, scene: u32| match data_ref(p, agent) {
+    let scene_name = |agent: u32, scene: u32| match data_ref(agents, agent) {
         Some(AgentData::Lighting { scenes }) => scenes.iter().find(|s| s.id == scene).map(|s| format!("“{}”", s.name)),
         _ => None,
     }
     .unwrap_or_else(|| format!("#{scene}"));
-    let ann_name = |agent: u32, id: u32| match data_ref(p, agent) {
+    let ann_name = |agent: u32, id: u32| match data_ref(agents, agent) {
         Some(AgentData::Announcements { announcements }) => announcements.iter().find(|a| a.id == id).map(|a| format!("“{}”", a.name)),
         _ => None,
     }
     .unwrap_or_else(|| format!("#{id}"));
-    let ws_room = |agent: u32, id: u32| match data_ref(p, agent) {
+    let ws_room = |agent: u32, id: u32| match data_ref(agents, agent) {
         Some(AgentData::WakeSleep { rooms }) => rooms.iter().find(|w| w.id == id).map(|w| n(w.room)),
         _ => None,
     }
     .unwrap_or_else(|| format!("#{id}"));
-    let push_name = |agent: u32, id: u32| match data_ref(p, agent) {
+    let push_name = |agent: u32, id: u32| match data_ref(agents, agent) {
         Some(AgentData::Push { templates, .. }) => templates.iter().find(|t| t.id == id).map(|t| format!("“{}”", t.spec.name)),
         _ => None,
     }
     .unwrap_or_else(|| format!("#{id}"));
-    let email_name = |agent: u32, id: u32| match data_ref(p, agent) {
+    let email_name = |agent: u32, id: u32| match data_ref(agents, agent) {
         Some(AgentData::Email { templates }) => templates.iter().find(|t| t.id == id).map(|t| format!("“{}”", t.spec.name)),
         _ => None,
     }
@@ -210,22 +211,22 @@ pub fn describe(op: &Op, p: &Project) -> Option<String> {
 
 /// Apply to a copy of the project, refusing what Composer's editors refuse. `None` for ops
 /// that aren't agent ops.
-pub fn predict(op: &Op, p: &mut Project) -> Option<Result<(), OpError>> {
+pub fn predict(op: &Op, p: &mut Project, agents: &mut AgentState) -> Option<Result<(), OpError>> {
     Some(match op {
         Op::AddLightingScene { .. }
         | Op::RenameLightingScene { .. }
         | Op::RemoveLightingScene { .. }
         | Op::SetSceneLight { .. }
-        | Op::RemoveSceneLight { .. } => lighting(op, p),
-        Op::AddAnnouncement { .. } | Op::ModifyAnnouncement { .. } | Op::RemoveAnnouncement { .. } => announcements(op, p),
-        Op::AddWakeSleepRoom { .. } | Op::ModifyWakeSleepRoom { .. } | Op::RemoveWakeSleepRoom { .. } => wake_sleep(op, p),
-        Op::AddPushNotification { .. } | Op::ModifyPushNotification { .. } | Op::RemovePushNotification { .. } => push(op, p),
-        Op::AddEmailTemplate { .. } | Op::ModifyEmailTemplate { .. } | Op::RemoveEmailTemplate { .. } => email(op, p),
+        | Op::RemoveSceneLight { .. } => lighting(op, p, agents),
+        Op::AddAnnouncement { .. } | Op::ModifyAnnouncement { .. } | Op::RemoveAnnouncement { .. } => announcements(op, p, agents),
+        Op::AddWakeSleepRoom { .. } | Op::ModifyWakeSleepRoom { .. } | Op::RemoveWakeSleepRoom { .. } => wake_sleep(op, p, agents),
+        Op::AddPushNotification { .. } | Op::ModifyPushNotification { .. } | Op::RemovePushNotification { .. } => push(op, p, agents),
+        Op::AddEmailTemplate { .. } | Op::ModifyEmailTemplate { .. } | Op::RemoveEmailTemplate { .. } => email(op, p, agents),
         _ => return None,
     })
 }
 
-fn lighting(op: &Op, p: &mut Project) -> Result<(), OpError> {
+fn lighting(op: &Op, p: &mut Project, agents: &mut AgentState) -> Result<(), OpError> {
     let agent = match op {
         Op::AddLightingScene { agent, .. }
         | Op::RenameLightingScene { agent, .. }
@@ -244,7 +245,7 @@ fn lighting(op: &Op, p: &mut Project) -> Result<(), OpError> {
             s.validate().map_err(|e| bad(format!("step {}: {e}", i + 1)))?;
         }
     }
-    let AgentData::Lighting { scenes } = data_of(p, agent, AgentKind::AdvancedLighting)? else { unreachable!() };
+    let AgentData::Lighting { scenes } = data_of(p, agents, agent, AgentKind::AdvancedLighting)? else { unreachable!() };
     let names = |scenes: &Vec<agents::LightingScene>| scenes.iter().map(|s| (s.id, s.name.clone())).collect::<Vec<_>>();
     let no_scene = |id: u32| bad(format!("Advanced Lighting has no scene #{id}"));
     let mut gone_events = vec![];
@@ -285,7 +286,7 @@ fn lighting(op: &Op, p: &mut Project) -> Result<(), OpError> {
     Ok(())
 }
 
-fn announcements(op: &Op, p: &mut Project) -> Result<(), OpError> {
+fn announcements(op: &Op, p: &mut Project, agents: &mut AgentState) -> Result<(), OpError> {
     let (agent, spec) = match op {
         Op::AddAnnouncement { agent, announcement, .. } | Op::ModifyAnnouncement { agent, announcement, .. } => (*agent, Some(announcement)),
         Op::RemoveAnnouncement { agent, .. } => (*agent, None),
@@ -321,7 +322,7 @@ fn announcements(op: &Op, p: &mut Project) -> Result<(), OpError> {
             }
         }
     }
-    let AgentData::Announcements { announcements } = data_of(p, agent, AgentKind::Announcements)? else { unreachable!() };
+    let AgentData::Announcements { announcements } = data_of(p, agents, agent, AgentKind::Announcements)? else { unreachable!() };
     let names: Vec<(u32, String)> = announcements.iter().map(|a| (a.id, a.name.clone())).collect();
     let no_such = |id: u32| bad(format!("there is no announcement #{id}"));
     let mut gone = vec![];
@@ -359,7 +360,7 @@ fn model_announcement(id: u32, xml: &str, s: &agents::AnnouncementSpec) -> agent
     a
 }
 
-fn wake_sleep(op: &Op, p: &mut Project) -> Result<(), OpError> {
+fn wake_sleep(op: &Op, p: &mut Project, agents: &mut AgentState) -> Result<(), OpError> {
     let agent = match op {
         Op::AddWakeSleepRoom { agent, .. } | Op::ModifyWakeSleepRoom { agent, .. } | Op::RemoveWakeSleepRoom { agent, .. } => *agent,
         _ => unreachable!(),
@@ -385,7 +386,7 @@ fn wake_sleep(op: &Op, p: &mut Project) -> Result<(), OpError> {
         }
         _ => {}
     }
-    let AgentData::WakeSleep { rooms } = data_of(p, agent, AgentKind::WakeSleep)? else { unreachable!() };
+    let AgentData::WakeSleep { rooms } = data_of(p, agents, agent, AgentKind::WakeSleep)? else { unreachable!() };
     let no_such = |id: u32| bad(format!("Wake/Sleep has no room setup #{id}"));
     match op {
         Op::AddWakeSleepRoom { room, .. } => {
@@ -407,7 +408,7 @@ fn wake_sleep(op: &Op, p: &mut Project) -> Result<(), OpError> {
     Ok(())
 }
 
-fn push(op: &Op, p: &mut Project) -> Result<(), OpError> {
+fn push(op: &Op, p: &mut Project, agents: &mut AgentState) -> Result<(), OpError> {
     let (agent, spec) = match op {
         Op::AddPushNotification { agent, template } | Op::ModifyPushNotification { agent, template, .. } => (*agent, Some(template)),
         Op::RemovePushNotification { agent, .. } => (*agent, None),
@@ -416,7 +417,7 @@ fn push(op: &Op, p: &mut Project) -> Result<(), OpError> {
     for a in spec.iter().flat_map(|s| &s.attachments) {
         p.item(a.owner).ok_or(OpError::NoSuchItem(a.owner))?;
     }
-    let AgentData::Push { templates, categories, severities } = data_of(p, agent, AgentKind::PushNotification)? else { unreachable!() };
+    let AgentData::Push { templates, categories, severities } = data_of(p, agents, agent, AgentKind::PushNotification)? else { unreachable!() };
     if let Some(s) = spec {
         for (what, v, list) in [("category", s.category, &*categories), ("severity", s.severity, &*severities)] {
             if v != 0 && !list.is_empty() && !list.iter().any(|(i, _)| *i == v) {
@@ -452,7 +453,7 @@ fn trimmed_push(s: &agents::PushTemplateSpec) -> agents::PushTemplateSpec {
     agents::PushTemplateSpec { name: s.name.trim().into(), subject: s.subject.trim().into(), message: s.message.trim().into(), ..s.clone() }
 }
 
-fn email(op: &Op, p: &mut Project) -> Result<(), OpError> {
+fn email(op: &Op, p: &mut Project, agents: &mut AgentState) -> Result<(), OpError> {
     let (agent, spec) = match op {
         Op::AddEmailTemplate { agent, template } | Op::ModifyEmailTemplate { agent, template, .. } => (*agent, Some(template)),
         Op::RemoveEmailTemplate { agent, .. } => (*agent, None),
@@ -463,7 +464,7 @@ fn email(op: &Op, p: &mut Project) -> Result<(), OpError> {
             return Err(bad(format!("“{bad_addr}” isn't an email address")));
         }
     }
-    let AgentData::Email { templates } = data_of(p, agent, AgentKind::EmailNotification)? else { unreachable!() };
+    let AgentData::Email { templates } = data_of(p, agents, agent, AgentKind::EmailNotification)? else { unreachable!() };
     let names: Vec<(u32, String)> = templates.iter().map(|t| (t.id, t.spec.name.clone())).collect();
     let no_such = |id: u32| bad(format!("there is no email notification #{id}"));
     let trimmed = |s: &agents::EmailTemplateSpec| agents::EmailTemplateSpec {
@@ -612,9 +613,9 @@ mod tests {
         p
     }
 
-    fn apply(p: &mut Project, mut op: Op) -> Result<(), OpError> {
-        prepare(&mut op, p);
-        op.predict(p)
+    fn apply(p: &mut Project, ag: &mut AgentState, mut op: Op) -> Result<(), OpError> {
+        prepare(&mut op, p, ag);
+        op.predict(p, ag)
     }
 
     fn step(level: u32, kelvin: Option<u32>) -> LightStep {
@@ -625,63 +626,67 @@ mod tests {
     fn lighting_scenes_are_made_lit_and_removed() {
         let before = project();
         let mut p = before.clone();
-        apply(&mut p, Op::AddLightingScene { agent: 3, name: "Evening".into() }).unwrap();
-        assert!(apply(&mut p.clone(), Op::AddLightingScene { agent: 3, name: "evening".into() }).is_err(), "names are unique");
+        let mut ag = AgentState::default();
+        apply(&mut p, &mut ag, Op::AddLightingScene { agent: 3, name: "Evening".into() }).unwrap();
+        assert!(apply(&mut p.clone(), &mut ag.clone(), Op::AddLightingScene { agent: 3, name: "evening".into() }).is_err(), "names are unique");
         let mut set = Op::SetSceneLight { agent: 3, scene: 0, light: 900, steps: vec![step(40, Some(2700))], now: MemberNow::Unknown };
-        prepare(&mut set, &p);
+        prepare(&mut set, &p, &ag);
         // Not in the scene yet: added (one step), then set.
         let calls: Vec<String> = set.calls(None).iter().map(|c| c.encode(false)).collect();
         assert!(calls[0].contains("ADD_MEMBERS") && calls.iter().any(|c| c.contains("level&lt;/name") || c.contains("<name>level</name>")), "{calls:?}");
-        set.predict(&mut p).unwrap();
-        let d = diff(&before, &p, &Names::default(), DiffOptions::default());
+        set.predict(&mut p, &mut ag).unwrap();
+        let d = diff(&before, &p, &AgentState::default(), &ag, &Names::default(), DiffOptions::default());
         let [Change::AgentRecordAdded { what, name, details, .. }] = d.changes.as_slice() else { panic!("{:?}", d.changes) };
         assert_eq!((what.as_str(), name.as_str()), ("lighting scene", "Evening"));
         assert_eq!(details[0], ("Lamp (Kitchen)".to_string(), "40%, 2700 K over 2 s".to_string()));
 
         // Two steps where it had one: one ADD_ELEMENT.
         let mut two = Op::SetSceneLight { agent: 3, scene: 0, light: 900, steps: vec![step(40, None), step(0, None)], now: MemberNow::Unknown };
-        prepare(&mut two, &p);
+        prepare(&mut two, &p, &ag);
         assert_eq!(two.calls(None).iter().filter(|c| c.encode(false).contains("ADD_ELEMENT")).count(), 1);
         // Only lights.
-        assert!(apply(&mut p.clone(), Op::SetSceneLight { agent: 3, scene: 0, light: 901, steps: vec![step(1, None)], now: MemberNow::Unknown }).is_err());
-        assert!(apply(&mut p.clone(), Op::SetSceneLight { agent: 3, scene: 0, light: 900, steps: vec![step(101, None)], now: MemberNow::Unknown }).is_err());
+        assert!(apply(&mut p.clone(), &mut ag.clone(), Op::SetSceneLight { agent: 3, scene: 0, light: 901, steps: vec![step(1, None)], now: MemberNow::Unknown }).is_err());
+        assert!(apply(&mut p.clone(), &mut ag.clone(), Op::SetSceneLight { agent: 3, scene: 0, light: 900, steps: vec![step(101, None)], now: MemberNow::Unknown }).is_err());
 
         let lit = p.clone();
-        apply(&mut p, Op::RemoveSceneLight { agent: 3, scene: 0, light: 900 }).unwrap();
-        let d = diff(&lit, &p, &Names::default(), DiffOptions::default());
+        let lit_ag = ag.clone();
+        apply(&mut p, &mut ag, Op::RemoveSceneLight { agent: 3, scene: 0, light: 900 }).unwrap();
+        let d = diff(&lit, &p, &lit_ag, &ag, &Names::default(), DiffOptions::default());
         let [Change::AgentRecordChanged { field, to, .. }] = d.changes.as_slice() else { panic!("{:?}", d.changes) };
         assert_eq!((field.as_str(), to.as_str()), ("Lamp (Kitchen)", "none"));
-        apply(&mut p, Op::RemoveLightingScene { agent: 3, scene: 0 }).unwrap();
-        assert!(matches!(apply(&mut p, Op::RemoveLightingScene { agent: 4, scene: 0 }), Err(OpError::WrongAgent { .. })));
+        apply(&mut p, &mut ag, Op::RemoveLightingScene { agent: 3, scene: 0 }).unwrap();
+        assert!(matches!(apply(&mut p, &mut ag, Op::RemoveLightingScene { agent: 4, scene: 0 }), Err(OpError::WrongAgent { .. })));
     }
 
     #[test]
     fn announcements_keep_hidden_logins() {
         let mut p = project();
-        p.agent_data.insert(4, AgentData::Announcements {
+        let mut ag = AgentState::default();
+        ag.agent_data.insert(4, AgentData::Announcements {
             announcements: agents::parse_announcements(r#"<announcements><announcement id="1" name="Doorbell" dynamic="false" advanced="true"><audio isurl="false" file="bell.mp3" delay="700" delayStop="0"/><video file="http://cam/snap.cgi?password=secret" text="At the door" delay="0" timeout="30000" displayID="0" variableID="0" variableName="" OKButton="true"/><rooms/><navigators/><touchscreens/></announcement></announcements>"#),
         });
-        let AgentData::Announcements { announcements } = &p.agent_data[&4] else { unreachable!() };
+        let AgentData::Announcements { announcements } = &ag.agent_data[&4] else { unreachable!() };
         let mut spec = agents::AnnouncementSpec::of(&announcements[0]);
         spec.text = "Someone's here".into();
         spec.screens = vec![901];
         let mut op = Op::ModifyAnnouncement { agent: 4, id: 1, announcement: spec, xml: String::new() };
-        prepare(&mut op, &p);
+        prepare(&mut op, &p, &ag);
         let call = op.calls(None)[0].encode(false);
         assert!(call.contains("password=secret") && call.contains("700"), "the login and the audio delay are kept: {call}");
         assert!(!serde_json::to_string(&op).unwrap().contains("secret"), "the login never leaves in the op");
         let before = p.clone();
-        op.predict(&mut p).unwrap();
-        let d = diff(&before, &p, &Names::default(), DiffOptions::default());
+        let before_ag = ag.clone();
+        op.predict(&mut p, &mut ag).unwrap();
+        let d = diff(&before, &p, &before_ag, &ag, &Names::default(), DiffOptions::default());
         let fields: Vec<&str> = d.changes.iter().map(|c| match c { Change::AgentRecordChanged { field, .. } => field.as_str(), _ => "?" }).collect();
         assert_eq!(fields, ["text", "shows on"]);
-        let mut bad_room = agents::AnnouncementSpec::of(&announcements_of(&p)[0]);
+        let mut bad_room = agents::AnnouncementSpec::of(&announcements_of(&ag)[0]);
         bad_room.rooms = vec![agents::AnnouncementVolume { id: 900, volume: None }];
-        assert!(apply(&mut p.clone(), Op::ModifyAnnouncement { agent: 4, id: 1, announcement: bad_room, xml: String::new() }).is_err());
+        assert!(apply(&mut p.clone(), &mut ag.clone(), Op::ModifyAnnouncement { agent: 4, id: 1, announcement: bad_room, xml: String::new() }).is_err());
     }
 
-    fn announcements_of(p: &Project) -> Vec<agents::Announcement> {
-        match &p.agent_data[&4] {
+    fn announcements_of(ag: &AgentState) -> Vec<agents::Announcement> {
+        match &ag.agent_data[&4] {
             AgentData::Announcements { announcements } => announcements.clone(),
             _ => vec![],
         }
@@ -690,19 +695,20 @@ mod tests {
     #[test]
     fn wake_sleep_and_notifications() {
         let mut p = project();
-        apply(&mut p, Op::AddWakeSleepRoom { agent: 5, room: 11 }).unwrap();
-        assert!(apply(&mut p.clone(), Op::AddWakeSleepRoom { agent: 5, room: 11 }).is_err(), "one per room");
+        let mut ag = AgentState::default();
+        apply(&mut p, &mut ag, Op::AddWakeSleepRoom { agent: 5, room: 11 }).unwrap();
+        assert!(apply(&mut p.clone(), &mut ag.clone(), Op::AddWakeSleepRoom { agent: 5, room: 11 }).is_err(), "one per room");
         let mut s = agents::WakeSleepSpec::default();
         s.wake_time = "07:15".into();
         let mut op = Op::ModifyWakeSleepRoom { agent: 5, id: 1, settings: s, room: 0 };
-        prepare(&mut op, &p);
+        prepare(&mut op, &p, &ag);
         assert!(op.calls(None)[0].encode(false).contains("roomid=&quot;11&quot;"), "{}", op.calls(None)[0].encode(false));
-        op.predict(&mut p).unwrap();
+        op.predict(&mut p, &mut ag).unwrap();
 
         let t = agents::PushTemplateSpec { name: "Gate".into(), category: 0, severity: 0, subject: "Gate open".into(), message: String::new(), timestamp: true, attachments: vec![] };
-        apply(&mut p, Op::AddPushNotification { agent: 6, template: t.clone() }).unwrap();
-        assert!(apply(&mut p.clone(), Op::AddPushNotification { agent: 6, template: t }).is_err());
+        apply(&mut p, &mut ag, Op::AddPushNotification { agent: 6, template: t.clone() }).unwrap();
+        assert!(apply(&mut p.clone(), &mut ag.clone(), Op::AddPushNotification { agent: 6, template: t }).is_err());
         let e = agents::EmailTemplateSpec { name: "Leak".into(), to: "not-an-address".into(), subject: String::new(), body: String::new(), timestamp: true };
-        assert!(apply(&mut p.clone(), Op::AddEmailTemplate { agent: 7, template: e }).is_err());
+        assert!(apply(&mut p.clone(), &mut ag.clone(), Op::AddEmailTemplate { agent: 7, template: e }).is_err());
     }
 }

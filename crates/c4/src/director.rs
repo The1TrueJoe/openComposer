@@ -41,6 +41,9 @@ pub struct DirectorInfo {
 #[derive(Clone, Debug)]
 pub struct Snapshot {
     pub project: Project,
+    /// Built-in agents' stored state, parsed from the same `xml`. Kept beside `project` so the
+    /// model carries no agent types; predict/diff/approval take it alongside the project.
+    pub agents: crate::agents::AgentState,
     pub xml: String,
 }
 
@@ -170,16 +173,16 @@ impl Catalog {
     /// Announcements' come from their scenes and announcements, so programming
     /// can name and check them. They come from a
     /// snapshot, which has them current.
-    pub fn set_schedule_events(&mut self, p: &Project) {
-        for (agent, events) in agent_events(p) {
+    pub fn set_schedule_events(&mut self, agents: &crate::agents::AgentState) {
+        for (agent, events) in agent_events(agents) {
             let info = self.devices.entry(agent).or_insert_with(|| DeviceInfo { id: agent, ..Default::default() });
             info.events = events.into_iter().collect();
         }
     }
 
     /// Whether [`Self::set_schedule_events`] would change nothing.
-    pub fn has_schedule_events(&self, p: &Project) -> bool {
-        agent_events(p).into_iter().all(|(agent, events)| {
+    pub fn has_schedule_events(&self, agents: &crate::agents::AgentState) -> bool {
+        agent_events(agents).into_iter().all(|(agent, events)| {
             self.devices.get(&agent).is_some_and(|d| d.events.len() == events.len() && events.iter().all(|(id, n)| d.events.get(id) == Some(n)))
         })
     }
@@ -222,10 +225,10 @@ fn conditional_def(c: roxmltree::Node<'_, '_>) -> ConditionalDef {
 }
 
 /// Built-in agents' events as the project has them now: (agent, [(event id, name)]).
-fn agent_events(p: &Project) -> Vec<(u32, Vec<(u32, String)>)> {
+fn agent_events(agents: &crate::agents::AgentState) -> Vec<(u32, Vec<(u32, String)>)> {
     let mut out: Vec<(u32, Vec<(u32, String)>)> =
-        p.schedules.iter().map(|(agent, entries)| (*agent, entries.iter().map(|e| (e.id, e.spec.name.clone())).collect())).collect();
-    out.extend(p.agent_data.iter().map(|(agent, d)| (*agent, d.events())).filter(|(_, e)| !e.is_empty()));
+        agents.schedules.iter().map(|(agent, entries)| (*agent, entries.iter().map(|e| (e.id, e.spec.name.clone())).collect())).collect();
+    out.extend(agents.agent_data.iter().map(|(agent, d)| (*agent, d.events())).filter(|(_, e)| !e.is_empty()));
     out
 }
 
@@ -302,7 +305,8 @@ impl Director {
             .call(Call::new("Upload").num("flags", self.dialect.upload_flags).timeout(Duration::from_secs(180)))
             .await?;
         let xml = r.body().to_string();
-        Ok(Snapshot { project: Project::parse(&xml)?, xml })
+        let agents = crate::agents::AgentState::parse(&xml);
+        Ok(Snapshot { project: Project::parse(&xml)?, agents, xml })
     }
 
     /// Driver definitions for every item (connection names, events, property schemas).

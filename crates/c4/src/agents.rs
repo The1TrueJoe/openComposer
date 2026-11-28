@@ -12,6 +12,8 @@
 //! protocol and parsing only: names are resolved and things are worded for people in the app
 //! (`agent_view`).
 
+use std::collections::BTreeMap;
+
 use roxmltree::Node;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -641,6 +643,54 @@ pub fn data_from_item(item: Node<'_, '_>) -> Option<AgentData> {
     match child_text(item, "state").filter(|s| !s.is_empty()) {
         Some(state) => AgentData::parse(kind, state),
         None => AgentData::empty(kind),
+    }
+}
+
+/// openComposer's agent-state overlay: the Scheduler's entries and the other built-in agents'
+/// stored data, keyed by agent item id. Kept *beside* [`Project`](crate::Project), not on it, so
+/// the project model carries no agent types and can live in the protocol crate. It is parsed from
+/// the same `<currentstate>` document the project comes from, and travels with it through predict,
+/// diff and the approval flow.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AgentState {
+    /// Scheduler agent id → its scheduled events. Each entry id is also an event id in `programming`.
+    pub schedules: BTreeMap<u32, Vec<ScheduleEntry>>,
+    /// Advanced Lighting / Announcements / Wake-Sleep / notification agents' stored data, by agent id.
+    pub agent_data: BTreeMap<u32, AgentData>,
+}
+
+impl AgentState {
+    /// Gather the agent state out of a `<currentstate>` project document.
+    //
+    // ponytail: this re-parses the project XML a second time (the model parsed it once for
+    // `Project`). It's one extra roxmltree pass per snapshot, dwarfed by the network Upload that
+    // produced the XML. Fold into the model walk only if it ever shows up in a profile.
+    pub fn parse(xml: &str) -> Self {
+        let mut s = AgentState::default();
+        let opts = roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() };
+        let Ok(doc) = roxmltree::Document::parse_with_options(xml, opts) else { return s };
+        if let Some(items) = child(doc.root_element(), "systemitems") {
+            for it in items.children().filter(|c| c.has_tag_name("item")) {
+                s.walk(it);
+            }
+        }
+        s
+    }
+
+    fn walk(&mut self, node: Node<'_, '_>) {
+        if let Some(id) = crate::xml::child_u32(node, "id") {
+            if let Some(entries) = schedule_from_item(node) {
+                self.schedules.insert(id, entries);
+            }
+            if let Some(data) = data_from_item(node) {
+                self.agent_data.insert(id, data);
+            }
+        }
+        if let Some(subs) = child(node, "subitems") {
+            for sub in subs.children().filter(|c| c.has_tag_name("item")) {
+                self.walk(sub);
+            }
+        }
     }
 }
 

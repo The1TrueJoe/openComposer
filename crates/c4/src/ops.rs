@@ -7,6 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::agents::AgentState;
 use crate::model::{Binding, Item, ItemKind, NetworkBinding, Project};
 use crate::soap::Call;
 
@@ -351,12 +352,12 @@ impl Op {
     /// Fill in what the op's calls need from the project it is about to be predicted on and
     /// applied to (how many steps a light has in a scene, an announcement's hidden parts).
     /// Approvals call this for every op, in order, on the predicted project.
-    pub fn prepare(&mut self, p: &Project) {
-        crate::agent_ops::prepare(self, p);
+    pub fn prepare(&mut self, p: &Project, agents: &AgentState) {
+        crate::agent_ops::prepare(self, p, agents);
     }
 
     /// One line for an approval card, in the project's own names.
-    pub fn describe(&self, p: &Project) -> String {
+    pub fn describe(&self, p: &Project, agents: &AgentState) -> String {
         let n = |id: u32| format!("“{}”", p.name_of(id));
         match self {
             Op::AddDevice { room, name, driver } => format!("Add “{name}” ({driver}) to {}", n(*room)),
@@ -416,14 +417,14 @@ impl Op {
                 format!("Add scheduled event “{}” to {}: {} at {}", entry.name, n(*agent), entry.repeat_text(), entry.time_text())
             }
             Op::ModifyScheduleEntry { agent, id, entry, .. } => {
-                let old = p.schedules.get(agent).and_then(|es| es.iter().find(|e| e.id == *id)).map(|e| e.spec.name.clone());
+                let old = agents.schedules.get(agent).and_then(|es| es.iter().find(|e| e.id == *id)).map(|e| e.spec.name.clone());
                 format!("Change scheduled event “{}” in {}", old.unwrap_or_else(|| entry.name.clone()), n(*agent))
             }
             Op::RemoveScheduleEntry { agent, id } => {
-                let old = p.schedules.get(agent).and_then(|es| es.iter().find(|e| e.id == *id)).map(|e| e.spec.name.clone());
+                let old = agents.schedules.get(agent).and_then(|es| es.iter().find(|e| e.id == *id)).map(|e| e.spec.name.clone());
                 format!("Remove scheduled event “{}” from {}", old.unwrap_or_else(|| format!("#{id}")), n(*agent))
             }
-            agent_op!() => crate::agent_ops::describe(self, p).unwrap_or_default(),
+            agent_op!() => crate::agent_ops::describe(self, p, agents).unwrap_or_default(),
             Op::ZigbeeControl { iddevice, action } => action.describe(*iddevice),
             Op::InstallDriver { filename, source, bytes } => {
                 format!("Install driver file {filename} ({} KB) from {source}", bytes.len().div_ceil(1024))
@@ -434,7 +435,7 @@ impl Op {
 
     /// Apply to a copy of the project. Ids for new items are guesses (Director assigns
     /// them), which is fine for a preview.
-    pub fn predict(&self, p: &mut Project) -> Result<(), OpError> {
+    pub fn predict(&self, p: &mut Project, agents: &mut AgentState) -> Result<(), OpError> {
         match self {
             Op::AddDevice { room, name, driver } => {
                 expect_kind(p, *room, &[ItemKind::Room], "a device", "room")?;
@@ -683,7 +684,7 @@ impl Op {
                 it.enabled = *enabled;
             }
             Op::AddScheduleEntry { agent, entry } => {
-                let entries = schedule_of(p, *agent)?;
+                let entries = schedule_of(p, agents, *agent)?;
                 check_entry(entries, entry, None)?;
                 // Director numbers entries from a counter that never goes back; any unused
                 // id is as good for a preview (the diff matches added entries by name).
@@ -699,7 +700,7 @@ impl Op {
                 });
             }
             Op::ModifyScheduleEntry { agent, id, entry, creator, category } => {
-                let entries = schedule_of(p, *agent)?;
+                let entries = schedule_of(p, agents, *agent)?;
                 check_entry(entries, entry, Some(*id))?;
                 let e = entries.iter_mut().find(|e| e.id == *id).ok_or(OpError::NoSuchScheduleEntry(*id))?;
                 if e.locked {
@@ -716,7 +717,7 @@ impl Op {
                 e.spec = entry.clone();
             }
             Op::RemoveScheduleEntry { agent, id } => {
-                let entries = schedule_of(p, *agent)?;
+                let entries = schedule_of(p, agents, *agent)?;
                 let pos = entries.iter().position(|e| e.id == *id).ok_or(OpError::NoSuchScheduleEntry(*id))?;
                 if entries[pos].locked {
                     return Err(OpError::ScheduleEntryLocked(entries[pos].spec.name.clone()));
@@ -724,7 +725,7 @@ impl Op {
                 entries.remove(pos);
                 p.programming.remove(&crate::model::event_key(*agent, *id));
             }
-            agent_op!() => crate::agent_ops::predict(self, p).unwrap_or(Ok(()))?,
+            agent_op!() => crate::agent_ops::predict(self, p, agents).unwrap_or(Ok(()))?,
             // Mesh management changes no project data (like SendCommand); just validate it.
             Op::ZigbeeControl { action, .. } => action.validate().map_err(OpError::BadAgentChange)?,
             Op::InstallDriver { .. } => {}
@@ -929,13 +930,13 @@ fn expect_kind(p: &Project, id: u32, kinds: &[ItemKind], what: &'static str, exp
 }
 
 /// The entries of a Scheduler agent, or why `agent` isn't one.
-fn schedule_of(p: &mut Project, agent: u32) -> Result<&mut Vec<crate::agents::ScheduleEntry>, OpError> {
+fn schedule_of<'a>(p: &Project, agents: &'a mut AgentState, agent: u32) -> Result<&'a mut Vec<crate::agents::ScheduleEntry>, OpError> {
     let it = p.item(agent).ok_or(OpError::NoSuchItem(agent))?;
     let is_scheduler = it.driver.as_deref().and_then(crate::agents::AgentKind::from_driver) == Some(crate::agents::AgentKind::Scheduler);
     if !is_scheduler {
         return Err(OpError::NotScheduler(agent));
     }
-    Ok(p.schedules.entry(agent).or_default())
+    Ok(agents.schedules.entry(agent).or_default())
 }
 
 /// Composer's "Edit Entry" checks, plus its rule that names are unique.
@@ -989,7 +990,7 @@ fn code_text(p: &Project, device: u32, event: u32, id: u32) -> String {
     p.programming
         .get(&crate::model::event_key(device, event))
         .and_then(|code| crate::program::find(code, id))
-        .map(|c| c.text(p))
+        .map(|c| crate::program::code_text(c, p))
         .unwrap_or_else(|| format!("line #{id}"))
 }
 
@@ -1017,7 +1018,7 @@ mod tests {
     #[test]
     fn devices_only_go_in_rooms() {
         let mut p = sample();
-        let err = Op::AddDevice { room: 4, name: "Apple TV".into(), driver: "apple_tv.c4z".into() }.predict(&mut p);
+        let err = Op::AddDevice { room: 4, name: "Apple TV".into(), driver: "apple_tv.c4z".into() }.predict(&mut p, &mut AgentState::default());
         assert!(matches!(err, Err(OpError::WrongParent { .. })), "{err:?}");
     }
 
@@ -1025,8 +1026,8 @@ mod tests {
     fn add_device_predicts_an_added_item_in_the_room() {
         let before = sample();
         let mut after = before.clone();
-        Op::AddDevice { room: 11, name: "Apple TV".into(), driver: "apple_tv.c4z".into() }.predict(&mut after).unwrap();
-        let d = diff(&before, &after, &Names::default(), DiffOptions::default());
+        Op::AddDevice { room: 11, name: "Apple TV".into(), driver: "apple_tv.c4z".into() }.predict(&mut after, &mut AgentState::default()).unwrap();
+        let d = diff(&before, &after, &AgentState::default(), &AgentState::default(), &Names::default(), DiffOptions::default());
         let [Change::ItemAdded { item, driver, .. }] = d.changes.as_slice() else { panic!("{:?}", d.changes) };
         assert_eq!(item.location.last().map(String::as_str), Some("Kitchen"));
         assert_eq!(driver.as_deref(), Some("apple_tv.c4z"));
@@ -1043,13 +1044,13 @@ mod tests {
             class: "HDMI".into(),
             consumer_name: String::new(),
         };
-        assert!(matches!(op.predict(&mut p), Err(OpError::AlreadyConnected { .. })));
+        assert!(matches!(op.predict(&mut p, &mut AgentState::default()), Err(OpError::AlreadyConnected { .. })));
     }
 
     #[test]
     fn removing_a_device_drops_its_programming_lines() {
         let mut p = sample();
-        Op::RemoveItem { id: 21 }.predict(&mut p).unwrap();
+        Op::RemoveItem { id: 21 }.predict(&mut p, &mut AgentState::default()).unwrap();
         let code = &p.programming["20:1"];
         assert!(code[0].children.is_empty(), "the receiver line under the TV event is gone");
     }
@@ -1062,9 +1063,9 @@ mod tests {
             device: 20, event: 1, parent: 0, before: 1, target: 21, command: "INPUT".into(),
             params: vec![], display: "Select HDMI 2 on NAME".into(),
         }
-        .predict(&mut after)
+        .predict(&mut after, &mut AgentState::default())
         .unwrap();
-        let d = diff(&before, &after, &Names::default(), DiffOptions::default());
+        let d = diff(&before, &after, &AgentState::default(), &AgentState::default(), &Names::default(), DiffOptions::default());
         let [Change::ProgrammingChanged { lines, .. }] = d.changes.as_slice() else { panic!("{:?}", d.changes) };
         let added: Vec<_> = lines.iter().filter(|l| l.op == crate::diff::LineOp::Added).map(|l| (l.depth, l.text.as_str())).collect();
         assert_eq!(added, [(0, "Select HDMI 2 on Receiver")]);
@@ -1072,10 +1073,10 @@ mod tests {
         let under_command = Op::AddCode {
             device: 20, event: 1, parent: 1, before: 0, target: 21, command: "INPUT".into(), params: vec![], display: "x".into(),
         };
-        assert!(matches!(under_command.predict(&mut after.clone()), Err(OpError::Code(_))));
-        Op::RemoveCode { device: 20, event: 1, id: 1 }.predict(&mut after).unwrap();
+        assert!(matches!(under_command.predict(&mut after.clone(), &mut AgentState::default()), Err(OpError::Code(_))));
+        Op::RemoveCode { device: 20, event: 1, id: 1 }.predict(&mut after, &mut AgentState::default()).unwrap();
         assert_eq!(after.programming["20:1"].len(), 1, "the TV line went with the line nested under it");
-        assert!(matches!(Op::RemoveCode { device: 20, event: 1, id: 99 }.predict(&mut after), Err(OpError::NoSuchCode { .. })));
+        assert!(matches!(Op::RemoveCode { device: 20, event: 1, id: 99 }.predict(&mut after, &mut AgentState::default()), Err(OpError::NoSuchCode { .. })));
     }
 
     /// An If with a line inside, its Else, a While, a disabled line and a move — the
@@ -1087,38 +1088,38 @@ mod tests {
         p.programming.insert("20:2".into(), vec![]);
         let lamp_on = Condition::Device { target: 21, name: "LOAD_ON".into(), logic: None, params: vec![] };
         let add_if = Op::AddConditional { device: 20, event: 2, parent: 0, before: 0, r#loop: false, condition: lamp_on.clone(), display: "If NAME is on".into() };
-        add_if.predict(&mut p).unwrap();
+        add_if.predict(&mut p, &mut AgentState::default()).unwrap();
         let calls = add_if.calls(None)[0].encode(false);
         assert!(calls.contains(r#"<param name="type" type="number">2</param>"#) && calls.contains("<name>LOAD_ON</name>"), "{calls}");
-        Op::AddControl { device: 20, event: 2, parent: 1, before: 0, control: Control::Delay { ms: 5000 } }.predict(&mut p).unwrap();
+        Op::AddControl { device: 20, event: 2, parent: 1, before: 0, control: Control::Delay { ms: 5000 } }.predict(&mut p, &mut AgentState::default()).unwrap();
         // An Else only right after an If.
-        assert!(Op::AddElse { device: 20, event: 2, parent: 1, before: 0 }.predict(&mut p.clone()).is_err());
-        Op::AddElse { device: 20, event: 2, parent: 0, before: 0 }.predict(&mut p).unwrap();
-        assert!(Op::AddElse { device: 20, event: 2, parent: 0, before: 0 }.predict(&mut p.clone()).is_err(), "not after another Else");
+        assert!(Op::AddElse { device: 20, event: 2, parent: 1, before: 0 }.predict(&mut p.clone(), &mut AgentState::default()).is_err());
+        Op::AddElse { device: 20, event: 2, parent: 0, before: 0 }.predict(&mut p, &mut AgentState::default()).unwrap();
+        assert!(Op::AddElse { device: 20, event: 2, parent: 0, before: 0 }.predict(&mut p.clone(), &mut AgentState::default()).is_err(), "not after another Else");
         Op::AddConditional { device: 20, event: 2, parent: 0, before: 0, r#loop: true, condition: lamp_on, display: "While NAME is on".into() }
-            .predict(&mut p)
+            .predict(&mut p, &mut AgentState::default())
             .unwrap();
         // Nothing between an If and its Else.
         let between = Op::AddControl { device: 20, event: 2, parent: 0, before: 3, control: Control::Stop };
-        assert!(matches!(between.predict(&mut p.clone()), Err(OpError::Code(_))));
-        Op::SetCodeEnabled { device: 20, event: 2, id: 2, enabled: false }.predict(&mut p).unwrap();
+        assert!(matches!(between.predict(&mut p.clone(), &mut AgentState::default()), Err(OpError::Code(_))));
+        Op::SetCodeEnabled { device: 20, event: 2, id: 2, enabled: false }.predict(&mut p, &mut AgentState::default()).unwrap();
         let code = &p.programming["20:2"];
         let shape: Vec<(u32, usize, bool)> = code.iter().map(|c| (c.kind, c.children.len(), c.enabled)).collect();
         assert_eq!(shape, [(kind::CONDITIONAL, 1, true), (kind::ELSE, 0, true), (kind::LOOP, 0, true)]);
         assert!(!code[0].children[0].enabled);
-        assert_eq!(code[0].text(&p), "If Receiver is on");
+        assert_eq!(crate::program::code_text(&code[0], &p), "If Receiver is on");
 
         // Moving the If to the end takes its Else along; an Else can't move on its own.
-        Op::MoveCode { device: 20, event: 2, id: 1, parent: 0, before: 0 }.predict(&mut p).unwrap();
+        Op::MoveCode { device: 20, event: 2, id: 1, parent: 0, before: 0 }.predict(&mut p, &mut AgentState::default()).unwrap();
         let order: Vec<u32> = p.programming["20:2"].iter().map(|c| c.id).collect();
         assert_eq!(order, [4, 1, 3]);
-        assert!(Op::MoveCode { device: 20, event: 2, id: 3, parent: 0, before: 4 }.predict(&mut p.clone()).is_err());
-        assert!(Op::MoveCode { device: 20, event: 2, id: 1, parent: 1, before: 0 }.predict(&mut p.clone()).is_err(), "not into itself");
+        assert!(Op::MoveCode { device: 20, event: 2, id: 3, parent: 0, before: 4 }.predict(&mut p.clone(), &mut AgentState::default()).is_err());
+        assert!(Op::MoveCode { device: 20, event: 2, id: 1, parent: 1, before: 0 }.predict(&mut p.clone(), &mut AgentState::default()).is_err(), "not into itself");
         // Into the While, as its first line.
-        Op::MoveCode { device: 20, event: 2, id: 2, parent: 4, before: 0 }.predict(&mut p).unwrap();
+        Op::MoveCode { device: 20, event: 2, id: 2, parent: 4, before: 0 }.predict(&mut p, &mut AgentState::default()).unwrap();
         assert_eq!(p.programming["20:2"][0].children.len(), 1);
         // Removing the If removes its Else.
-        Op::RemoveCode { device: 20, event: 2, id: 1 }.predict(&mut p).unwrap();
+        Op::RemoveCode { device: 20, event: 2, id: 1 }.predict(&mut p, &mut AgentState::default()).unwrap();
         assert_eq!(p.programming["20:2"].len(), 1);
 
         let en = Op::SetCodeEnabled { device: 20, event: 2, id: 2, enabled: true }.calls(None)[0].encode(false);
@@ -1144,8 +1145,8 @@ mod tests {
         let Op::AddVariableCommand { display, var_type, action, .. } = &op else { unreachable!() };
         assert_eq!((display.as_str(), *var_type), (r#"#!"{VNAME} = True";VNAME="VNAME:100001,1125""#, 4));
         assert_eq!(action, &VarAction::Set { value: "1".into() });
-        op.predict(&mut p).unwrap();
-        assert_eq!(p.programming["20:1"].last().unwrap().text(&p), "Garage Timer = True");
+        op.predict(&mut p, &mut AgentState::default()).unwrap();
+        assert_eq!(crate::program::code_text(p.programming["20:1"].last().unwrap(), &p), "Garage Timer = True");
         let mut bad = Op::AddVariableCommand {
             device: 20, event: 1, parent: 0, before: 0, variable: VarRef { device: 100001, id: 1125 },
             action: VarAction::Add { value: "1".into() }, display: String::new(), var_type: 0,
@@ -1187,27 +1188,29 @@ mod tests {
             end_date: None,
         };
         let mut after = before.clone();
-        Op::AddScheduleEntry { agent: 100100, entry: spec("Porch") }.predict(&mut after).unwrap();
-        let d = diff(&before, &after, &Names::default(), DiffOptions::default());
+        let mut ag = AgentState::default();
+        Op::AddScheduleEntry { agent: 100100, entry: spec("Porch") }.predict(&mut after, &mut ag).unwrap();
+        let d = diff(&before, &after, &AgentState::default(), &ag, &Names::default(), DiffOptions::default());
         let [Change::ScheduleAdded { name, when, .. }] = d.changes.as_slice() else { panic!("{:?}", d.changes) };
         assert_eq!((name.as_str(), when.as_str()), ("Porch", "Every day at Sunset, from 2026-10-21"));
         // Names are unique, as in Composer.
-        assert!(Op::AddScheduleEntry { agent: 100100, entry: spec("porch") }.predict(&mut after.clone()).is_err());
+        assert!(Op::AddScheduleEntry { agent: 100100, entry: spec("porch") }.predict(&mut after.clone(), &mut ag.clone()).is_err());
         // Only Scheduler agents take entries.
-        assert!(matches!(Op::AddScheduleEntry { agent: 20, entry: spec("x") }.predict(&mut after.clone()), Err(OpError::NotScheduler(20))));
+        assert!(matches!(Op::AddScheduleEntry { agent: 20, entry: spec("x") }.predict(&mut after.clone(), &mut ag.clone()), Err(OpError::NotScheduler(20))));
 
         let before = after.clone();
+        let before_ag = ag.clone();
         let mut later = spec("Porch");
         later.time_base = crate::agents::TimeBase::Clock;
         later.minutes = 1110;
-        Op::ModifyScheduleEntry { agent: 100100, id: 1, entry: later, creator: 0, category: String::new() }.predict(&mut after).unwrap();
-        let d = diff(&before, &after, &Names::default(), DiffOptions::default());
+        Op::ModifyScheduleEntry { agent: 100100, id: 1, entry: later, creator: 0, category: String::new() }.predict(&mut after, &mut ag).unwrap();
+        let d = diff(&before, &after, &before_ag, &ag, &Names::default(), DiffOptions::default());
         let [Change::ScheduleChanged { field, from, to, .. }] = d.changes.as_slice() else { panic!("{:?}", d.changes) };
         assert_eq!((field.as_str(), from.as_str(), to.as_str()), ("time", "Sunset", "6:30 PM"));
 
         after.programming.insert(crate::model::event_key(100100, 1), sample().programming["20:1"].clone());
-        Op::RemoveScheduleEntry { agent: 100100, id: 1 }.predict(&mut after).unwrap();
-        assert!(after.schedules[&100100].is_empty() && !after.programming.contains_key("100100:1"), "its programming goes too");
+        Op::RemoveScheduleEntry { agent: 100100, id: 1 }.predict(&mut after, &mut ag).unwrap();
+        assert!(ag.schedules[&100100].is_empty() && !after.programming.contains_key("100100:1"), "its programming goes too");
         let call = Op::RemoveScheduleEntry { agent: 100100, id: 7 }.calls(None)[0].encode(false);
         assert!(call.contains("&lt;command&gt;DELETE_ENTRY") || call.contains("<command>DELETE_ENTRY"), "{call}");
     }
@@ -1232,7 +1235,7 @@ mod tests {
             address: "10.0.0.111".into(),
             search_type: "Samsung:QN75".into(),
         };
-        assert!(matches!(ip.predict(&mut sample()), Err(OpError::IdentifyWithIp { .. })));
+        assert!(matches!(ip.predict(&mut sample(), &mut AgentState::default()), Err(OpError::IdentifyWithIp { .. })));
 
         let usn = Op::AddNetworkBinding {
             device: 20,
@@ -1242,13 +1245,13 @@ mod tests {
             search_type: "Samsung:QN75".into(),
         };
         let mut p = sample();
-        usn.predict(&mut p).unwrap();
+        usn.predict(&mut p, &mut AgentState::default()).unwrap();
         let nb = p.network_bindings.iter().find(|n| n.device == 20 && n.binding == 6001).unwrap();
         // The Director derives the stored USN from the address param; the model mirrors that.
         assert_eq!(nb.uuid, "Samsung:QN75-tv-00:11:22:33:44:55");
 
         // A Zigbee identify (type 3) or a manual IP with no SDDP search type is left alone.
         let zig = Op::AddNetworkBinding { device: 20, binding: 6001, address_type: 3, address: "10.0.0.5".into(), search_type: String::new() };
-        assert!(zig.predict(&mut sample()).is_ok());
+        assert!(zig.predict(&mut sample(), &mut AgentState::default()).is_ok());
     }
 }
