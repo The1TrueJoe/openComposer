@@ -73,4 +73,7 @@ permission. See [LICENSE](LICENSE) for the full terms.
 Contributions are accepted under the same license, and contributors agree that the copyright
 holder may also offer them under a commercial license.
 
+These terms cover every version of openComposer in this repository, back to the first commit,
+including the versions published before the LICENSE file was added.
+
 Copyright © 2024–2026 Joseph Telaak.
