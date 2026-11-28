@@ -67,9 +67,11 @@ poc         read-only Python probes
 
 openComposer is free for homeowners. Use it on your own system, change it, and share it with other DIYers.
 
-It's licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE), which means commercial use needs my permission. What I'm trying to prevent is simple: a large dealer or company taking this and billing people hundreds of dollars an hour for work they could have done themselves for free.
+It's meant to help homeowners look after their own systems. I want it to stay that way, not become something a big company builds a business on.
 
-**Small dealers and independent integrators:** email me at [joseph@telaak.dev](mailto:joseph@telaak.dev) and tell me a little about what you do. I'll most likely say yes, free of charge. I'd just like to know who's using it.
+Because it's licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE), commercial use needs my permission. That's mostly there for the edge cases: I don't want a large dealer or company turning it into a paid product or service without asking.
+
+**Small dealers and independent integrators:** you're welcome to use it. Just email me at [joseph@telaak.dev](mailto:joseph@telaak.dev) and tell me a little about what you do. The answer will almost certainly be yes, free of charge. I'd just like to know who's using it.
 
 **Larger dealers and companies:** please get in touch before using it commercially.
 
