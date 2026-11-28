@@ -280,6 +280,9 @@ pub async fn action(app: S<'_>, name: String, args: Option<Value>) -> R<Value> {
         "director_read" => actions::director_read(app, req(a)?).await,
         "propose_changes" => actions::propose(app, req(a)?, UI_SOURCE).await,
         "load_backup" => actions::load_backup(app, req(a)?, UI_SOURCE).await,
+        "undo_change" => actions::undo_change(app, req(a)?, UI_SOURCE).await,
+        "export_scenes" => actions::export_scenes(app, self::args(a)?).await,
+        "import_scenes" => actions::import_scenes(app, req(a)?, UI_SOURCE).await,
         "driver_status" => actions::driver_status(app, req(a)?).await,
         "install_driver" => actions::install_driver(app, req(a)?, UI_SOURCE).await,
         "controller_drivers" => actions::controller_drivers(app, self::args(a)?).await,
@@ -293,7 +296,7 @@ pub async fn action(app: S<'_>, name: String, args: Option<Value>) -> R<Value> {
         "agent_view" => actions::agent_view(app, req(a)?).await,
         other => return Err(format!("unknown action {other}")),
     };
-    if matches!(name.as_str(), "propose_changes" | "load_backup" | "backup_project" | "install_driver" | "add_driver" | "import_driver" | "send_command") {
+    if matches!(name.as_str(), "propose_changes" | "load_backup" | "undo_change" | "import_scenes" | "export_scenes" | "backup_project" | "install_driver" | "add_driver" | "import_driver" | "send_command") {
         app.log(UI_SOURCE, &name, String::new(), r.is_ok(), t.elapsed().as_millis() as u64);
     }
     r.map_err(err)

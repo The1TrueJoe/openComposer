@@ -30,4 +30,12 @@ export async function pickDir(title: string): Promise<string | null> {
   return typeof r === "string" ? r : null;
 }
 
+/** Where to save a new file, or null if they cancelled. */
+export async function pickSavePath(title: string, defaultName: string, extensions: string[]): Promise<string | null> {
+  if (isMock) return `/Users/you/Downloads/${defaultName}`;
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  const r = await save({ title, defaultPath: defaultName, filters: [{ name: extensions.join(", "), extensions }] });
+  return typeof r === "string" ? r : null;
+}
+
 export const baseName = (p: string) => p.split(/[\\/]/).pop() ?? p;
