@@ -12,7 +12,8 @@
 
 use std::time::Duration;
 
-use crate::soap::{Identity, SoapError, USER_AGENT, tls_config};
+use crate::USER_AGENT;
+use crate::soap::{Identity, SoapError, tls_config};
 
 #[derive(Debug, thiserror::Error)]
 pub enum BrokerError {
@@ -164,9 +165,53 @@ impl Broker {
         }
     }
 
+    /// `GET /api/v1/<path>` as JSON with the bearer token — the read side of the media API.
+    pub async fn get_json(&self, path: &str, what: &str) -> Result<serde_json::Value> {
+        let r = self
+            .http
+            .get(format!("{}{path}", self.base))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(|e| self.http_err(e))?;
+        if !r.status().is_success() {
+            return Err(BrokerError::Status { what: what.into(), status: r.status().as_u16(), body: trim(&r.text().await.unwrap_or_default()) });
+        }
+        r.json().await.map_err(|e| self.http_err(e))
+    }
+
+    /// A room's Watch/Listen source lists (`GET /api/v1/rooms/:id/media`) — the authoritative
+    /// list of what a room can play, names and all, as Control4's own navigator shows it. This
+    /// is where TuneIn and the other audio sources appear under `listen_devices`.
+    pub async fn room_media(&self, room: u32) -> Result<serde_json::Value> {
+        self.get_json(&format!("/api/v1/rooms/{room}/media"), "room media").await
+    }
+
+    /// Pinned favorites (`GET /api/v1/agents/ui_configuration/favorites/`) — including a user's
+    /// saved TuneIn stations; each `path` is a menu or a `/rooms/:r/items/:i` pin.
+    pub async fn favorites(&self) -> Result<serde_json::Value> {
+        self.get_json("/api/v1/agents/ui_configuration/favorites/", "favorites").await
+    }
+
+    /// An item's live variables (`GET /api/v1/items/:id/variables`) — the state bus. For a room
+    /// this carries now-playing and the selected source (ids in `crate::broker::room_var`).
+    pub async fn item_variables(&self, item: u32) -> Result<serde_json::Value> {
+        self.get_json(&format!("/api/v1/items/{item}/variables"), "variables").await
+    }
+
     fn http_err(&self, source: reqwest::Error) -> BrokerError {
         BrokerError::Http { addr: self.base.clone(), source }
     }
+}
+
+/// Well-known room variable ids from `GET /api/v1/items/:roomId/variables`.
+pub mod room_var {
+    pub const CURRENT_SELECTED_DEVICE: u32 = 1000;
+    pub const CURRENT_AUDIO_DEVICE: u32 = 1001;
+    pub const CURRENT_MEDIA: u32 = 1005;
+    pub const POWER_STATE: u32 = 1010;
+    pub const CURRENT_VOLUME: u32 = 1011;
+    pub const IS_MUTED: u32 = 1018;
 }
 
 fn trim(s: &str) -> String {

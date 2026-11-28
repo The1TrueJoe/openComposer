@@ -4,13 +4,14 @@
  *  lights added, set and removed, as approvals (*_lighting_scene, set/remove_scene_light). */
 
 import { createColumnHelper } from "@tanstack/react-table";
-import { Lightbulb, Plus, Trash2, Type } from "lucide-react";
+import { FileDown, FileUp, Lightbulb, Plus, Trash2, Type } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import type { LightColor, LightStep, LightingData, LightingSceneView, NamedRef, Op } from "../../../api";
+import { api, errText, type LightColor, type LightStep, type LightingData, type LightingSceneView, type NamedRef, type Op } from "../../../api";
 import { DataTable } from "../../../components/DataTable";
 import { Tip, useDialog } from "../../../components/Dialogs";
 import { WithDetail } from "../../../components/Panes";
+import { pickFiles, pickSavePath } from "../../../lib/files";
 import type { Shell } from "../../../lib/shell";
 import { cx, plural } from "../../../lib/ui";
 import { AgentSplit, DetailPane, EditorCard, IconAct, MultiPick, ProgramLink, Ref, RemoveIcon, ms, useWrites } from "./common";
@@ -75,6 +76,31 @@ export function LightingView({ agent, data, shell, onSelect, reload }: {
     if (ok && await w.propose([{ op: "remove_lighting_scene", agent: agent.id, scene: s.id }], `Remove the lighting scene “${s.name}”.`)) setPicked(null);
   };
 
+  // Scenes travel as a file naming lights by room and name, so they import into any project.
+  const exportScenes = async () => {
+    const only = scene ? [scene.name] : [];
+    const path = await pickSavePath("Export lighting scenes", `${scene?.name ?? "Lighting scenes"}.scenes.json`, ["json"]);
+    if (!path) return;
+    try {
+      const r = await api.exportScenes(only, path);
+      toast.success(`Exported ${plural(r.scenes, "scene")}.`);
+    } catch (e) {
+      toast.error(errText(e));
+    }
+  };
+  const importScenes = async () => {
+    const [path] = await pickFiles({ title: "Import lighting scenes", extensions: ["json"] });
+    if (!path) return;
+    try {
+      const r = await api.importScenes(path);
+      if (r.status === "applied") reload();
+      if (r.unmatched.length) toast.warning(`Not found here: ${r.unmatched.join("; ")}`);
+      else if (r.status === "applied") toast.success(`Imported ${plural(r.added.length + r.updated.length, "scene")}.`);
+    } catch (e) {
+      toast.error(errText(e));
+    }
+  };
+
   const columns = useMemo(() => [
     sceneCol.accessor("name", {
       header: "Scene",
@@ -102,6 +128,12 @@ export function LightingView({ agent, data, shell, onSelect, reload }: {
     <AgentSplit id="lighting" defaultSize="70%" bar={<>
       <span className="dim small">{plural(data.scenes.length, "scene")}</span>
       <span className="spread" />
+      <Tip text={scene ? `Save “${scene.name}” to a file` : "Save every scene to a file"}>
+        <span><button className="act small" disabled={!data.scenes.length} onClick={exportScenes}><FileDown size={13} strokeWidth={1.8} />Export…</button></span>
+      </Tip>
+      <Tip text={w.why ?? "Add scenes from a file, matching lights by room and name"}>
+        <span><button className="act small" disabled={!w.can} onClick={importScenes}><FileUp size={13} strokeWidth={1.8} />Import…</button></span>
+      </Tip>
       <Tip text={w.why ?? "Add a scene"}>
         <span><button className="act small primary" disabled={!w.can} onClick={create}><Plus size={13} strokeWidth={2} />New scene</button></span>
       </Tip>

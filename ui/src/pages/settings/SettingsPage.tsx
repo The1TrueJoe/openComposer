@@ -4,21 +4,14 @@ import { toast } from "sonner";
 import { api, errText, type AccessMode, type Provider, type SavedDirector } from "../../api";
 import { Tip, useDialog } from "../../components/Dialogs";
 import { CopyButton, Select, Snippet, Spinner, Switch } from "../../components/controls";
-import { AddDirectorForm, CertificateForm, MODES } from "../../components/setup";
+import { AddDirectorForm, MODES } from "../../components/setup";
 import type { Shell } from "../../lib/shell";
 import { ago, cx, dateTime, useLoad } from "../../lib/ui";
-import { Takeover } from "./Takeover";
 
 export function SettingsPage({ shell }: { shell: Shell }) {
   return (
     <div className="pane settings">
-      <section className="card" id="certificate">
-        <h3>Certificate</h3>
-        <p className="hint flush">A client certificate your Directors trust. openComposer doesn't include one.</p>
-        <CertificateForm identity={shell.status.identity} onChanged={shell.refreshStatus} />
-      </section>
       <Directors shell={shell} />
-      <Takeover shell={shell} />
       <Mcp shell={shell} />
       <Agent shell={shell} />
     </div>

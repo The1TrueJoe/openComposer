@@ -61,7 +61,7 @@ pub async fn app_status(app: S<'_>) -> R<AppStatus> {
         identity,
         mcp: mcp::status(),
         connected: app.connected().await,
-        stdio_command: std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default(),
+        stdio_command: crate::proc::self_exe().map(|p| p.display().to_string()).unwrap_or_default(),
     })
 }
 
@@ -280,8 +280,13 @@ pub async fn action(app: S<'_>, name: String, args: Option<Value>) -> R<Value> {
         "director_read" => actions::director_read(app, req(a)?).await,
         "propose_changes" => actions::propose(app, req(a)?, UI_SOURCE).await,
         "load_backup" => actions::load_backup(app, req(a)?, UI_SOURCE).await,
+        "undo_change" => actions::undo_change(app, req(a)?, UI_SOURCE).await,
+        "export_scenes" => actions::export_scenes(app, self::args(a)?).await,
+        "import_scenes" => actions::import_scenes(app, req(a)?, UI_SOURCE).await,
         "driver_status" => actions::driver_status(app, req(a)?).await,
         "install_driver" => actions::install_driver(app, req(a)?, UI_SOURCE).await,
+        "update_driver" => actions::update_driver(app, req(a)?, UI_SOURCE).await,
+        "lua_output" => actions::lua_output(app, req(a)?).await,
         "controller_drivers" => actions::controller_drivers(app, self::args(a)?).await,
         "library_drivers" => Ok(actions::library_drivers(app)),
         "import_driver" => actions::import_driver(app, req(a)?),
@@ -293,7 +298,7 @@ pub async fn action(app: S<'_>, name: String, args: Option<Value>) -> R<Value> {
         "agent_view" => actions::agent_view(app, req(a)?).await,
         other => return Err(format!("unknown action {other}")),
     };
-    if matches!(name.as_str(), "propose_changes" | "load_backup" | "backup_project" | "install_driver" | "add_driver" | "import_driver" | "send_command") {
+    if matches!(name.as_str(), "propose_changes" | "load_backup" | "undo_change" | "import_scenes" | "export_scenes" | "backup_project" | "install_driver" | "update_driver" | "add_driver" | "import_driver" | "send_command") {
         app.log(UI_SOURCE, &name, String::new(), r.is_ok(), t.elapsed().as_millis() as u64);
     }
     r.map_err(err)
@@ -437,6 +442,15 @@ pub async fn mcp_revoke(app: S<'_>, id: String) -> R<()> {
 // --- Controller takeover (SSH + cert swap) ---------------------------------------------
 // Deliberately not exposed to the agent or MCP: a takeover writes to a controller and
 // reboots it, so it runs only from an explicit, confirmed user action in the app.
+
+/// The controller's MAC from the ARP cache (Control4 OUI only), so the takeover form can
+/// offer the MAC-derived root password without the owner reading it off a label.
+#[tauri::command]
+pub async fn mac_for_host(host: String) -> R<Option<String>> {
+    Ok(tokio::task::spawn_blocking(move || c4::takeover::authderive::mac_for_host(&host))
+        .await
+        .unwrap_or(None))
+}
 
 /// Whether openComposer has a takeover CA yet, and where it came from.
 #[tauri::command]

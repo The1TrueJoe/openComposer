@@ -170,10 +170,12 @@ pub struct InstallDriverArgs {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct IdentifyArgs {
-    /// The device's network identity as Director knows it: the `uuid` of a discovered
-    /// physical device (network_status) or the SDDP `<Type>-<Host>`.
+    /// For an SDDP device: its **USN** — the `uuid` of the matching entry under `network_status`
+    /// → `discovered` (format `<Type>-<Host>`, e.g. `openhc:speakerpoint-speakerpoint-000fff18b81b`).
+    /// The Director resolves the USN to the dial address. Do NOT pass a bare IP here — the Director
+    /// can't resolve it and the device stays offline (it's rejected before it reaches the Director).
     pub address: String,
-    /// SDDP search type, e.g. Denon:AVR-X2100W.
+    /// SDDP search type, e.g. Denon:AVR-X2100W (the discovered entry's `device_type`).
     pub search_type: String,
     /// 1 = IP/SDDP (default), 3 = Zigbee.
     #[serde(default)]
@@ -468,25 +470,121 @@ pub async fn install_driver(app: &Arc<App>, a: InstallDriverArgs, source: &str) 
     Ok(outcome(&r))
 }
 
-async fn load_source(app: &Arc<App>, src: &str) -> AppResult<(String, Project, c4::Names)> {
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UpdateDriverArgs {
+    #[serde(default)]
+    pub director: Option<String>,
+    /// Driver file name already on the controller, e.g. daylight_lighting_scheduler.c4z
+    pub filename: String,
+    /// Where to take the new file from: `path:<absolute path on this computer>`,
+    /// `backup:<file in the library>`, or `director:<another Director>`.
+    pub from: String,
+    /// Update even when the versions are equal or the new one is older. Default false.
+    #[serde(default)]
+    pub force: bool,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// Replace a driver that devices already run, as Composer's "Update Driver" does: ask the
+/// controller's Driver Update agent first (no change), refuse on its say-so, then upload the
+/// file and tell the agent to apply it, as one approved change with a restore point.
+pub async fn update_driver(app: &Arc<App>, a: UpdateDriverArgs, source: &str) -> AppResult<Value> {
+    let (bytes, from) = driver_bytes(app, &a.filename, &a.from).await?;
+    let new_xml = c4::driver_update::driver_xml(&bytes)
+        .ok_or_else(|| AppError::Other(format!("{} has no driver.xml inside; update_driver needs a .c4z package", a.filename)))?;
+    let s = app.session(a.director.as_deref()).await?;
+    app.ensure_writable(&app.resolve_director(a.director.as_deref())?)?;
+    let agent = c4::driver_update::find_agent(&s.snapshot(false).await?.project).ok_or_else(|| {
+        AppError::Other(format!(
+            "this project has no Driver Update agent ({}), so devices can't be moved to the new file in place",
+            c4::driver_update::AGENT_DRIVER
+        ))
+    })?;
+    let ev = s.director.evaluate_driver(agent, &a.filename, &new_xml).await?;
+    if !ev.can_update_driver {
+        return Ok(json!({ "status": "refused", "message": format!("The Driver Update agent says {} can't be updated ({}).", a.filename, ev.update_code), "evaluation": ev }));
+    }
+    if ev.prompt_overwrite && !a.force {
+        return Ok(json!({
+            "status": "not_updated",
+            "message": format!("{} Nothing was changed; pass force=true to update anyway.", ev.prompt_overwrite_message),
+            "evaluation": ev,
+        }));
+    }
+    // A forced update replaces an equal or newer version: say so on the card being approved.
+    let reason = match (ev.prompt_overwrite, a.reason) {
+        (true, r) => Some(format!("Forced: {}{}", ev.prompt_overwrite_message.trim(), r.map(|r| format!(" — {r}")).unwrap_or_default())),
+        (false, r) => r,
+    };
+    let op = Op::UpdateDriver { filename: a.filename.clone(), source: from, agent, restart: ev.requires_restart, bytes };
+    let r = approvals::propose(app, a.director.as_deref(), vec![op], reason, source).await?;
+    let mut out = outcome(&r);
+    out["evaluation"] = json!(ev);
+    if r.status == Status::Applied {
+        // The agent applies it asynchronously; give it a moment, then read what the controller has.
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        let installed = match app.broker(&s).await {
+            Ok(b) => b.driver_info(&a.filename).await.ok().flatten(),
+            Err(_) => None,
+        };
+        out["installed"] = json!(installed);
+        out["note"] = json!("The update runs on the controller after the request; if installed.version hasn't changed yet, call driver_status again in a few seconds.");
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct LuaOutputArgs {
+    #[serde(default)]
+    pub director: Option<String>,
+    /// The driver's device id (as in project_overview).
+    pub iddevice: u32,
+    /// How long to wait for new lines before answering (default 0: answer at once; at most 60).
+    #[serde(default)]
+    pub seconds: Option<u64>,
+    /// Only lines containing this text (any case).
+    #[serde(default)]
+    pub contains: Option<String>,
+}
+
+/// What a driver printed (the Lua tab in Composer): lines buffered since openComposer connected
+/// to this Director (up to 500 per device) plus any that arrive during the wait.
+pub async fn lua_output(app: &Arc<App>, a: LuaOutputArgs) -> AppResult<Value> {
+    let s = app.session(a.director.as_deref()).await?;
+    // Waiting is opt-in: a long default blocks the UI and outlasts some MCP clients' timeouts.
+    let secs = a.seconds.unwrap_or(0).min(60);
+    let lines = s.director.lua_output(a.iddevice, std::time::Duration::from_secs(secs), a.contains.as_deref()).await;
+    let new = lines.iter().filter(|(_, n)| *n).count();
+    let out: Vec<Value> = lines.iter().map(|(l, n)| json!({ "time": l.time, "text": l.text, "new": n })).collect();
+    let mut r = json!({ "iddevice": a.iddevice, "waited_seconds": secs, "new_lines": new, "lines": out });
+    if out.is_empty() {
+        // The usual reason: most drivers only print with their debug property on.
+        r["hint"] = json!("Nothing printed since openComposer connected. Most drivers only print with their Debug Mode \
+            (or Debug Level) property turned on; set it, make the driver do something, then ask again.");
+    }
+    Ok(r)
+}
+
+async fn load_source(app: &Arc<App>, src: &str) -> AppResult<(String, Project, c4::agents::AgentState, c4::Names)> {
     if let Some(file) = src.strip_prefix("backup:") {
         let path = backups::resolve(app, file)?;
-        let (_, p) = backups::read_project(&path)?;
-        return Ok((format!("backup {file}"), p, c4::Names::default()));
+        let (xml, p) = backups::read_project(&path)?;
+        return Ok((format!("backup {file}"), p, c4::agents::AgentState::parse(&xml), c4::Names::default()));
     }
     let which = src.strip_prefix("live").map(|r| r.trim_start_matches(':')).filter(|r| !r.is_empty());
     let s = app.session(which).await?;
     let snap = s.snapshot(false).await?;
-    Ok((format!("live {}", s.director.info.name), snap.project.clone(), s.names().await?))
+    Ok((format!("live {}", s.director.info.name), snap.project.clone(), snap.agents.clone(), s.names().await?))
 }
 
 pub async fn compare(app: &Arc<App>, a: CompareArgs) -> AppResult<Value> {
-    let (la, pa, na) = load_source(app, &a.from).await?;
-    let (lb, pb, nb) = load_source(app, &a.to).await?;
+    let (la, pa, aga, na) = load_source(app, &a.from).await?;
+    let (lb, pb, agb, nb) = load_source(app, &a.to).await?;
     let mut names = na;
     names.connections.extend(nb.connections);
     names.events.extend(nb.events);
-    let d = approvals::redact(diff(&pa, &pb, &names, DiffOptions { runtime: a.runtime }));
+    let d = approvals::redact(diff(&pa, &pb, &aga, &agb, &names, DiffOptions { runtime: a.runtime }));
     Ok(json!({ "from": la, "to": lb, "diff": d }))
 }
 
@@ -524,6 +622,9 @@ pub async fn propose(app: &Arc<App>, a: ProposeArgs, source: &str) -> AppResult<
     if a.ops.iter().any(|o| matches!(o, Op::LoadProject { .. })) {
         return Err(AppError::Other("use load_backup to replace a whole project".into()));
     }
+    if a.ops.iter().any(|o| matches!(o, Op::UpdateDriver { .. })) {
+        return Err(AppError::Other("use update_driver to replace a driver devices already use".into()));
+    }
     if a.ops.iter().any(|o| matches!(o, Op::InstallDriver { .. })) {
         return Err(AppError::Other("use install_driver to put a driver file on a controller".into()));
     }
@@ -537,6 +638,101 @@ pub async fn load_backup(app: &Arc<App>, a: LoadBackupArgs, source: &str) -> App
     let label = path.file_name().unwrap_or_default().to_string_lossy().into_owned();
     let r = approvals::propose(app, a.director.as_deref(), vec![Op::LoadProject { label, xml }], a.reason, source).await?;
     Ok(outcome(&r))
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UndoArgs {
+    /// The applied change to undo (`approval_id` from its result).
+    pub approval_id: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// Propose the undo of an applied change; approved like any change.
+pub async fn undo_change(app: &Arc<App>, a: UndoArgs, source: &str) -> AppResult<Value> {
+    let r = approvals::undo(app, &a.approval_id, a.reason, source).await?;
+    Ok(outcome(&r))
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct ExportScenesArgs {
+    #[serde(default)]
+    pub director: Option<String>,
+    /// Scene names to export; all when empty.
+    #[serde(default)]
+    pub scenes: Vec<String>,
+    /// Write the file here as well as returning it (the app's Save dialog).
+    #[serde(default)]
+    #[schemars(skip)]
+    pub path: Option<String>,
+}
+
+/// Advanced Lighting scenes as a file another project can import.
+pub async fn export_scenes(app: &Arc<App>, a: ExportScenesArgs) -> AppResult<Value> {
+    let s = app.session(a.director.as_deref()).await?;
+    let snap = s.snapshot(false).await?;
+    let agent = c4::scenes::lighting_agent(&snap.project).ok_or_else(|| AppError::Other("this project has no Advanced Lighting agent".into()))?;
+    let file = c4::scenes::export(&snap.project, &snap.agents, agent, &a.scenes).map_err(AppError::Other)?;
+    if let Some(path) = &a.path {
+        let json = serde_json::to_vec_pretty(&file).map_err(|e| AppError::Other(e.to_string()))?;
+        std::fs::write(path, json).map_err(|e| AppError::Other(format!("couldn't write {path}: {e}")))?;
+    }
+    Ok(json!({ "file": file, "path": a.path, "scenes": file.scenes.len() }))
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct ImportScenesArgs {
+    #[serde(default)]
+    pub director: Option<String>,
+    /// The scenes file, as export_scenes returns it.
+    #[serde(default)]
+    pub file: Option<c4::scenes::SceneFile>,
+    /// Or a scenes file on disk (the app's Open dialog).
+    #[serde(default)]
+    #[schemars(skip)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// Bring scenes from a file into this project, as one approval: new scenes are added, ones
+/// that exist by name get the file's lights. Lights are matched by room and name.
+pub async fn import_scenes(app: &Arc<App>, a: ImportScenesArgs, source: &str) -> AppResult<Value> {
+    let file = match (a.file, &a.path) {
+        (Some(f), _) => f,
+        (None, Some(path)) => {
+            let bytes = std::fs::read(path).map_err(|e| AppError::Other(format!("couldn't read {path}: {e}")))?;
+            serde_json::from_slice(&bytes).map_err(|e| AppError::Other(format!("{path} isn't a scenes file: {e}")))?
+        }
+        (None, None) => return Err(AppError::Other("give the scenes file (or its path)".into())),
+    };
+    let s = app.session(a.director.as_deref()).await?;
+    let snap = s.snapshot(true).await?;
+    let agent = c4::scenes::lighting_agent(&snap.project).ok_or_else(|| AppError::Other("this project has no Advanced Lighting agent".into()))?;
+    let plan = c4::scenes::import(&file, &snap.project, &snap.agents, agent).map_err(AppError::Other)?;
+    if plan.ops.is_empty() {
+        return Err(AppError::Other(match plan.unmatched.is_empty() {
+            true => "the file has no scenes".into(),
+            false => format!("none of the file's lights are in this project: {}", plan.unmatched.join("; ")),
+        }));
+    }
+    let mut why = format!("Import {} from {}", plural(file.scenes.len(), "lighting scene"), if file.project.is_empty() { "a file" } else { &file.project });
+    if !plan.unmatched.is_empty() {
+        why.push_str(&format!(". Not found here: {}", plan.unmatched.join("; ")));
+    }
+    if let Some(r) = a.reason {
+        why = format!("{why}. {r}");
+    }
+    let r = approvals::propose(app, a.director.as_deref(), plan.ops.clone(), Some(why), source).await?;
+    let mut out = outcome(&r);
+    out["added"] = json!(plan.added);
+    out["updated"] = json!(plan.updated);
+    out["unmatched"] = json!(plan.unmatched);
+    Ok(out)
+}
+
+fn plural(n: usize, what: &str) -> String {
+    if n == 1 { format!("1 {what}") } else { format!("{n} {what}s") }
 }
 
 pub async fn controller_drivers(app: &Arc<App>, a: DirectorArg) -> AppResult<Value> {
@@ -741,7 +937,7 @@ pub async fn send_command(app: &Arc<App>, a: CommandArgs, source: &str) -> AppRe
     let op = Op::SendCommand { device: a.device, command: a.command, params: a.params };
     if source == crate::commands::UI_SOURCE {
         let s = app.session(Some(&saved.id)).await?;
-        let r = s.director.apply(&op, None).await?;
+        let r = op.apply(&s.director, None).await?;
         return Ok(json!({ "status": "sent", "reply": r.notes }));
     }
     let r = approvals::propose(app, Some(&saved.id), vec![op], None, source).await?;
@@ -763,6 +959,69 @@ pub async fn device_state(app: &Arc<App>, a: StateArgs) -> AppResult<Value> {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct DeviceReadArgs {
+    #[serde(default)]
+    pub director: Option<String>,
+    /// Device, room or proxy to read from.
+    pub device: u32,
+    /// A read-only device command — `GET_*` or `IS_*`. e.g. `GET_AUDIO_MEDIA` to browse what
+    /// a room can play (the media list Composer shows), `GET_VOLUME_LEVEL`, `IS_MUTED`. A
+    /// command that changes something is refused here; send those through `send_command`.
+    pub command: String,
+    /// Command params as `{name, type, value}`, e.g. a browse cursor for `GET_AUDIO_MEDIA`.
+    #[serde(default)]
+    pub params: Vec<c4::ops::CodeParam>,
+}
+
+/// Read a device/room/proxy with a `GET_*`/`IS_*` command and return its reply — how Composer
+/// browses audio media or reads a device's live settings. No approval: it only reads. This is
+/// how an MCP client browses media (`GET_AUDIO_MEDIA`) to play a station into a room without
+/// the Composer UI.
+pub async fn device_read(app: &Arc<App>, a: DeviceReadArgs) -> AppResult<Value> {
+    let s = app.session(a.director.as_deref()).await?;
+    let params: Vec<(&str, &str, &str)> =
+        a.params.iter().map(|p| (p.name.as_str(), p.r#type.as_str(), p.value.as_str())).collect();
+    let reply = s.director.device_read(a.device, &a.command, &params).await?;
+    Ok(json!({ "device": a.device, "command": a.command, "reply": reply }))
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MediaArgs {
+    #[serde(default)]
+    pub director: Option<String>,
+    /// Room id (from project_overview / network paths), e.g. the GARAGE room.
+    pub room: u32,
+}
+
+/// What a room can play — its Watch/Listen source lists from the controller's REST API, the
+/// same list Control4's navigator and real Composer show. Audio sources (TuneIn, etc.) are
+/// under `listen_devices`. Read-only.
+pub async fn media_sources(app: &Arc<App>, a: MediaArgs) -> AppResult<Value> {
+    let s = app.session(a.director.as_deref()).await?;
+    let b = app.broker(&s).await?;
+    let media = b.room_media(a.room).await.map_err(|e| AppError::Other(e.to_string()))?;
+    Ok(json!({ "room": a.room, "media": media }))
+}
+
+/// Saved favorites from the controller (a user's pinned stations/menus — e.g. TuneIn favorites).
+/// Each has a `path` that is a menu or a `/rooms/:r/items/:i` pin. Read-only.
+pub async fn favorites(app: &Arc<App>, a: DirectorArg) -> AppResult<Value> {
+    let s = app.session(a.director.as_deref()).await?;
+    let b = app.broker(&s).await?;
+    let favs = b.favorites().await.map_err(|e| AppError::Other(e.to_string()))?;
+    Ok(json!({ "favorites": favs }))
+}
+
+/// A room's live state over the REST API — now-playing and the selected source (the variable
+/// bus `GET /api/v1/items/:id/variables`). Pass the room id. Read-only.
+pub async fn now_playing(app: &Arc<App>, a: MediaArgs) -> AppResult<Value> {
+    let s = app.session(a.director.as_deref()).await?;
+    let b = app.broker(&s).await?;
+    let vars = b.item_variables(a.room).await.map_err(|e| AppError::Other(e.to_string()))?;
+    Ok(json!({ "room": a.room, "variables": vars }))
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct TabsArgs {
     #[serde(default)]
     pub director: Option<String>,
@@ -775,7 +1034,7 @@ pub struct TabsArgs {
 pub async fn agent_view(app: &Arc<App>, a: ItemArgs) -> AppResult<Value> {
     let s = app.session(a.director.as_deref()).await?;
     let (snap, cat) = (s.snapshot(false).await?, s.catalog(false).await?);
-    crate::agent_views::view(&s.director, &snap.project, &cat, a.id).await
+    crate::agent_views::view(&s.director, &snap.project, &snap.agents, &cat, a.id).await
 }
 
 /// The web tabs a device's driver declares, as URLs to open in the app (see `webui`).

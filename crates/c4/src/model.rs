@@ -140,34 +140,10 @@ pub struct Variable {
     pub value: String,
 }
 
-impl CodeItem {
-    /// The device command this line sends and its static parameters (what `AddCode` takes),
-    /// or `None` for a line that isn't a plain device command.
-    pub fn command(&self) -> Option<(String, Vec<crate::ops::CodeParam>)> {
-        let doc = roxmltree::Document::parse(&self.cmdcond).ok()?;
-        let cmd = doc.descendants().find(|n| n.has_tag_name("devicecommand"))?;
-        let name = child_text(cmd, "command")?.to_string();
-        let params = cmd
-            .descendants()
-            .filter(|n| n.has_tag_name("param"))
-            .map(|n| {
-                let value = child(n, "value");
-                crate::ops::CodeParam {
-                    name: child_text(n, "name").unwrap_or_default().to_string(),
-                    r#type: value.and_then(|v| v.attribute("type")).unwrap_or("STRING").to_string(),
-                    value: value.and_then(|v| child_text(v, "static")).unwrap_or_default().to_string(),
-                }
-            })
-            .collect();
-        Some((name, params))
-    }
-
-    /// The line as Composer shows it: `NAME` replaced by the device it acts on, and Composer's
-    /// `#!` templates (variable lines) expanded.
-    pub fn text(&self, p: &Project) -> String {
-        crate::program::render(&self.display, self.device, p)
-    }
-}
+// `CodeItem::command` (parse the devicecommand) and `CodeItem::text` (render the line) used to
+// live here, but both are app-domain: `command` returns an `ops::CodeParam`, `text` drives the
+// programming render engine. They moved to `program.rs` as `code_command` / `code_text` so the
+// model stays free of `ops`/`program` and can live in the protocol crate.
 
 /// A line of programming: a command, conditional, loop… with nested children.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,14 +171,9 @@ pub struct Project {
     pub programming: BTreeMap<String, Vec<CodeItem>>,
     /// Director's next-id counter (`iditemcurrent`).
     pub next_item_id: u32,
-    /// Scheduler agent id → its scheduled events, from the agent's stored state. Each entry
-    /// id is also an event id of the agent in `programming`.
-    #[serde(default)]
-    pub schedules: BTreeMap<u32, Vec<crate::agents::ScheduleEntry>>,
-    /// Advanced Lighting, Announcements, Wake/Sleep and notification agents' stored data,
-    /// by agent id.
-    #[serde(default)]
-    pub agent_data: BTreeMap<u32, crate::agents::AgentData>,
+    // Built-in agents' stored state (Scheduler entries, lighting scenes, announcements…) is NOT
+    // here: it is app-domain and lives in `agents::AgentState`, parsed from the same document and
+    // carried beside the project (see `director::Snapshot`), so the model names no agent types.
 }
 
 /// Programming is keyed `"device:event"` so the map serialises as a JSON object.
@@ -321,12 +292,6 @@ impl Project {
             properties: child_text(node, "state").map(parse_persisted_properties).unwrap_or_default(),
         };
         self.items.insert(id, item);
-        if let Some(entries) = crate::agents::schedule_from_item(node) {
-            self.schedules.insert(id, entries);
-        }
-        if let Some(data) = crate::agents::data_from_item(node) {
-            self.agent_data.insert(id, data);
-        }
         if let Some(p) = parent.and_then(|p| self.items.get_mut(&p)) {
             p.children.push(id);
         }
@@ -516,7 +481,7 @@ mod tests {
         assert_eq!(p.network_bindings.len(), 1);
         let code = &p.programming[&event_key(20, 1)];
         assert_eq!(code[0].display, "Turn on Living TV");
-        assert_eq!(code[0].command().map(|(c, _)| c), Some("ON".into()));
+        // Parsing the line's command is now `program::code_command` (tested there).
         assert_eq!(code[0].children.len(), 1);
     }
 }

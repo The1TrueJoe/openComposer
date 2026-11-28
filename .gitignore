@@ -9,3 +9,4 @@ ui/dist/
 .DS_Store
 app/gen/
 *.tsbuildinfo
+.cargo/config.toml

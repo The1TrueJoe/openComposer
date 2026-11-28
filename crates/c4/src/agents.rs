@@ -12,6 +12,8 @@
 //! protocol and parsing only: names are resolved and things are worded for people in the app
 //! (`agent_view`).
 
+use std::collections::BTreeMap;
+
 use roxmltree::Node;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -641,6 +643,54 @@ pub fn data_from_item(item: Node<'_, '_>) -> Option<AgentData> {
     match child_text(item, "state").filter(|s| !s.is_empty()) {
         Some(state) => AgentData::parse(kind, state),
         None => AgentData::empty(kind),
+    }
+}
+
+/// openComposer's agent-state overlay: the Scheduler's entries and the other built-in agents'
+/// stored data, keyed by agent item id. Kept *beside* [`Project`](crate::Project), not on it, so
+/// the project model carries no agent types and can live in the protocol crate. It is parsed from
+/// the same `<currentstate>` document the project comes from, and travels with it through predict,
+/// diff and the approval flow.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AgentState {
+    /// Scheduler agent id → its scheduled events. Each entry id is also an event id in `programming`.
+    pub schedules: BTreeMap<u32, Vec<ScheduleEntry>>,
+    /// Advanced Lighting / Announcements / Wake-Sleep / notification agents' stored data, by agent id.
+    pub agent_data: BTreeMap<u32, AgentData>,
+}
+
+impl AgentState {
+    /// Gather the agent state out of a `<currentstate>` project document.
+    //
+    // ponytail: this re-parses the project XML a second time (the model parsed it once for
+    // `Project`). It's one extra roxmltree pass per snapshot, dwarfed by the network Upload that
+    // produced the XML. Fold into the model walk only if it ever shows up in a profile.
+    pub fn parse(xml: &str) -> Self {
+        let mut s = AgentState::default();
+        let opts = roxmltree::ParsingOptions { allow_dtd: true, ..Default::default() };
+        let Ok(doc) = roxmltree::Document::parse_with_options(xml, opts) else { return s };
+        if let Some(items) = child(doc.root_element(), "systemitems") {
+            for it in items.children().filter(|c| c.has_tag_name("item")) {
+                s.walk(it);
+            }
+        }
+        s
+    }
+
+    fn walk(&mut self, node: Node<'_, '_>) {
+        if let Some(id) = crate::xml::child_u32(node, "id") {
+            if let Some(entries) = schedule_from_item(node) {
+                self.schedules.insert(id, entries);
+            }
+            if let Some(data) = data_from_item(node) {
+                self.agent_data.insert(id, data);
+            }
+        }
+        if let Some(subs) = child(node, "subitems") {
+            for sub in subs.children().filter(|c| c.has_tag_name("item")) {
+                self.walk(sub);
+            }
+        }
     }
 }
 
@@ -1762,6 +1812,16 @@ pub fn parse_screensaver(xml: &str) -> ScreenSaver {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_gate_allows_gets_and_refuses_mutations() {
+        // device_read / agent_read send a command only if this says it reads. Media browse
+        // (GET_AUDIO_MEDIA) and queries must pass; anything that acts must not.
+        assert!(is_read_command("GET_AUDIO_MEDIA"));
+        assert!(is_read_command("is_muted"));
+        assert!(!is_read_command("SELECT_AUDIO_DEVICE"));
+        assert!(!is_read_command("SET_VOLUME_LEVEL"));
+    }
 
     const ENTRIES: &str = "<entries><entry><eventid>1</eventid><description>Component Auto Update Event</description><category/><enabled>True</enabled><locked>False</locked><creatorid>100116</creatorid><creatorstate/><hidden>False</hidden><user_hidden>False</user_hidden><start><offset>0</offset><offset_minutes>201</offset_minutes><start_date><start_day>10</start_day><start_month>6</start_month><start_year>2024</start_year><start_period>0</start_period><start_weekday>0</start_weekday></start_date><randomize>0</randomize></start><next_occurrence><year>2026</year><month>10</month><day>21</day><hour>3</hour><min>21</min><timezone/></next_occurrence><repeat><frequency>2</frequency><rate>1</rate><daymask>111</daymask></repeat></entry><entry><eventid>6</eventid><description>Sunrise</description><category/><enabled>True</enabled><locked>False</locked><creatorid>0</creatorid><hidden>False</hidden><start><offset>1</offset><offset_minutes>15</offset_minutes><start_date><start_day>16</start_day><start_month>6</start_month><start_year>2024</start_year><start_period>0</start_period><start_weekday>0</start_weekday></start_date><randomize>0</randomize></start><repeat><frequency>1</frequency><rate>1</rate><daymask>0</daymask></repeat></entry></entries>";
 

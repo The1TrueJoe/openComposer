@@ -7,7 +7,9 @@
  *  3. Connecting — and the project opens. */
 
 import { createColumnHelper } from "@tanstack/react-table";
-import { ArrowLeft, Cable, KeyRound, ArrowRight, Check, Plug, Plus, Radar, RefreshCw } from "lucide-react";
+import { ArrowLeft, Cable, KeyRound, ArrowRight, Check, Plug, Plus, Radar, RefreshCw, Trash2 } from "lucide-react";
+import { toast } from "sonner";
+import { useDialog } from "./Dialogs";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, errText, type Announcement, type AppStatus, type DirectorInfo, type SavedDirector, type SidecarDetection, type SidecarSession } from "../api";
 import { cx } from "../lib/ui";
@@ -15,10 +17,12 @@ import { Spinner } from "./controls";
 import { DataTable } from "./DataTable";
 import { Tip } from "./Dialogs";
 import { AddDirectorForm, CertificateForm } from "./setup";
+import { Takeover } from "../pages/settings/Takeover";
 import { ReadOnlyLock } from "./shell";
 
-/** Errors that mean "this controller wants a (different) client certificate". */
-const NEEDS_CERT = /certificate|access denied|handshake|tls/i;
+/** Errors that mean "this controller wants a (different) client certificate". A Director
+ *  that closes the connection right after the TLS handshake is rejecting the client cert. */
+const NEEDS_CERT = /certificate|access denied|handshake|tls|closed/i;
 
 type Target = { id: string; name: string };
 /** How to reach the controller, chosen in step 1; step 2 shows what that method finds. */
@@ -27,6 +31,7 @@ type Step =
   | { kind: "method" }
   | { kind: "controller"; method: Method }
   | { kind: "certificate"; target: Target; why: string | null }
+  | { kind: "takeover"; target: Target }
   | { kind: "connecting"; target: Target };
 
 const STEPS = ["Connection", "Controller", "Certificate", "Open project"] as const;
@@ -34,6 +39,13 @@ const STEPS = ["Connection", "Controller", "Certificate", "Open project"] as con
 export function ConnectScreen({ status, info, onChanged, onEnter }: {
   status: AppStatus; info: Map<string, DirectorInfo>; onChanged: () => void; onEnter: () => void;
 }) {
+  const { confirm } = useDialog();
+  const removeDirector = async (id: string, name: string) => {
+    if (await confirm({ title: `Remove ${name}?`, description: "Only openComposer's settings for it are removed; nothing on the controller changes.", confirmLabel: "Remove", danger: true })) {
+      try { await api.removeDirector(id); onChanged(); }
+      catch (e) { toast.error(errText(e)); }
+    }
+  };
   const { directors, active_director } = status.config;
   const [step, setStep] = useState<Step>({ kind: "method" });
   const [errors, setErrors] = useState<Record<string, string>>({});
@@ -80,6 +92,7 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
       onEnter();
     } catch (e) {
       const msg = errText(e);
+      toast.error(msg);
       if (NEEDS_CERT.test(msg)) {
         setStep({ kind: "certificate", target: t, why: msg });
       } else {
@@ -103,7 +116,9 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
       onChanged();
       await connect({ id: d.id, name: d.name });
     } catch (e) {
-      setErrors((x) => ({ ...x, [key]: errText(e) }));
+      const msg = errText(e);
+      toast.error(msg);
+      setErrors((x) => ({ ...x, [key]: msg }));
     } finally {
       setBusy(null);
     }
@@ -120,7 +135,9 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
       onChanged();
       await connect({ id: d.id, name: d.name });
     } catch (e) {
-      setErrors((x) => ({ ...x, [key]: errText(e) }));
+      const msg = errText(e);
+      toast.error(msg);
+      setErrors((x) => ({ ...x, [key]: msg }));
     } finally {
       setBusy(null);
     }
@@ -134,7 +151,7 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
     .filter((d) => !seen.has(d.id))
     .sort((a, b) => (a.id === first ? -1 : b.id === first ? 1 : a.name.localeCompare(b.name)));
 
-  const at = step.kind === "method" ? 0 : step.kind === "controller" ? 1 : step.kind === "certificate" ? 2 : 3;
+  const at = step.kind === "method" ? 0 : step.kind === "controller" ? 1 : step.kind === "certificate" || step.kind === "takeover" ? 2 : 3;
   const sidecarReady = !!sidecar && sidecar.sessions.length > 0;
   /** Jump to step 2 for a chosen method. */
   const choose = (method: Method) => { setLastMethod(method); setStep({ kind: "controller", method }); };
@@ -153,7 +170,7 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
     .sort((a, b) => Number(a.secondary) - Number(b.secondary));
   const savedRows: ControllerRow[] = others.map((d) => ({
     key: d.id, name: d.name, address: d.host, model: null, os: info.get(d.id)?.version ?? null, readOnly: d.mode === "read_only",
-    secondary: false, open: status.connected.includes(d.id), error: errors[d.id] || null, last: d.id === first, go: () => connect(d),
+    secondary: false, open: status.connected.includes(d.id), error: errors[d.id] || null, last: d.id === first, go: () => connect(d), remove: () => void removeDirector(d.id, d.name),
   }));
 
   return (
@@ -286,7 +303,26 @@ export function ConnectScreen({ status, info, onChanged, onEnter }: {
               : <>Controllers only talk to a client holding a certificate they trust: a <code>.pem</code> with its <code>.key</code>, or a <code>.p12</code>. openComposer doesn't include one.</>}
           </p>
           <CertificateForm identity={status.identity} onChanged={() => { onChanged(); void connect(step.target, true); }} />
+          <p className="dim small" style={{ marginTop: 12 }}>
+            No certificate the controller trusts? If you own this controller, you can{" "}
+            <button className="link" onClick={() => setStep({ kind: "takeover", target: step.target })}>take it over</button>{" "}
+            to install openComposer's own — it needs SSH access to the controller, not a certificate.
+          </p>
           <BackFoot onBack={() => setStep({ kind: "controller", method: lastMethod })} />
+        </>}
+
+        {step.kind === "takeover" && <>
+          <h1>Take over {step.target.name}</h1>
+          <p className="lede">
+            Install openComposer's own certificate authority on this controller so the certificate it
+            issues is trusted — no dealer certificate needed. Only do this on a controller you own.
+          </p>
+          <Takeover
+            onChanged={onChanged}
+            initialHost={directors.find((d) => d.id === step.target.id)?.host}
+            onDone={() => setStep({ kind: "certificate", target: step.target, why: null })}
+          />
+          <BackFoot onBack={() => setStep({ kind: "certificate", target: step.target, why: null })} />
         </>}
 
         {step.kind === "connecting" && (
@@ -325,6 +361,8 @@ interface ControllerRow {
   /** The one used last time. */
   last: boolean;
   go: () => void;
+  /** Saved Directors only: forget openComposer's settings for this one. */
+  remove?: () => void;
 }
 
 const col = createColumnHelper<ControllerRow>();
@@ -342,7 +380,6 @@ function ControllerTable({ rows, busy, label }: { rows: ControllerRow[]; busy: s
             {c.row.original.last && <span className="dim small">last used</span>}
           </span>
           {c.row.original.secondary && <span className="dim small">Secondary controller — the project lives on the Director.</span>}
-          {c.row.original.error && <span className="err small">{c.row.original.error}</span>}
         </span>
       ),
     }),
@@ -350,15 +387,24 @@ function ControllerTable({ rows, busy, label }: { rows: ControllerRow[]; busy: s
     col.accessor("model", { header: "Model", meta: { className: "nowrap-cell" }, cell: (c) => c.getValue() ?? <span className="dim">—</span> }),
     col.accessor("os", { header: "OS", meta: { width: 104, className: "mono nowrap-cell" }, cell: (c) => c.getValue() ?? <span className="dim">—</span> }),
     col.display({
-      id: "go", meta: { width: 112, align: "right" },
+      id: "go", meta: { width: 150, align: "right" },
       cell: (c) => {
         const r = c.row.original;
         if (r.secondary) return <Tip text="Only the main controller runs a Director"><span className="tag">secondary</span></Tip>;
         return (
-          <button className="act small primary" disabled={!!busy} onClick={r.go}>
-            {busy === r.key ? <Spinner /> : r.open ? <ArrowRight size={13} strokeWidth={1.8} /> : <Plug size={13} strokeWidth={1.8} />}
-            {r.open ? "Open" : "Connect"}
-          </button>
+          <span className="row nowrap" style={{ gap: 6, justifyContent: "flex-end" }}>
+            <button className="act small primary" disabled={!!busy} onClick={r.go}>
+              {busy === r.key ? <Spinner /> : r.open ? <ArrowRight size={13} strokeWidth={1.8} /> : <Plug size={13} strokeWidth={1.8} />}
+              {r.open ? "Open" : "Connect"}
+            </button>
+            {r.remove && !r.open && (
+              <Tip text="Remove this saved controller">
+                <button className="act small quiet" aria-label={`Remove ${r.name}`} disabled={!!busy} onClick={r.remove}>
+                  <Trash2 size={13} strokeWidth={1.8} />
+                </button>
+              </Tip>
+            )}
+          </span>
         );
       },
     }),

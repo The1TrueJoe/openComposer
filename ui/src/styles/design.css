@@ -18,14 +18,18 @@
 .tw-row.sel .tw-meta { color: var(--sel-dim); }
 
 /* The inspector */
-.insp-head { display: flex; align-items: flex-start; gap: 12px; padding: 12px 14px; flex: none; flex-wrap: wrap; }
-.insp-ic { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 9px; background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--accent); flex: none; }
+.insp-head { display: flex; flex-direction: column; gap: var(--s2); padding: var(--s4) var(--pad-band) var(--s3); flex: none; }
+.insp-id { display: flex; align-items: flex-start; gap: var(--s3); flex-wrap: wrap; }
+.insp-ic { width: 38px; height: 38px; display: grid; place-items: center; border-radius: var(--r-md); background: color-mix(in srgb, var(--accent) 8%, transparent); color: var(--accent); flex: none; }
 .insp-ic .drv-icon.generic { color: var(--accent); }
-.insp-ic img.drv-icon { border-radius: 6px; }
-.insp-title { flex: 1; min-width: 240px; }
-.insp-title h2 { margin: 0; font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.insp-facts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 4px; font-size: 12px; }
-.insp-acts { display: flex; gap: 6px; flex-wrap: wrap; }
+.insp-ic img.drv-icon { border-radius: var(--r-sm); }
+.insp-title { flex: 1; min-width: 200px; align-self: center; }
+.insp-title h2 { margin: 0; font-size: 16px; font-weight: 600; display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+/* The spec line runs full-width under the identity row, indented to sit under the name rather
+   than boxed into the title column where it wrapped to three lines. */
+.insp-facts { display: flex; align-items: center; gap: var(--s2) var(--s3); flex-wrap: wrap; padding-left: calc(38px + var(--s3)); font-size: 12px; color: var(--dim); }
+.insp-facts b { color: var(--text-2); }
+.insp-acts { display: flex; gap: var(--s2); flex-wrap: wrap; margin-left: auto; }
 
 /* The property grid */
 .pg { width: 100%; border-collapse: collapse; }
@@ -331,8 +335,6 @@
 /* The placeholder hint is drawn as an overlay so it stays one line and ellipsises when it
    doesn't fit — the native textarea placeholder wraps and would grow the bar. The textarea
    itself has an empty placeholder and still grows for what you actually type. */
-.ask-input { position: relative; display: flex; flex: 1 1 120px; min-width: 90px; }
-.ask-input textarea { width: 100%; }
 .ask-ph {
   position: absolute; left: 4px; right: 4px; top: 5px; pointer-events: none;
   color: var(--dim); font: inherit; line-height: 1.45;

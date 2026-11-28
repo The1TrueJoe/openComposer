@@ -3,7 +3,7 @@
 
 // ---- settings ------------------------------------------------------------------------------
 
-export type AccessMode = "read_only" | "approve";
+export type AccessMode = "read_only" | "approve" | "auto";
 export type Provider = "claude" | "codex";
 
 export interface SavedDirector {
@@ -394,6 +394,14 @@ export interface PhysicalDevice {
 
 export type ZigbeeQuery = "server" | "mesh" | "nodes" | "zaps";
 
+/** A Zigbee mesh management action (crates/c4/src/zigbee.rs). */
+export type ZigbeeAction =
+  | { zigbee: "permit_join"; seconds: number }
+  | { zigbee: "remove_node"; address: string }
+  | { zigbee: "identify_access_point"; address: string }
+  | { zigbee: "enable_zap"; coordinator: boolean; idowner?: number }
+  | { zigbee: "disable_zap" };
+
 export interface DriverDoc {
   filename: string;
   name: string;
@@ -608,8 +616,12 @@ export type Op =
   | { op: "add_email_template"; agent: number; template: EmailTemplateSpec }
   | { op: "modify_email_template"; agent: number; id: number; template: EmailTemplateSpec }
   | { op: "remove_email_template"; agent: number; id: number }
+  /** Manage the Zigbee mesh (no project change; acts on live hardware, approved like a write). */
+  | { op: "zigbee_control"; iddevice: number; action: ZigbeeAction }
   /** Only ever produced by `install_driver`; the file's bytes are not serialized back. */
   | { op: "install_driver"; filename: string; source: string }
+  /** Only ever produced by `update_driver`: replaces a driver devices already run. */
+  | { op: "update_driver"; filename: string; source: string; agent: number; restart: boolean }
   /** Only ever produced by `load_backup`; the XML is not serialized back. */
   | { op: "load_project"; label: string };
 
@@ -641,6 +653,31 @@ export interface Approval {
   applied: { created: number[]; notes: string[] }[];
   restore_point: string | null;
   verification: Verification | null;
+  /** Set once applied: whether it can be undone and what an undo leaves as it is. */
+  undo?: UndoInfo | null;
+  /** The change this one undid. */
+  undo_of?: string | null;
+}
+
+export interface UndoInfo {
+  /** Changes an undo would propose; 0 means only the restore point can take it back. */
+  changes: number;
+  not_undone: string[];
+  undone_by: string | null;
+}
+
+/** An Advanced Lighting scenes file (`export_scenes`). */
+export interface SceneFile {
+  format: "opencomposer.lighting-scenes";
+  version: number;
+  project: string;
+  scenes: { name: string; lights: { name: string; room: string | null; steps: LightStep[] }[] }[];
+}
+
+export interface SceneImportOutcome extends Outcome {
+  added: string[];
+  updated: string[];
+  unmatched: string[];
 }
 
 /** What `propose_changes` / `load_backup` resolve with once a decision is made. */

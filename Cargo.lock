@@ -568,6 +568,7 @@ dependencies = [
 name = "c4"
 version = "0.1.0"
 dependencies = [
+ "control4-soap",
  "hex",
  "md-5",
  "pbkdf2 0.12.2",
@@ -579,6 +580,7 @@ dependencies = [
  "rsa",
  "rustls",
  "schemars 1.2.3",
+ "sddp",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -826,6 +828,25 @@ name = "const-oid"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6ef517f0926dd24a1582492c791b6a4818a4d94e789a334894aa15b0d12f55c"
+
+[[package]]
+name = "control4-soap"
+version = "0.1.0"
+source = "git+https://github.com/The1TrueJoe/control4-soap?rev=c815176#c8151765b3445d2d73a58e3ad06ffdb622c0c727"
+dependencies = [
+ "hex",
+ "rand_core 0.6.4",
+ "roxmltree",
+ "rsa",
+ "rustls",
+ "serde_json",
+ "sha2 0.10.9",
+ "sha2 0.11.1",
+ "thiserror 2.0.21",
+ "tokio",
+ "tokio-rustls",
+ "tracing",
+]
 
 [[package]]
 name = "cookie"
@@ -4379,6 +4400,16 @@ dependencies = [
  "pbkdf2 0.13.0",
  "salsa20",
  "sha2 0.11.1",
+]
+
+[[package]]
+name = "sddp"
+version = "0.1.0"
+source = "git+https://github.com/The1TrueJoe/sddp?rev=f1cbff62e434eec6558a2f83b07dd4b62cd60576#f1cbff62e434eec6558a2f83b07dd4b62cd60576"
+dependencies = [
+ "socket2",
+ "thiserror 2.0.21",
+ "tokio",
 ]
 
 [[package]]

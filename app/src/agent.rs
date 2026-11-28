@@ -431,7 +431,7 @@ fn on_claude_event(app: &App, c: &Conversation, v: &Value) {
 async fn send_codex(app: &Arc<App>, c: &Arc<Conversation>, text: &str) -> AppResult<()> {
     let bin = cli_path(app, Provider::Codex)
         .ok_or_else(|| AppError::Other("Codex isn't installed (or set its path in Settings)".into()))?;
-    let me = std::env::current_exe().map_err(|e| AppError::Other(e.to_string()))?;
+    let me = proc::self_exe().map_err(|e| AppError::Other(e.to_string()))?;
     let mut args: Vec<String> = vec!["exec".into()];
     let session = c.session.lock().unwrap().clone();
     if let Some(s) = &session {

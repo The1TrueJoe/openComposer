@@ -174,7 +174,7 @@ pub async fn run(app: &Arc<App>, p: Params) -> AppResult<Report> {
         .ok_or_else(|| AppError::Other(format!("could not read an OS version from {:?}", p.os_version)))?;
     let dialect = Dialect::for_version(version);
     let era = dialect.takeover_era();
-    let chains: Vec<&'static str> = dialect.client_ca_chains().to_vec();
+    let chains: Vec<&'static str> = c4::takeover::client_ca_chains(era).to_vec();
 
     let ca = load_or_generate_ca(app)?;
     let ca_label = stored_ca(app).ok().flatten().map(|s| s.label).unwrap_or_default();
@@ -324,7 +324,7 @@ pub async fn revert(app: &Arc<App>, p: RevertParams) -> AppResult<Report> {
         .ok_or_else(|| AppError::Other(format!("could not read an OS version from {:?}", p.os_version)))?;
     let dialect = Dialect::for_version(version);
     let era = dialect.takeover_era();
-    let chains: Vec<&'static str> = dialect.client_ca_chains().to_vec();
+    let chains: Vec<&'static str> = c4::takeover::client_ca_chains(era).to_vec();
 
     let ca = load_or_generate_ca(app)?;
     let ca_cert = ca.cert_pem().to_string();

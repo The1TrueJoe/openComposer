@@ -139,7 +139,9 @@ impl OpenComposerMcp {
         self.run("detect_sidecar", String::new(), actions::detect_sidecar()).await
     }
 
-    #[tool(description = "Zigbee mesh information from the controller: server, mesh, nodes or zaps.",
+    #[tool(description = "Zigbee mesh information from the controller: server, mesh, nodes or zaps. \
+        To manage the mesh (permit-join to pair, remove a node, flash an access point) propose a \
+        zigbee_control op; to pair a joined device to its driver use add_network_binding type 3.",
         annotations(read_only_hint = true))]
     async fn zigbee(&self, Parameters(a): Parameters<ZigbeeArgs>) -> Result<CallToolResult, McpError> {
         let s = format!("{:?}", a.query);
@@ -184,7 +186,8 @@ impl OpenComposerMcp {
         add_schedule_entry, modify_schedule_entry, remove_schedule_entry, and for other built-in agents (ids and current settings from agent_view): \
         add_lighting_scene, rename_lighting_scene, remove_lighting_scene, set_scene_light, remove_scene_light, add_announcement, modify_announcement, \
         remove_announcement, add_wake_sleep_room, modify_wake_sleep_room, remove_wake_sleep_room, add/modify/remove_push_notification, \
-        add/modify/remove_email_template). For add_code take the event id from the device's events and the command from the target's commands (both in get_item). \
+        add/modify/remove_email_template, and zigbee_control {iddevice (the controller's Zigbee server, = director_info device_id), action: {zigbee: permit_join, seconds} | {zigbee: remove_node, address} | {zigbee: identify_access_point, address} | {zigbee: enable_zap, coordinator, idowner?} | {zigbee: disable_zap} (enable/disable a device as a Zigbee access point — for these, iddevice is the AP's OWN device id, NOT the Director; sends ENABLE_ZAP/DISABLE_ZAP, the Director dials the device's project Target IP)}). \
+        For add_code take the event id from the device's events and the command from the target's commands (both in get_item). \
         Programming: lines go at `before` (a line id, 0 = the end) under `parent` (an If/While/Else id, 0 = top level). add_conditional adds an If (`loop`: true for a While) \
         testing a device conditional (`{type: device, target, name, logic, params}` from the target's `conditionals` in get_item) or a variable \
         (`{type: variable, variable: {device, id}, logic, value | other}` from get_variables); add_else puts an Else right after an If (parent = the If's parent, before = the line after it); \
@@ -209,6 +212,25 @@ impl OpenComposerMcp {
     async fn install_driver(&self, Parameters(a): Parameters<InstallDriverArgs>) -> Result<CallToolResult, McpError> {
         let s = format!("{} from {}", a.filename, a.from);
         self.run("install_driver", s, actions::install_driver(&self.app, a, self.source)).await
+    }
+
+    #[tool(description = "Replace a driver that devices already use with a newer file, as Composer's Update Driver does. \
+        The controller's Driver Update agent is asked first; if versions are equal or older nothing happens unless force=true. \
+        The file comes from `path:<absolute path>`, `backup:<library file>` or `director:<another Director>`. Needs approval \
+        (a restore point is made). Returns the agent's evaluation and the installed version a few seconds later.",
+        annotations(read_only_hint = false, destructive_hint = true))]
+    async fn update_driver(&self, Parameters(a): Parameters<UpdateDriverArgs>) -> Result<CallToolResult, McpError> {
+        let s = format!("{} from {}", a.filename, a.from);
+        self.run("update_driver", s, actions::update_driver(&self.app, a, self.source)).await
+    }
+
+    #[tool(description = "What a driver printed (the Lua output Composer shows) for a device id: lines buffered since \
+        openComposer connected (up to 500 per device). Answers at once; pass `seconds` (max 60) to also wait for new \
+        lines, which come back with new=true. Optional `contains` filter (any case). Most drivers only print with \
+        their Debug Mode property on.", annotations(read_only_hint = true))]
+    async fn lua_output(&self, Parameters(a): Parameters<LuaOutputArgs>) -> Result<CallToolResult, McpError> {
+        let s = format!("#{}", a.iddevice);
+        self.run("lua_output", s, actions::lua_output(&self.app, a)).await
     }
 
     #[tool(description = "Driver files installed on the controller (manufacturer, model, version, SDDP search types).",
@@ -269,8 +291,37 @@ impl OpenComposerMcp {
         self.run("device_state", format!("#{}", a.device), actions::device_state(&self.app, a)).await
     }
 
-    #[tool(description = "Send a command to a device now (e.g. ON, SET_LEVEL with LEVEL=50) — it acts on real \
-        equipment, so the user approves it first. Commands come from get_item → commands.",
+    #[tool(description = "Read a device/room/proxy with a GET_*/IS_* command and get its reply — how Composer \
+        browses a room's audio media (GET_AUDIO_MEDIA, to find and play a station into a room) or reads live \
+        settings (GET_VOLUME_LEVEL, IS_MUTED). Read-only, no approval. Non-read commands go through send_command.",
+        annotations(read_only_hint = true))]
+    async fn device_read(&self, Parameters(a): Parameters<DeviceReadArgs>) -> Result<CallToolResult, McpError> {
+        let s = format!("{} → #{}", a.command, a.device);
+        self.run("device_read", s, actions::device_read(&self.app, a)).await
+    }
+
+    #[tool(description = "What a room can play: its Watch/Listen source lists from the controller (the same lists Control4's \
+        navigator and real Composer show). Audio sources like TuneIn are under listen_devices. Pass the room id.",
+        annotations(read_only_hint = true))]
+    async fn media_sources(&self, Parameters(a): Parameters<MediaArgs>) -> Result<CallToolResult, McpError> {
+        self.run("media_sources", format!("room #{}", a.room), actions::media_sources(&self.app, a)).await
+    }
+
+    #[tool(description = "Saved favorites on the controller — a user's pinned stations and menus (e.g. TuneIn favorites). \
+        Each favorite's path is a menu or a /rooms/:r/items/:i pin.", annotations(read_only_hint = true))]
+    async fn favorites(&self, Parameters(a): Parameters<DirectorArg>) -> Result<CallToolResult, McpError> {
+        self.run("favorites", String::new(), actions::favorites(&self.app, a)).await
+    }
+
+    #[tool(description = "A room's live now-playing and selected-source state from the controller's REST variable bus. \
+        Pass the room id.", annotations(read_only_hint = true))]
+    async fn now_playing(&self, Parameters(a): Parameters<MediaArgs>) -> Result<CallToolResult, McpError> {
+        self.run("now_playing", format!("room #{}", a.room), actions::now_playing(&self.app, a)).await
+    }
+
+    #[tool(description = "Send a command to a device now (e.g. ON, SET_LEVEL with LEVEL=50, SET_VOLUME_LEVEL, \
+        SELECT_AUDIO_DEVICE, MUTE_TOGGLE) — it acts on real equipment, so the user approves it first. Commands \
+        come from get_item → commands. For GET_*/IS_* reads (media browse, current state) use device_read instead.",
         annotations(read_only_hint = false, destructive_hint = true))]
     async fn send_command(&self, Parameters(a): Parameters<CommandArgs>) -> Result<CallToolResult, McpError> {
         let s = format!("{} → #{}", a.command, a.device);
@@ -283,6 +334,35 @@ impl OpenComposerMcp {
     async fn load_backup(&self, Parameters(a): Parameters<LoadBackupArgs>) -> Result<CallToolResult, McpError> {
         let s = a.backup.clone();
         self.run("load_backup", s, actions::load_backup(&self.app, a, self.source)).await
+    }
+
+    #[tool(description = "Undo a change that was applied (by approval_id from its result): proposes the changes that \
+        take the project back, which the user approves like any change. Removed items and programming lines, \
+        commands and driver installs can't be undone this way; the result says what wasn't put back \
+        (load_backup with the change's restore_point covers those).",
+        annotations(read_only_hint = false, destructive_hint = true))]
+    async fn undo_change(&self, Parameters(a): Parameters<UndoArgs>) -> Result<CallToolResult, McpError> {
+        let s = a.approval_id.clone();
+        self.run("undo_change", s, actions::undo_change(&self.app, a, self.source)).await
+    }
+
+    #[tool(description = "Export Advanced Lighting scenes (all, or those named) as a file: each scene's lights by room \
+        and name with their steps, so import_scenes can bring them into this or another project.",
+        annotations(read_only_hint = true))]
+    async fn export_scenes(&self, Parameters(mut a): Parameters<ExportScenesArgs>) -> Result<CallToolResult, McpError> {
+        a.path = None; // MCP clients get the file back; only the app's Save dialog writes to disk.
+        let s = format!("{} scene(s)", a.scenes.len());
+        self.run("export_scenes", s, actions::export_scenes(&self.app, a)).await
+    }
+
+    #[tool(description = "Import Advanced Lighting scenes from a file export_scenes made (from this or another \
+        project), as one approval: scenes that don't exist are added, ones that do (by name) get the file's \
+        lights. Lights are matched by room and name; the result lists any that weren't found.",
+        annotations(read_only_hint = false, destructive_hint = false))]
+    async fn import_scenes(&self, Parameters(mut a): Parameters<ImportScenesArgs>) -> Result<CallToolResult, McpError> {
+        a.path = None; // the file comes in the call; only the app's Open dialog reads from disk.
+        let s = a.file.as_ref().map(|f| format!("{} scene(s)", f.scenes.len())).unwrap_or_default();
+        self.run("import_scenes", s, actions::import_scenes(&self.app, a, self.source)).await
     }
 }
 

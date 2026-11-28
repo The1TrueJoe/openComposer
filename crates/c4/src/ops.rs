@@ -7,6 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::agents::AgentState;
+use crate::director::{Applied, Catalog, Director, DirectorError};
 use crate::model::{Binding, Item, ItemKind, NetworkBinding, Project};
 use crate::soap::Call;
 
@@ -57,6 +59,12 @@ pub enum Op {
     RemoveConnection { consumer_device: u32, consumer_binding: u32, class: String },
     /// Identify a device on the network (what Composer's "Identify" does for SDDP).
     /// `device: 0` means the device added earlier in the same batch.
+    ///
+    /// For an SDDP device, `address` is the discovered device's **USN** (its `uuid` from
+    /// `network_status` → `discovered`, format `<Type>-<Host>`, e.g.
+    /// `openhc:speakerpoint-speakerpoint-000fff18b81b`) — NOT its IP. The Director stores the
+    /// USN and resolves the dial address from it; a bare IP it can't resolve, so the device
+    /// stays offline (that silent failure is rejected up front in `predict`).
     AddNetworkBinding { device: u32, binding: u32, address_type: u32, address: String, search_type: String },
     RemoveNetworkBinding { device: u32, binding: u32 },
     /// Set a driver property (what typing into Composer's property grid does).
@@ -237,6 +245,22 @@ pub enum Op {
         #[schemars(skip)]
         bytes: Vec<u8>,
     },
+    /// Replace a driver devices already use: put the file on the controller, then have its
+    /// Driver Update agent swap it in (see [`crate::driver_update`]). `agent` is that agent's
+    /// item id; `restart` is what its evaluation said about a Director restart.
+    UpdateDriver {
+        filename: String,
+        source: String,
+        agent: u32,
+        restart: bool,
+        #[serde(skip, default)]
+        #[schemars(skip)]
+        bytes: Vec<u8>,
+    },
+    /// Manage the Zigbee mesh (permit-join, remove a node, flash an access point). Changes
+    /// no project data; acts on the live mesh, so it is approved like a write. `iddevice` is
+    /// the controller's Zigbee server (the Director's device id). See [`crate::zigbee`].
+    ZigbeeControl { iddevice: u32, action: crate::zigbee::ZigbeeAction },
     /// Replace the whole project (Composer's "Load Project"). `xml` is a `<currentstate>`.
     LoadProject {
         label: String,
@@ -303,6 +327,13 @@ pub enum OpError {
     NotConnected { device: String, binding: u32, class: String },
     #[error("{device} has no network binding #{binding}")]
     NoNetworkBinding { device: String, binding: u32 },
+    #[error(
+        "can't identify {device} as {search_type} with the IP address {address}: an SDDP device is \
+         identified by its USN (e.g. {search_type}-<host>), which the Director resolves to the dial \
+         address — a bare IP is not a USN and the Director leaves the address empty (the device stays \
+         offline). Use the discovered device's `uuid` from network_status as the address."
+    )]
+    IdentifyWithIp { device: String, address: String, search_type: String },
     #[error("no programming line #{id} under that event")]
     NoSuchCode { id: u32 },
     #[error("#{0} is not a Scheduler agent")]
@@ -334,12 +365,12 @@ impl Op {
     /// Fill in what the op's calls need from the project it is about to be predicted on and
     /// applied to (how many steps a light has in a scene, an announcement's hidden parts).
     /// Approvals call this for every op, in order, on the predicted project.
-    pub fn prepare(&mut self, p: &Project) {
-        crate::agent_ops::prepare(self, p);
+    pub fn prepare(&mut self, p: &Project, agents: &AgentState) {
+        crate::agent_ops::prepare(self, p, agents);
     }
 
     /// One line for an approval card, in the project's own names.
-    pub fn describe(&self, p: &Project) -> String {
+    pub fn describe(&self, p: &Project, agents: &AgentState) -> String {
         let n = |id: u32| format!("“{}”", p.name_of(id));
         match self {
             Op::AddDevice { room, name, driver } => format!("Add “{name}” ({driver}) to {}", n(*room)),
@@ -399,16 +430,27 @@ impl Op {
                 format!("Add scheduled event “{}” to {}: {} at {}", entry.name, n(*agent), entry.repeat_text(), entry.time_text())
             }
             Op::ModifyScheduleEntry { agent, id, entry, .. } => {
-                let old = p.schedules.get(agent).and_then(|es| es.iter().find(|e| e.id == *id)).map(|e| e.spec.name.clone());
+                let old = agents.schedules.get(agent).and_then(|es| es.iter().find(|e| e.id == *id)).map(|e| e.spec.name.clone());
                 format!("Change scheduled event “{}” in {}", old.unwrap_or_else(|| entry.name.clone()), n(*agent))
             }
             Op::RemoveScheduleEntry { agent, id } => {
-                let old = p.schedules.get(agent).and_then(|es| es.iter().find(|e| e.id == *id)).map(|e| e.spec.name.clone());
+                let old = agents.schedules.get(agent).and_then(|es| es.iter().find(|e| e.id == *id)).map(|e| e.spec.name.clone());
                 format!("Remove scheduled event “{}” from {}", old.unwrap_or_else(|| format!("#{id}")), n(*agent))
             }
-            agent_op!() => crate::agent_ops::describe(self, p).unwrap_or_default(),
+            agent_op!() => crate::agent_ops::describe(self, p, agents).unwrap_or_default(),
+            Op::ZigbeeControl { iddevice, action } => action.describe(*iddevice),
             Op::InstallDriver { filename, source, bytes } => {
                 format!("Install driver file {filename} ({} KB) from {source}", bytes.len().div_ceil(1024))
+            }
+            Op::UpdateDriver { filename, source, bytes, restart, .. } => {
+                let using = p.items.values().filter(|i| i.driver.as_deref().is_some_and(|d| d.eq_ignore_ascii_case(filename))).count();
+                format!(
+                    "Update driver {filename} ({} KB) from {source}; {} use{} it{}",
+                    bytes.len().div_ceil(1024),
+                    if using == 1 { "1 device".to_string() } else { format!("{using} devices") },
+                    if using == 1 { "s" } else { "" },
+                    if *restart { "; Director will restart" } else { "" }
+                )
             }
             Op::LoadProject { label, .. } => format!("Replace the whole project with {label}"),
         }
@@ -416,7 +458,7 @@ impl Op {
 
     /// Apply to a copy of the project. Ids for new items are guesses (Director assigns
     /// them), which is fine for a preview.
-    pub fn predict(&self, p: &mut Project) -> Result<(), OpError> {
+    pub fn predict(&self, p: &mut Project, agents: &mut AgentState) -> Result<(), OpError> {
         match self {
             Op::AddDevice { room, name, driver } => {
                 expect_kind(p, *room, &[ItemKind::Room], "a device", "room")?;
@@ -560,6 +602,17 @@ impl Op {
                 // 0 = the device an earlier op in this batch added (it took the last id).
                 let device = &if *device == 0 { p.next_item_id } else { *device };
                 p.item(*device).ok_or(OpError::NoSuchItem(*device))?;
+                // An SDDP identify (type 1, a `vendor:model` search type) must carry the device's
+                // USN as the address — the Director stores it and resolves the dial address from it.
+                // A bare IP is the common mistake: the Director can't resolve it and the device
+                // stays offline, silently. A USN is never a bare IP, so catch it here.
+                if *address_type == 1 && search_type.contains(':') && address.parse::<std::net::Ipv4Addr>().is_ok() {
+                    return Err(OpError::IdentifyWithIp {
+                        device: p.name_of(*device),
+                        address: address.clone(),
+                        search_type: search_type.clone(),
+                    });
+                }
                 p.network_bindings.retain(|n| !(n.device == *device && n.binding == *binding));
                 p.network_bindings.push(NetworkBinding {
                     device: *device,
@@ -654,7 +707,7 @@ impl Op {
                 it.enabled = *enabled;
             }
             Op::AddScheduleEntry { agent, entry } => {
-                let entries = schedule_of(p, *agent)?;
+                let entries = schedule_of(p, agents, *agent)?;
                 check_entry(entries, entry, None)?;
                 // Director numbers entries from a counter that never goes back; any unused
                 // id is as good for a preview (the diff matches added entries by name).
@@ -670,7 +723,7 @@ impl Op {
                 });
             }
             Op::ModifyScheduleEntry { agent, id, entry, creator, category } => {
-                let entries = schedule_of(p, *agent)?;
+                let entries = schedule_of(p, agents, *agent)?;
                 check_entry(entries, entry, Some(*id))?;
                 let e = entries.iter_mut().find(|e| e.id == *id).ok_or(OpError::NoSuchScheduleEntry(*id))?;
                 if e.locked {
@@ -687,7 +740,7 @@ impl Op {
                 e.spec = entry.clone();
             }
             Op::RemoveScheduleEntry { agent, id } => {
-                let entries = schedule_of(p, *agent)?;
+                let entries = schedule_of(p, agents, *agent)?;
                 let pos = entries.iter().position(|e| e.id == *id).ok_or(OpError::NoSuchScheduleEntry(*id))?;
                 if entries[pos].locked {
                     return Err(OpError::ScheduleEntryLocked(entries[pos].spec.name.clone()));
@@ -695,8 +748,10 @@ impl Op {
                 entries.remove(pos);
                 p.programming.remove(&crate::model::event_key(*agent, *id));
             }
-            agent_op!() => crate::agent_ops::predict(self, p).unwrap_or(Ok(()))?,
-            Op::InstallDriver { .. } => {}
+            agent_op!() => crate::agent_ops::predict(self, p, agents).unwrap_or(Ok(()))?,
+            // Mesh management changes no project data (like SendCommand); just validate it.
+            Op::ZigbeeControl { action, .. } => action.validate().map_err(OpError::BadAgentChange)?,
+            Op::InstallDriver { .. } | Op::UpdateDriver { .. } => {}
             Op::LoadProject { xml, .. } => {
                 *p = Project::parse(xml).map_err(|e| OpError::BadProject(e.to_string()))?;
             }
@@ -849,7 +904,9 @@ impl Op {
                 vec![Call::new("SendToDevice").num("iddevice", *agent).xml("data", cmd)]
             }
             agent_op!() => crate::agent_ops::calls(self).unwrap_or_default(),
-            Op::InstallDriver { .. } => vec![],
+            Op::ZigbeeControl { iddevice, action } => action.calls(*iddevice),
+            // Sent by the app: the file goes over the web API, then the agent call is async.
+            Op::InstallDriver { .. } | Op::UpdateDriver { .. } => vec![],
             Op::LoadProject { xml, .. } => {
                 let body = xml.trim_start();
                 let body = match body.strip_prefix("<?xml") {
@@ -897,13 +954,13 @@ fn expect_kind(p: &Project, id: u32, kinds: &[ItemKind], what: &'static str, exp
 }
 
 /// The entries of a Scheduler agent, or why `agent` isn't one.
-fn schedule_of(p: &mut Project, agent: u32) -> Result<&mut Vec<crate::agents::ScheduleEntry>, OpError> {
+fn schedule_of<'a>(p: &Project, agents: &'a mut AgentState, agent: u32) -> Result<&'a mut Vec<crate::agents::ScheduleEntry>, OpError> {
     let it = p.item(agent).ok_or(OpError::NoSuchItem(agent))?;
     let is_scheduler = it.driver.as_deref().and_then(crate::agents::AgentKind::from_driver) == Some(crate::agents::AgentKind::Scheduler);
     if !is_scheduler {
         return Err(OpError::NotScheduler(agent));
     }
-    Ok(p.schedules.entry(agent).or_default())
+    Ok(agents.schedules.entry(agent).or_default())
 }
 
 /// Composer's "Edit Entry" checks, plus its rule that names are unique.
@@ -957,7 +1014,7 @@ fn code_text(p: &Project, device: u32, event: u32, id: u32) -> String {
     p.programming
         .get(&crate::model::event_key(device, event))
         .and_then(|code| crate::program::find(code, id))
-        .map(|c| c.text(p))
+        .map(|c| crate::program::code_text(c, p))
         .unwrap_or_else(|| format!("line #{id}"))
 }
 
@@ -972,11 +1029,109 @@ fn prune_code(code: &mut Vec<crate::model::CodeItem>, gone: &[u32]) {
     }
 }
 
+/// Built-in location/room definitions for a factory-blank project. Director refuses to add the
+/// first site, building, floor or room when the project has none to copy, so these stand in. They
+/// follow the structure Director stores — a location carries its built-in image, a room is made
+/// from `roomdevice.c4i` (see `tests/fixtures/sample-project.xml`) — and `with_fresh_tag` gives
+/// each its own tag, with Director filling in the rest on `AddItem`. A template captured from an
+/// existing item is always preferred; these only apply when there is none.
+const FALLBACK_SITE: &str = "<item><itemdata><large_image>locations_lg/site.gif</large_image></itemdata></item>";
+const FALLBACK_BUILDING: &str = "<item><itemdata><large_image>locations_lg/building.gif</large_image></itemdata></item>";
+const FALLBACK_FLOOR: &str = "<item><itemdata><large_image>locations_lg/floor.gif</large_image></itemdata></item>";
+const FALLBACK_ROOM: &str = "<item><itemdata><config_data_file>roomdevice.c4i</config_data_file></itemdata></item>";
+
+/// The built-in location template for a site (2), building (3) or floor (4) kind code.
+fn fallback_location(code: u32) -> Option<&'static str> {
+    match code {
+        2 => Some(FALLBACK_SITE),
+        3 => Some(FALLBACK_BUILDING),
+        4 => Some(FALLBACK_FLOOR),
+        _ => None,
+    }
+}
+
+/// The item definition Director wants in `AddItem` for a new location, copied from one that
+/// exists, or a built-in fallback when the project is blank and has none. Lives here with the
+/// op authoring, not on `Catalog`, so the director/catalog carry no `Op` knowledge.
+pub fn template_for<'a>(catalog: &'a Catalog, op: &Op) -> Option<&'a str> {
+    match op {
+        Op::AddRoom { .. } => catalog.room_template.as_deref().or(Some(FALLBACK_ROOM)),
+        Op::AddLocation { kind, .. } => {
+            let code = kind.item_kind().code();
+            catalog.location_templates.get(&code).map(String::as_str).or_else(|| fallback_location(code))
+        }
+        _ => None,
+    }
+}
+
+/// `template` with its `<itemdata><tag>` replaced by (or given) a new one, in the form Composer
+/// uses: a v4 UUID with underscores, e.g. `18132870_8761_424b_9559_cb6bc5f2b305`.
+fn with_fresh_tag(template: &str) -> String {
+    use rand_core::{OsRng, RngCore};
+    let mut b = [0u8; 16];
+    OsRng.fill_bytes(&mut b);
+    b[6] = (b[6] & 0x0f) | 0x40;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
+    let tag = format!("<tag>{}_{}_{}_{}_{}</tag>", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..]);
+    match (template.find("<tag>"), template.find("</tag>")) {
+        (Some(a), Some(z)) if a < z => format!("{}{tag}{}", &template[..a], &template[z + "</tag>".len()..]),
+        _ => template.replacen("</itemdata>", &format!("{tag}</itemdata>"), 1).replacen("<itemdata />", &format!("<itemdata>{tag}</itemdata>"), 1),
+    }
+}
+
+impl Op {
+    /// Execute this op against a director: build its calls and send them. Approval is the
+    /// caller's responsibility (`approvals::propose`); this only sends. `room_template` is
+    /// [`template_for`]`(catalog, op)` \u2014 the item definition a new location copies.
+    pub async fn apply(&self, director: &Director, room_template: Option<&str>) -> Result<Applied, DirectorError> {
+        if matches!(self, Op::AddRoom { .. }) && room_template.is_none() {
+            return Err(DirectorError::Other("adding a room needs an existing room to copy its definition from".into()));
+        }
+        if let (Op::AddLocation { kind, .. }, None) = (self, room_template) {
+            return Err(DirectorError::Other(format!(
+                "adding a {} needs an existing one in the project to copy its definition from",
+                kind.item_kind().label()
+            )));
+        }
+        // Every location has its own tag; one copied from the template would be shared.
+        let fresh = room_template.map(with_fresh_tag);
+        director.send_calls(self.calls(fresh.as_deref())).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::diff::{Change, DiffOptions, diff};
     use crate::model::Names;
+
+    #[test]
+    fn fallback_templates_for_a_blank_project() {
+        // A factory-blank project's catalog captured no locations or rooms.
+        let cat = Catalog::default();
+        let add_loc = |kind| Op::AddLocation { parent: 1, kind, name: "x".into() };
+        assert!(template_for(&cat, &add_loc(LocationKind::Site)).unwrap().contains("site.gif"));
+        assert!(template_for(&cat, &add_loc(LocationKind::Building)).unwrap().contains("building.gif"));
+        assert!(template_for(&cat, &add_loc(LocationKind::Floor)).unwrap().contains("floor.gif"));
+        assert!(template_for(&cat, &Op::AddRoom { floor: 1, name: "x".into() }).unwrap().contains("roomdevice.c4i"));
+
+        // A template captured from a real item still wins over the fallback.
+        let mut cat2 = Catalog::default();
+        cat2.room_template = Some("<item><itemdata><tag>real</tag></itemdata></item>".into());
+        assert!(template_for(&cat2, &Op::AddRoom { floor: 1, name: "x".into() }).unwrap().contains("<tag>real</tag>"));
+    }
+
+    #[test]
+    fn fresh_tags() {
+        let room = "<item><itemdata><small_image>x</small_image><tag>old</tag></itemdata></item>";
+        let a = with_fresh_tag(room);
+        assert!(!a.contains("<tag>old</tag>") && a.contains("<small_image>x</small_image><tag>"));
+        assert_ne!(a, with_fresh_tag(room));
+        let b = with_fresh_tag("<item><itemdata><small_image>x</small_image></itemdata></item>");
+        let tag = &b[b.find("<tag>").unwrap() + 5..b.find("</tag>").unwrap()];
+        assert_eq!(tag.split('_').map(str::len).collect::<Vec<_>>(), [8, 4, 4, 4, 12]);
+    }
 
     fn sample() -> Project {
         Project::parse(include_str!("../tests/fixtures/sample-project.xml")).unwrap()
@@ -985,7 +1140,7 @@ mod tests {
     #[test]
     fn devices_only_go_in_rooms() {
         let mut p = sample();
-        let err = Op::AddDevice { room: 4, name: "Apple TV".into(), driver: "apple_tv.c4z".into() }.predict(&mut p);
+        let err = Op::AddDevice { room: 4, name: "Apple TV".into(), driver: "apple_tv.c4z".into() }.predict(&mut p, &mut AgentState::default());
         assert!(matches!(err, Err(OpError::WrongParent { .. })), "{err:?}");
     }
 
@@ -993,8 +1148,8 @@ mod tests {
     fn add_device_predicts_an_added_item_in_the_room() {
         let before = sample();
         let mut after = before.clone();
-        Op::AddDevice { room: 11, name: "Apple TV".into(), driver: "apple_tv.c4z".into() }.predict(&mut after).unwrap();
-        let d = diff(&before, &after, &Names::default(), DiffOptions::default());
+        Op::AddDevice { room: 11, name: "Apple TV".into(), driver: "apple_tv.c4z".into() }.predict(&mut after, &mut AgentState::default()).unwrap();
+        let d = diff(&before, &after, &AgentState::default(), &AgentState::default(), &Names::default(), DiffOptions::default());
         let [Change::ItemAdded { item, driver, .. }] = d.changes.as_slice() else { panic!("{:?}", d.changes) };
         assert_eq!(item.location.last().map(String::as_str), Some("Kitchen"));
         assert_eq!(driver.as_deref(), Some("apple_tv.c4z"));
@@ -1011,13 +1166,13 @@ mod tests {
             class: "HDMI".into(),
             consumer_name: String::new(),
         };
-        assert!(matches!(op.predict(&mut p), Err(OpError::AlreadyConnected { .. })));
+        assert!(matches!(op.predict(&mut p, &mut AgentState::default()), Err(OpError::AlreadyConnected { .. })));
     }
 
     #[test]
     fn removing_a_device_drops_its_programming_lines() {
         let mut p = sample();
-        Op::RemoveItem { id: 21 }.predict(&mut p).unwrap();
+        Op::RemoveItem { id: 21 }.predict(&mut p, &mut AgentState::default()).unwrap();
         let code = &p.programming["20:1"];
         assert!(code[0].children.is_empty(), "the receiver line under the TV event is gone");
     }
@@ -1030,9 +1185,9 @@ mod tests {
             device: 20, event: 1, parent: 0, before: 1, target: 21, command: "INPUT".into(),
             params: vec![], display: "Select HDMI 2 on NAME".into(),
         }
-        .predict(&mut after)
+        .predict(&mut after, &mut AgentState::default())
         .unwrap();
-        let d = diff(&before, &after, &Names::default(), DiffOptions::default());
+        let d = diff(&before, &after, &AgentState::default(), &AgentState::default(), &Names::default(), DiffOptions::default());
         let [Change::ProgrammingChanged { lines, .. }] = d.changes.as_slice() else { panic!("{:?}", d.changes) };
         let added: Vec<_> = lines.iter().filter(|l| l.op == crate::diff::LineOp::Added).map(|l| (l.depth, l.text.as_str())).collect();
         assert_eq!(added, [(0, "Select HDMI 2 on Receiver")]);
@@ -1040,10 +1195,10 @@ mod tests {
         let under_command = Op::AddCode {
             device: 20, event: 1, parent: 1, before: 0, target: 21, command: "INPUT".into(), params: vec![], display: "x".into(),
         };
-        assert!(matches!(under_command.predict(&mut after.clone()), Err(OpError::Code(_))));
-        Op::RemoveCode { device: 20, event: 1, id: 1 }.predict(&mut after).unwrap();
+        assert!(matches!(under_command.predict(&mut after.clone(), &mut AgentState::default()), Err(OpError::Code(_))));
+        Op::RemoveCode { device: 20, event: 1, id: 1 }.predict(&mut after, &mut AgentState::default()).unwrap();
         assert_eq!(after.programming["20:1"].len(), 1, "the TV line went with the line nested under it");
-        assert!(matches!(Op::RemoveCode { device: 20, event: 1, id: 99 }.predict(&mut after), Err(OpError::NoSuchCode { .. })));
+        assert!(matches!(Op::RemoveCode { device: 20, event: 1, id: 99 }.predict(&mut after, &mut AgentState::default()), Err(OpError::NoSuchCode { .. })));
     }
 
     /// An If with a line inside, its Else, a While, a disabled line and a move — the
@@ -1055,38 +1210,38 @@ mod tests {
         p.programming.insert("20:2".into(), vec![]);
         let lamp_on = Condition::Device { target: 21, name: "LOAD_ON".into(), logic: None, params: vec![] };
         let add_if = Op::AddConditional { device: 20, event: 2, parent: 0, before: 0, r#loop: false, condition: lamp_on.clone(), display: "If NAME is on".into() };
-        add_if.predict(&mut p).unwrap();
+        add_if.predict(&mut p, &mut AgentState::default()).unwrap();
         let calls = add_if.calls(None)[0].encode(false);
         assert!(calls.contains(r#"<param name="type" type="number">2</param>"#) && calls.contains("<name>LOAD_ON</name>"), "{calls}");
-        Op::AddControl { device: 20, event: 2, parent: 1, before: 0, control: Control::Delay { ms: 5000 } }.predict(&mut p).unwrap();
+        Op::AddControl { device: 20, event: 2, parent: 1, before: 0, control: Control::Delay { ms: 5000 } }.predict(&mut p, &mut AgentState::default()).unwrap();
         // An Else only right after an If.
-        assert!(Op::AddElse { device: 20, event: 2, parent: 1, before: 0 }.predict(&mut p.clone()).is_err());
-        Op::AddElse { device: 20, event: 2, parent: 0, before: 0 }.predict(&mut p).unwrap();
-        assert!(Op::AddElse { device: 20, event: 2, parent: 0, before: 0 }.predict(&mut p.clone()).is_err(), "not after another Else");
+        assert!(Op::AddElse { device: 20, event: 2, parent: 1, before: 0 }.predict(&mut p.clone(), &mut AgentState::default()).is_err());
+        Op::AddElse { device: 20, event: 2, parent: 0, before: 0 }.predict(&mut p, &mut AgentState::default()).unwrap();
+        assert!(Op::AddElse { device: 20, event: 2, parent: 0, before: 0 }.predict(&mut p.clone(), &mut AgentState::default()).is_err(), "not after another Else");
         Op::AddConditional { device: 20, event: 2, parent: 0, before: 0, r#loop: true, condition: lamp_on, display: "While NAME is on".into() }
-            .predict(&mut p)
+            .predict(&mut p, &mut AgentState::default())
             .unwrap();
         // Nothing between an If and its Else.
         let between = Op::AddControl { device: 20, event: 2, parent: 0, before: 3, control: Control::Stop };
-        assert!(matches!(between.predict(&mut p.clone()), Err(OpError::Code(_))));
-        Op::SetCodeEnabled { device: 20, event: 2, id: 2, enabled: false }.predict(&mut p).unwrap();
+        assert!(matches!(between.predict(&mut p.clone(), &mut AgentState::default()), Err(OpError::Code(_))));
+        Op::SetCodeEnabled { device: 20, event: 2, id: 2, enabled: false }.predict(&mut p, &mut AgentState::default()).unwrap();
         let code = &p.programming["20:2"];
         let shape: Vec<(u32, usize, bool)> = code.iter().map(|c| (c.kind, c.children.len(), c.enabled)).collect();
         assert_eq!(shape, [(kind::CONDITIONAL, 1, true), (kind::ELSE, 0, true), (kind::LOOP, 0, true)]);
         assert!(!code[0].children[0].enabled);
-        assert_eq!(code[0].text(&p), "If Receiver is on");
+        assert_eq!(crate::program::code_text(&code[0], &p), "If Receiver is on");
 
         // Moving the If to the end takes its Else along; an Else can't move on its own.
-        Op::MoveCode { device: 20, event: 2, id: 1, parent: 0, before: 0 }.predict(&mut p).unwrap();
+        Op::MoveCode { device: 20, event: 2, id: 1, parent: 0, before: 0 }.predict(&mut p, &mut AgentState::default()).unwrap();
         let order: Vec<u32> = p.programming["20:2"].iter().map(|c| c.id).collect();
         assert_eq!(order, [4, 1, 3]);
-        assert!(Op::MoveCode { device: 20, event: 2, id: 3, parent: 0, before: 4 }.predict(&mut p.clone()).is_err());
-        assert!(Op::MoveCode { device: 20, event: 2, id: 1, parent: 1, before: 0 }.predict(&mut p.clone()).is_err(), "not into itself");
+        assert!(Op::MoveCode { device: 20, event: 2, id: 3, parent: 0, before: 4 }.predict(&mut p.clone(), &mut AgentState::default()).is_err());
+        assert!(Op::MoveCode { device: 20, event: 2, id: 1, parent: 1, before: 0 }.predict(&mut p.clone(), &mut AgentState::default()).is_err(), "not into itself");
         // Into the While, as its first line.
-        Op::MoveCode { device: 20, event: 2, id: 2, parent: 4, before: 0 }.predict(&mut p).unwrap();
+        Op::MoveCode { device: 20, event: 2, id: 2, parent: 4, before: 0 }.predict(&mut p, &mut AgentState::default()).unwrap();
         assert_eq!(p.programming["20:2"][0].children.len(), 1);
         // Removing the If removes its Else.
-        Op::RemoveCode { device: 20, event: 2, id: 1 }.predict(&mut p).unwrap();
+        Op::RemoveCode { device: 20, event: 2, id: 1 }.predict(&mut p, &mut AgentState::default()).unwrap();
         assert_eq!(p.programming["20:2"].len(), 1);
 
         let en = Op::SetCodeEnabled { device: 20, event: 2, id: 2, enabled: true }.calls(None)[0].encode(false);
@@ -1112,8 +1267,8 @@ mod tests {
         let Op::AddVariableCommand { display, var_type, action, .. } = &op else { unreachable!() };
         assert_eq!((display.as_str(), *var_type), (r#"#!"{VNAME} = True";VNAME="VNAME:100001,1125""#, 4));
         assert_eq!(action, &VarAction::Set { value: "1".into() });
-        op.predict(&mut p).unwrap();
-        assert_eq!(p.programming["20:1"].last().unwrap().text(&p), "Garage Timer = True");
+        op.predict(&mut p, &mut AgentState::default()).unwrap();
+        assert_eq!(crate::program::code_text(p.programming["20:1"].last().unwrap(), &p), "Garage Timer = True");
         let mut bad = Op::AddVariableCommand {
             device: 20, event: 1, parent: 0, before: 0, variable: VarRef { device: 100001, id: 1125 },
             action: VarAction::Add { value: "1".into() }, display: String::new(), var_type: 0,
@@ -1155,27 +1310,29 @@ mod tests {
             end_date: None,
         };
         let mut after = before.clone();
-        Op::AddScheduleEntry { agent: 100100, entry: spec("Porch") }.predict(&mut after).unwrap();
-        let d = diff(&before, &after, &Names::default(), DiffOptions::default());
+        let mut ag = AgentState::default();
+        Op::AddScheduleEntry { agent: 100100, entry: spec("Porch") }.predict(&mut after, &mut ag).unwrap();
+        let d = diff(&before, &after, &AgentState::default(), &ag, &Names::default(), DiffOptions::default());
         let [Change::ScheduleAdded { name, when, .. }] = d.changes.as_slice() else { panic!("{:?}", d.changes) };
         assert_eq!((name.as_str(), when.as_str()), ("Porch", "Every day at Sunset, from 2026-10-21"));
         // Names are unique, as in Composer.
-        assert!(Op::AddScheduleEntry { agent: 100100, entry: spec("porch") }.predict(&mut after.clone()).is_err());
+        assert!(Op::AddScheduleEntry { agent: 100100, entry: spec("porch") }.predict(&mut after.clone(), &mut ag.clone()).is_err());
         // Only Scheduler agents take entries.
-        assert!(matches!(Op::AddScheduleEntry { agent: 20, entry: spec("x") }.predict(&mut after.clone()), Err(OpError::NotScheduler(20))));
+        assert!(matches!(Op::AddScheduleEntry { agent: 20, entry: spec("x") }.predict(&mut after.clone(), &mut ag.clone()), Err(OpError::NotScheduler(20))));
 
         let before = after.clone();
+        let before_ag = ag.clone();
         let mut later = spec("Porch");
         later.time_base = crate::agents::TimeBase::Clock;
         later.minutes = 1110;
-        Op::ModifyScheduleEntry { agent: 100100, id: 1, entry: later, creator: 0, category: String::new() }.predict(&mut after).unwrap();
-        let d = diff(&before, &after, &Names::default(), DiffOptions::default());
+        Op::ModifyScheduleEntry { agent: 100100, id: 1, entry: later, creator: 0, category: String::new() }.predict(&mut after, &mut ag).unwrap();
+        let d = diff(&before, &after, &before_ag, &ag, &Names::default(), DiffOptions::default());
         let [Change::ScheduleChanged { field, from, to, .. }] = d.changes.as_slice() else { panic!("{:?}", d.changes) };
         assert_eq!((field.as_str(), from.as_str(), to.as_str()), ("time", "Sunset", "6:30 PM"));
 
         after.programming.insert(crate::model::event_key(100100, 1), sample().programming["20:1"].clone());
-        Op::RemoveScheduleEntry { agent: 100100, id: 1 }.predict(&mut after).unwrap();
-        assert!(after.schedules[&100100].is_empty() && !after.programming.contains_key("100100:1"), "its programming goes too");
+        Op::RemoveScheduleEntry { agent: 100100, id: 1 }.predict(&mut after, &mut ag).unwrap();
+        assert!(ag.schedules[&100100].is_empty() && !after.programming.contains_key("100100:1"), "its programming goes too");
         let call = Op::RemoveScheduleEntry { agent: 100100, id: 7 }.calls(None)[0].encode(false);
         assert!(call.contains("&lt;command&gt;DELETE_ENTRY") || call.contains("<command>DELETE_ENTRY"), "{call}");
     }
@@ -1187,5 +1344,36 @@ mod tests {
             c[0].encode(false),
             r#"<c4soap name="RemoveBinding" session="0" operation="RWX" category="composer" async="False"><param name="idconsumerdevice" type="number">373</param><param name="idconsumerbinding" type="number">2</param><param name="class" type="string">AUDIO_SELECTION</param></c4soap>"#
         );
+    }
+
+    #[test]
+    fn sddp_identify_rejects_an_ip_and_accepts_a_usn() {
+        // Device 20 is the SDDP TV in the fixture. Proven against a live Director: the address
+        // must be the USN (the Director resolves it to the dial IP); a bare IP silently fails.
+        let ip = Op::AddNetworkBinding {
+            device: 20,
+            binding: 6001,
+            address_type: 1,
+            address: "10.0.0.111".into(),
+            search_type: "Samsung:QN75".into(),
+        };
+        assert!(matches!(ip.predict(&mut sample(), &mut AgentState::default()), Err(OpError::IdentifyWithIp { .. })));
+
+        let usn = Op::AddNetworkBinding {
+            device: 20,
+            binding: 6001,
+            address_type: 1,
+            address: "Samsung:QN75-tv-00:11:22:33:44:55".into(),
+            search_type: "Samsung:QN75".into(),
+        };
+        let mut p = sample();
+        usn.predict(&mut p, &mut AgentState::default()).unwrap();
+        let nb = p.network_bindings.iter().find(|n| n.device == 20 && n.binding == 6001).unwrap();
+        // The Director derives the stored USN from the address param; the model mirrors that.
+        assert_eq!(nb.uuid, "Samsung:QN75-tv-00:11:22:33:44:55");
+
+        // A Zigbee identify (type 3) or a manual IP with no SDDP search type is left alone.
+        let zig = Op::AddNetworkBinding { device: 20, binding: 6001, address_type: 3, address: "10.0.0.5".into(), search_type: String::new() };
+        assert!(zig.predict(&mut sample(), &mut AgentState::default()).is_ok());
     }
 }

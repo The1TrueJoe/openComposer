@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::dialect::Dialect;
 use crate::model::{ModelError, Names, Project, event_key};
-use crate::ops::{Op, OpError};
 use crate::soap::{Call, Connection, Identity, SoapError, TLS_PORT};
 use crate::xml::{child, child_text, child_u32, inner_xml, to_json};
 
@@ -17,8 +16,6 @@ pub enum DirectorError {
     Soap(#[from] SoapError),
     #[error(transparent)]
     Model(#[from] ModelError),
-    #[error(transparent)]
-    Op(#[from] OpError),
     #[error("{0}")]
     Other(String),
 }
@@ -41,6 +38,9 @@ pub struct DirectorInfo {
 #[derive(Clone, Debug)]
 pub struct Snapshot {
     pub project: Project,
+    /// Built-in agents' stored state, parsed from the same `xml`. Kept beside `project` so the
+    /// model carries no agent types; predict/diff/approval take it alongside the project.
+    pub agents: crate::agents::AgentState,
     pub xml: String,
 }
 
@@ -140,72 +140,21 @@ pub struct Catalog {
     pub location_templates: BTreeMap<u32, String>,
 }
 
-/// `template` with its `<itemdata><tag>` replaced by (or given) a new one, in the form
-/// Composer uses: a v4 UUID with underscores, e.g. `18132870_8761_424b_9559_cb6bc5f2b305`.
-fn with_fresh_tag(template: &str) -> String {
-    use rand_core::{OsRng, RngCore};
-    let mut b = [0u8; 16];
-    OsRng.fill_bytes(&mut b);
-    b[6] = (b[6] & 0x0f) | 0x40;
-    b[8] = (b[8] & 0x3f) | 0x80;
-    let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
-    let tag = format!("<tag>{}_{}_{}_{}_{}</tag>", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..]);
-    match (template.find("<tag>"), template.find("</tag>")) {
-        (Some(a), Some(z)) if a < z => format!("{}{tag}{}", &template[..a], &template[z + "</tag>".len()..]),
-        _ => template.replacen("</itemdata>", &format!("{tag}</itemdata>"), 1).replacen("<itemdata />", &format!("<itemdata>{tag}</itemdata>"), 1),
-    }
-}
-
-/// Built-in location/room definitions for a factory-blank project. Director refuses to add the
-/// first site, building, floor or room when the project has none to copy, so these stand in. They
-/// are learned clean-room from the structure Director stores — a location carries its built-in
-/// image, a room is instantiated from `roomdevice.c4i` (see `tests/fixtures/sample-project.xml`) —
-/// and `with_fresh_tag` gives each its own tag, with Director filling in the rest on `AddItem`. A
-/// template captured from an existing item is always preferred; these only apply when there is none.
-const FALLBACK_SITE: &str = "<item><itemdata><large_image>locations_lg/site.gif</large_image></itemdata></item>";
-const FALLBACK_BUILDING: &str = "<item><itemdata><large_image>locations_lg/building.gif</large_image></itemdata></item>";
-const FALLBACK_FLOOR: &str = "<item><itemdata><large_image>locations_lg/floor.gif</large_image></itemdata></item>";
-const FALLBACK_ROOM: &str = "<item><itemdata><config_data_file>roomdevice.c4i</config_data_file></itemdata></item>";
-
-/// The built-in location template for a site (2), building (3) or floor (4) kind code.
-fn fallback_location(code: u32) -> Option<&'static str> {
-    match code {
-        2 => Some(FALLBACK_SITE),
-        3 => Some(FALLBACK_BUILDING),
-        4 => Some(FALLBACK_FLOOR),
-        _ => None,
-    }
-}
-
 impl Catalog {
-    /// The definition Director wants in `AddItem` for a new location, copied from one that exists,
-    /// or a built-in fallback ([`FALLBACK_SITE`] etc.) when the project is blank and has none.
-    pub fn template_for(&self, op: &Op) -> Option<&str> {
-        match op {
-            Op::AddRoom { .. } => self.room_template.as_deref().or(Some(FALLBACK_ROOM)),
-            Op::AddLocation { kind, .. } => self
-                .location_templates
-                .get(&kind.item_kind().code())
-                .map(String::as_str)
-                .or_else(|| fallback_location(kind.item_kind().code())),
-            _ => None,
-        }
-    }
-
     /// Agents declare no events; the Scheduler's are its entries, Advanced Lighting's and
     /// Announcements' come from their scenes and announcements, so programming
     /// can name and check them. They come from a
     /// snapshot, which has them current.
-    pub fn set_schedule_events(&mut self, p: &Project) {
-        for (agent, events) in agent_events(p) {
+    pub fn set_schedule_events(&mut self, agents: &crate::agents::AgentState) {
+        for (agent, events) in agent_events(agents) {
             let info = self.devices.entry(agent).or_insert_with(|| DeviceInfo { id: agent, ..Default::default() });
             info.events = events.into_iter().collect();
         }
     }
 
     /// Whether [`Self::set_schedule_events`] would change nothing.
-    pub fn has_schedule_events(&self, p: &Project) -> bool {
-        agent_events(p).into_iter().all(|(agent, events)| {
+    pub fn has_schedule_events(&self, agents: &crate::agents::AgentState) -> bool {
+        agent_events(agents).into_iter().all(|(agent, events)| {
             self.devices.get(&agent).is_some_and(|d| d.events.len() == events.len() && events.iter().all(|(id, n)| d.events.get(id) == Some(n)))
         })
     }
@@ -248,10 +197,10 @@ fn conditional_def(c: roxmltree::Node<'_, '_>) -> ConditionalDef {
 }
 
 /// Built-in agents' events as the project has them now: (agent, [(event id, name)]).
-fn agent_events(p: &Project) -> Vec<(u32, Vec<(u32, String)>)> {
+fn agent_events(agents: &crate::agents::AgentState) -> Vec<(u32, Vec<(u32, String)>)> {
     let mut out: Vec<(u32, Vec<(u32, String)>)> =
-        p.schedules.iter().map(|(agent, entries)| (*agent, entries.iter().map(|e| (e.id, e.spec.name.clone())).collect())).collect();
-    out.extend(p.agent_data.iter().map(|(agent, d)| (*agent, d.events())).filter(|(_, e)| !e.is_empty()));
+        agents.schedules.iter().map(|(agent, entries)| (*agent, entries.iter().map(|e| (e.id, e.spec.name.clone())).collect())).collect();
+    out.extend(agents.agent_data.iter().map(|(agent, d)| (*agent, d.events())).filter(|(_, e)| !e.is_empty()));
     out
 }
 
@@ -295,6 +244,8 @@ pub struct Director {
     pub conn: Connection,
     pub dialect: Dialect,
     pub info: DirectorInfo,
+    /// Drivers' `LUA_OUTPUT` lines, filled from the event stream for as long as this connection lives.
+    pub lua: crate::lua_output::LuaLog,
 }
 
 impl Director {
@@ -317,8 +268,53 @@ impl Director {
             verified_version: dialect.verified,
             server_fingerprint: conn.server_fingerprint.clone(),
         };
+        let lua = crate::lua_output::LuaLog::default();
+        // Subscribe before EnableEvents so no line is missed; ends when the connection closes.
+        let mut rx = conn.events();
+        let sink = lua.clone();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(e) if e.name == "OnDataToUI" => {
+                        if let Some((device, time, text)) = crate::lua_output::parse_lua_output(&e.raw) {
+                            sink.push(device, time, text);
+                        }
+                    }
+                    Ok(e) if e.name == "Disconnected" => break,
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
         conn.enable_events().await?;
-        Ok(Self { conn, dialect, info })
+        Ok(Self { conn, dialect, info, lua })
+    }
+
+    /// Lines a driver printed: what is buffered, then whatever arrives within `wait`.
+    /// Returns `(line, arrived_during_wait)`.
+    pub async fn lua_output(&self, device: u32, wait: Duration, contains: Option<&str>) -> Vec<(crate::lua_output::LuaLine, bool)> {
+        let mark = self.lua.mark();
+        if !wait.is_zero() {
+            tokio::time::sleep(wait).await;
+        }
+        self.lua.lines(device, contains).into_iter().map(|l| { let new = l.seq > mark; (l, new) }).collect()
+    }
+
+    /// Ask the Driver Update agent whether `filename` may replace the installed driver of that
+    /// name. Sends only a question: nothing changes on the controller.
+    pub async fn evaluate_driver(&self, agent: u32, filename: &str, new_xml: &str) -> Result<crate::driver_update::Evaluation> {
+        let r = self.conn.call(crate::driver_update::evaluate_call(agent, filename, new_xml)).await?;
+        if let Some(why) = crate::agents::reply_failure(r.body()) {
+            return Err(DirectorError::Other(format!("the Driver Update agent refused the question: {why}")));
+        }
+        crate::driver_update::parse_evaluation(r.body())
+            .ok_or_else(|| DirectorError::Other(format!("couldn't read the Driver Update agent's answer: {}", r.body())))
+    }
+
+    /// Replace the installed driver with the file already on the controller. Answered later
+    /// by events, so this only sends.
+    pub async fn update_driver(&self, agent: u32, filename: &str, director_restart: bool) -> Result<()> {
+        Ok(self.conn.send_async(&crate::driver_update::update_call(agent, filename, director_restart)).await?)
     }
 
     /// The whole project, as a backup would capture it.
@@ -328,7 +324,8 @@ impl Director {
             .call(Call::new("Upload").num("flags", self.dialect.upload_flags).timeout(Duration::from_secs(180)))
             .await?;
         let xml = r.body().to_string();
-        Ok(Snapshot { project: Project::parse(&xml)?, xml })
+        let agents = crate::agents::AgentState::parse(&xml);
+        Ok(Snapshot { project: Project::parse(&xml)?, agents, xml })
     }
 
     /// Driver definitions for every item (connection names, events, property schemas).
@@ -528,24 +525,25 @@ impl Director {
         Ok(r.body().to_string())
     }
 
-    /// Perform one op. Callers are responsible for approval; this only executes.
-    /// `template` is `Catalog::template_for(op)`: the item definition a new location copies.
-    pub async fn apply(&self, op: &Op, room_template: Option<&str>) -> Result<Applied> {
-        if matches!(op, Op::AddRoom { .. }) && room_template.is_none() {
-            return Err(DirectorError::Other(
-                "adding a room needs an existing room to copy its definition from".into(),
-            ));
-        }
-        if let (Op::AddLocation { kind, .. }, None) = (op, room_template) {
-            return Err(DirectorError::Other(format!(
-                "adding a {} needs an existing one in the project to copy its definition from",
-                kind.item_kind().label()
-            )));
-        }
-        // Every location has its own tag; one copied from the template would be shared.
-        let fresh = room_template.map(with_fresh_tag);
+    /// Read a device/room/proxy with a `GET_*`/`IS_*` device command and return the reply as
+    /// JSON — what Composer does to browse a room's audio media (`GET_AUDIO_MEDIA`) or read a
+    /// device's current settings. Only reads are sent (same gate as [`Self::agent_read`]); a
+    /// command that changes something is a write and goes through an [`Op`]/approval instead.
+    pub async fn device_read(&self, device: u32, command: &str, params: &[(&str, &str, &str)]) -> Result<serde_json::Value> {
+        let body = self.agent_read(device, command, params).await?;
+        Ok(match roxmltree::Document::parse(&body) {
+            Ok(d) => to_json(d.root_element()),
+            Err(_) => serde_json::Value::String(body),
+        })
+    }
+
+    /// Send a prepared sequence of calls and collect what Director created. Generic: turning an
+    /// [`Op`](crate::ops::Op) into calls, and any op-specific checks, live with `Op` (see
+    /// `Op::apply`); this is the raw send + reply interpretation. Callers are responsible for
+    /// approval; this only executes.
+    pub async fn send_calls(&self, calls: Vec<Call>) -> Result<Applied> {
         let mut applied = Applied::default();
-        for call in op.calls(fresh.as_deref()) {
+        for call in calls {
             let r = self.conn.call(call).await?;
             // Agents answer a change they refuse with `<failure>why</failure>` rather than an error.
             if r.method == "SendToDevice" {
@@ -579,35 +577,3 @@ impl Director {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{Catalog, with_fresh_tag};
-    use crate::ops::{LocationKind, Op};
-
-    #[test]
-    fn fallback_templates_for_a_blank_project() {
-        // A factory-blank project's catalog captured no locations or rooms.
-        let cat = Catalog::default();
-        let add_loc = |kind| Op::AddLocation { parent: 1, kind, name: "x".into() };
-        assert!(cat.template_for(&add_loc(LocationKind::Site)).unwrap().contains("site.gif"));
-        assert!(cat.template_for(&add_loc(LocationKind::Building)).unwrap().contains("building.gif"));
-        assert!(cat.template_for(&add_loc(LocationKind::Floor)).unwrap().contains("floor.gif"));
-        assert!(cat.template_for(&Op::AddRoom { floor: 1, name: "x".into() }).unwrap().contains("roomdevice.c4i"));
-
-        // A template captured from a real item still wins over the fallback.
-        let mut cat2 = Catalog::default();
-        cat2.room_template = Some("<item><itemdata><tag>real</tag></itemdata></item>".into());
-        assert!(cat2.template_for(&Op::AddRoom { floor: 1, name: "x".into() }).unwrap().contains("<tag>real</tag>"));
-    }
-
-    #[test]
-    fn fresh_tags() {
-        let room = "<item><itemdata><small_image>x</small_image><tag>old</tag></itemdata></item>";
-        let a = with_fresh_tag(room);
-        assert!(!a.contains("<tag>old</tag>") && a.contains("<small_image>x</small_image><tag>"));
-        assert_ne!(a, with_fresh_tag(room));
-        let b = with_fresh_tag("<item><itemdata><small_image>x</small_image></itemdata></item>");
-        let tag = &b[b.find("<tag>").unwrap() + 5..b.find("</tag>").unwrap()];
-        assert_eq!(tag.split('_').map(str::len).collect::<Vec<_>>(), [8, 4, 4, 4, 12]);
-    }
-}

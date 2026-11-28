@@ -69,24 +69,22 @@ pub fn command_line(user: &str, host: &str, auth: &Auth) -> Result<(String, Vec<
         Auth::Password(pw) => {
             if cfg!(windows) {
                 // plink's option spelling is nothing like OpenSSH's; -batch never prompts.
-                if which("plink").is_none() {
-                    return Err(SshError::NoHelper);
-                }
+                let plink = which("plink").ok_or(SshError::NoHelper)?;
                 Ok((
-                    "plink".into(),
+                    plink.to_string_lossy().into_owned(),
                     vec![
                         "-ssh".into(), "-batch".into(), "-no-antispoof".into(),
                         "-pw".into(), pw.clone(), "-l".into(), user.into(), host.into(),
                     ],
                 ))
             } else {
-                if which("sshpass").is_none() {
-                    return Err(SshError::NoHelper);
-                }
+                // Full path, not the bare name: a GUI launch's PATH won't include Homebrew,
+                // and Command::new would re-resolve a bare name against that same thin PATH.
+                let sshpass = which("sshpass").ok_or(SshError::NoHelper)?;
                 let mut args = vec!["-p".into(), pw.clone(), "ssh".into()];
                 args.extend(opts());
                 args.push(target);
-                Ok(("sshpass".into(), args))
+                Ok((sshpass.to_string_lossy().into_owned(), args))
             }
         }
         Auth::Key(path) => {
@@ -282,8 +280,26 @@ fn spurious_refusal(status: &std::process::ExitStatus, stderr: &[u8]) -> bool {
 }
 
 /// Find a program on PATH (honouring PATHEXT on Windows, where a bare name is not a file).
+/// Directories a GUI app launched from Finder/Explorer won't have on PATH but where the
+/// helper is commonly installed. A double-clicked .app gets the bare launchd PATH
+/// (`/usr/bin:/bin:/usr/sbin:/sbin`), so Homebrew's `sshpass` is invisible without this.
+fn well_known_bin_dirs() -> Vec<std::path::PathBuf> {
+    let mut dirs: Vec<std::path::PathBuf> = Vec::new();
+    if cfg!(windows) {
+        for env in ["ProgramFiles", "ProgramFiles(x86)"] {
+            if let Some(base) = std::env::var_os(env) {
+                dirs.push(std::path::Path::new(&base).join("PuTTY"));
+            }
+        }
+    } else {
+        for d in ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin", "/usr/bin", "/bin", "/snap/bin"] {
+            dirs.push(d.into());
+        }
+    }
+    dirs
+}
+
 fn which(prog: &str) -> Option<std::path::PathBuf> {
-    let path = std::env::var_os("PATH")?;
     let exts: Vec<String> = if cfg!(windows) {
         std::env::var("PATHEXT")
             .unwrap_or_else(|_| ".EXE;.BAT;.CMD".into())
@@ -293,7 +309,7 @@ fn which(prog: &str) -> Option<std::path::PathBuf> {
     } else {
         vec![]
     };
-    std::env::split_paths(&path).find_map(|dir| {
+    let in_dir = |dir: &std::path::Path| -> Option<std::path::PathBuf> {
         let direct = dir.join(prog);
         if direct.is_file() {
             return Some(direct);
@@ -302,7 +318,14 @@ fn which(prog: &str) -> Option<std::path::PathBuf> {
             let p = dir.join(format!("{prog}{e}"));
             p.is_file().then_some(p)
         })
-    })
+    };
+    // PATH first (respects the user's own setup), then the well-known locations a GUI
+    // launch drops from PATH.
+    std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>())
+        .chain(well_known_bin_dirs())
+        .find_map(|dir| in_dir(&dir))
 }
 
 #[cfg(test)]
@@ -356,11 +379,12 @@ mod tests {
     fn password_auth_shape_when_helper_present() {
         match command_line("root", "h", &Auth::Password("pw".into())) {
             Ok((prog, args)) => {
+                // prog is the resolved absolute path to the helper, not the bare name.
                 if cfg!(windows) {
-                    assert_eq!(prog, "plink");
+                    assert!(prog.to_lowercase().ends_with("plink.exe") || prog.ends_with("plink"));
                     assert!(args.iter().any(|a| a == "-pw"));
                 } else {
-                    assert_eq!(prog, "sshpass");
+                    assert!(prog.ends_with("/sshpass") || prog == "sshpass");
                     assert_eq!(args[0], "-p");
                     assert_eq!(args[2], "ssh");
                 }

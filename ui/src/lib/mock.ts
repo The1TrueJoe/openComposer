@@ -8,7 +8,7 @@
 import type {
   AccessMode, Activity, Announcement, Approval, BackupInfo, Change, CodeLineView, CommandParam, Config, ConnectionDef, ControllerDriver,
   AuthRequest, ConversationInfo, DirectorInfo, Effort, McpGrant, Entry, Events, ItemDetail, ItemKind, ItemRef, LibraryDriver, McpStatus, Op, Outcome, Peer, Provider,
-  TreeNode, UiContext,
+  SceneFile, TreeNode, UiContext,
 } from "../api/types";
 import { splitContext } from "./agent.ts";
 import { agentView, applyAgentOp, applySchedule, describeAgentOp, describeSchedule, isOtherAgentOp, predictAgentOp, predictSchedule } from "./mockAgents.ts";
@@ -231,7 +231,17 @@ function describe(op: Op): string {
     case "remove_network_binding": return `Remove network identity of ${n(op.device)}`;
     case "set_property": return `Set ${n(op.device)} property “${op.name}” to “${masked(op.name, op.value)}”`;
     case "install_driver": return `Install driver file ${op.filename} from ${op.source}`;
+    case "update_driver": return `Update driver ${op.filename} from ${op.source}${op.restart ? "; Director will restart" : ""}`;
     case "run_action": return `Run action “${op.command}” on ${n(op.device)}`;
+    case "zigbee_control":
+      switch (op.action.zigbee) {
+        case "permit_join": return op.action.seconds === 0 ? "Close the Zigbee join window" : `Open the Zigbee mesh to pair a device for ${op.action.seconds}s`;
+        case "remove_node": return `Remove Zigbee node ${op.action.address} from the mesh`;
+        case "identify_access_point": return `Flash the identify light on Zigbee access point ${op.action.address}`;
+        case "enable_zap": return `Enable device ${op.iddevice} as a Zigbee access point${op.action.coordinator ? ", as the mesh coordinator" : ""}`;
+        case "disable_zap": return `Disable the Zigbee access point on device ${op.iddevice}`;
+      }
+      break;
     case "send_command": {
       const ps = (op.params ?? []).map((p) => `${p.name}=${p.value}`).join(", ");
       return `Send ${op.command}${ps ? ` (${ps})` : ""} to ${n(op.device)}`;
@@ -346,8 +356,10 @@ function predict(ops: Op[]): Change[] {
         break;
       }
       case "install_driver":
+      case "update_driver":
       case "run_action":
       case "send_command":
+      case "zigbee_control":
         break;
       case "add_schedule_entry":
       case "modify_schedule_entry":
@@ -434,6 +446,7 @@ function apply(op: Op): number[] {
       item(op.device).properties[op.name] = op.value;
       return [];
     case "install_driver":
+    case "update_driver":
       installed.add(op.filename);
       return [];
     case "send_command":
@@ -452,6 +465,8 @@ function apply(op: Op): number[] {
       return [];
     }
     case "run_action":
+      return [];
+    case "zigbee_control":
       return [];
     case "load_project":
       return [];
@@ -862,7 +877,7 @@ function outcome(a: Approval): Outcome {
   };
 }
 
-function propose(ops: Op[], reason: string | null, source: string, label?: string): Promise<Outcome> {
+function propose(ops: Op[], reason: string | null, source: string, label?: string, undoOf?: string): Promise<Outcome> {
   if (!ops.length) throw "no changes were given";
   const d = config.directors.find((x) => x.id === config.active_director);
   if (!d) throw "no Director is set up — add one in Directors";
@@ -873,7 +888,7 @@ function propose(ops: Op[], reason: string | null, source: string, label?: strin
   const a: Approval = {
     id: `ap-${Date.now().toString(36)}`, created: now(), decided: null, director_id: d.id, director_name: d.name, project: project.name,
     source, reason, ops, descriptions: label ? [label] : ops.map(describe), diff: { changes, summary }, status: "pending",
-    note: null, error: null, applied: [], restore_point: null, verification: null,
+    note: null, error: null, applied: [], restore_point: null, verification: null, undo: null, undo_of: undoOf ?? null,
   };
   approvals.unshift(a);
   emit("approval", a);
@@ -906,6 +921,9 @@ async function decide(id: string, approve: boolean, note: string | null): Promis
     const file = `${project.name} ${stamp} before change.c4p`;
     a.restore_point = `${BACKUPS[0].path.replace(/[^/]*$/, "")}${file}`;
     restorePoints.unshift({ ...BACKUPS[0], file, path: a.restore_point, created: new Date().toLocaleString() });
+    // The preview only knows how to take a rename back; the app plans every kind of change.
+    const back = a.ops.flatMap((op): Op[] => (op.op === "rename_item" ? [{ op: "rename_item", id: op.id, name: item(op.id).name }] : []));
+    const left = a.ops.filter((op) => op.op !== "rename_item").map(describe);
     try {
       // Device 0 in an identify is the device this same approval just added.
       let made: number | undefined;
@@ -915,6 +933,8 @@ async function decide(id: string, approve: boolean, note: string | null): Promis
         return { created, notes: [] };
       });
       a.status = "applied";
+      undoOps.set(a.id, back);
+      a.undo = a.undo_of ? null : { changes: back.length, not_undone: back.length ? left : [], undone_by: null };
       const added = a.diff.changes.find((c) => c.kind === "item_added");
       a.verification = {
         matched: a.diff.changes.length,
@@ -936,6 +956,29 @@ async function decide(id: string, approve: boolean, note: string | null): Promis
 }
 
 const backups = (): BackupInfo[] => [...restorePoints, ...BACKUPS];
+
+/** What undoing each applied change proposes. */
+const undoOps = new Map<string, Op[]>();
+
+async function undoChange(id: string): Promise<Outcome> {
+  const a = approvals.find((x) => x.id === id);
+  if (!a || a.status !== "applied") throw "only an applied change can be undone";
+  if (a.undo?.undone_by) throw "this change was already undone";
+  const ops = undoOps.get(id) ?? [];
+  if (!ops.length) throw "nothing in this change can be undone with changes; load its restore point instead";
+  const r = await propose(ops, `Undo “${a.descriptions[0] ?? "a change"}”`, "You (openComposer)", undefined, id);
+  if (r.status === "applied" && a.undo) {
+    a.undo.undone_by = r.approval_id;
+    emit("approval", a);
+  }
+  return r;
+}
+
+/** A scenes file as `export_scenes` writes one, for the preview. */
+const SCENE_FILE: SceneFile = {
+  format: "opencomposer.lighting-scenes", version: 1, project: "Lake Cabin",
+  scenes: [{ name: "Dinner", lights: [{ name: "Pendants", room: "Kitchen", steps: [{ delay_ms: 0, level: 40, rate_ms: 2000, color: null }] }] }],
+};
 
 // ---- the agent ---------------------------------------------------------------------------------
 
@@ -1315,6 +1358,20 @@ async function act(name: string, a: Args): Promise<unknown> {
       const reply = command(id, String(a.command), (a.params as CommandParam[] | undefined) ?? []);
       log("You (openComposer)", "send_command", `${a.command} → #${id}`);
       return { status: "sent", reply };
+    }
+    case "undo_change":
+      log("You (openComposer)", "undo_change", String(a.approval_id));
+      return undoChange(String(a.approval_id));
+    case "export_scenes":
+      await sleep(200);
+      return { file: SCENE_FILE, path: (a.path as string | undefined) ?? null, scenes: SCENE_FILE.scenes.length };
+    case "import_scenes": {
+      log("You (openComposer)", "import_scenes", String(a.path ?? ""));
+      const agent = [...project.items.values()].find((i) => i.driver?.includes("adv_lighting"));
+      if (!agent) throw "this project has no Advanced Lighting agent";
+      const ops: Op[] = SCENE_FILE.scenes.map((s) => ({ op: "add_lighting_scene", agent: agent.id, name: s.name }));
+      const r = await propose(ops, `Import ${SCENE_FILE.scenes.length} lighting scene from ${SCENE_FILE.project}`, "You (openComposer)");
+      return { ...r, added: SCENE_FILE.scenes.map((s) => s.name), updated: [], unmatched: ["“Kitchen / Pendants” in “Dinner”: no light of that name here"] };
     }
     case "load_backup":
       log("You (openComposer)", "load_backup", String(a.backup));

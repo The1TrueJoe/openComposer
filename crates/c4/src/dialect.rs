@@ -78,15 +78,6 @@ impl Dialect {
         }
     }
 
-    /// The client-CA chain files this controller is expected to have, newest-layout first.
-    /// The swap still probes each for existence — this only sets expectation and labels.
-    pub fn client_ca_chains(&self) -> &'static [&'static str] {
-        use crate::takeover::paths::*;
-        match self.takeover_era() {
-            TakeoverEra::Modern => &[SSL_CLIENT_CA, OPENVPN_CLIENT_CA, MOSQUITTO_CA_CHAIN],
-            _ => &[OPENVPN_CLIENT_CA],
-        }
-    }
 
     /// Does this controller authenticate the MQTT bus with the `mosquitto-jwt-auth` plugin
     /// (OS 4.2+), i.e. is the `api.pem` patch + forged JWT relevant?
@@ -132,13 +123,8 @@ mod tests {
     }
 
     #[test]
-    fn chain_lists_by_era() {
-        let legacy = Dialect::for_version(Version::parse("3.3.3").unwrap());
-        assert_eq!(legacy.client_ca_chains(), &["/etc/openvpn/clientca-prod.pem"]);
-        assert!(!legacy.has_mqtt_jwt_auth());
-
-        let modern = Dialect::for_version(Version::parse("4.2.1").unwrap());
-        assert_eq!(modern.client_ca_chains().len(), 3);
-        assert!(modern.has_mqtt_jwt_auth());
+    fn mqtt_jwt_by_era() {
+        assert!(!Dialect::for_version(Version::parse("3.3.3").unwrap()).has_mqtt_jwt_auth());
+        assert!(Dialect::for_version(Version::parse("4.2.1").unwrap()).has_mqtt_jwt_auth());
     }
 }

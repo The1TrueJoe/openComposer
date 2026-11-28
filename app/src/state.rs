@@ -120,7 +120,7 @@ impl App {
             activity: Mutex::new(VecDeque::new()),
             activity_seq: AtomicU64::new(0),
             http: reqwest::Client::builder()
-                .user_agent(c4::soap::USER_AGENT)
+                .user_agent(c4::USER_AGENT)
                 .timeout(std::time::Duration::from_secs(30))
                 .build()
                 .expect("http client"),
@@ -309,7 +309,7 @@ impl App {
     pub fn ensure_writable(&self, saved: &SavedDirector) -> AppResult<()> {
         match saved.mode {
             AccessMode::ReadOnly => Err(AppError::ReadOnly(saved.name.clone())),
-            AccessMode::Approve => Ok(()),
+            AccessMode::Approve | AccessMode::Auto => Ok(()),
         }
     }
 
@@ -410,9 +410,9 @@ impl Session {
         };
         let snap = self.snapshot.read().await.as_ref().map(|(_, s)| s.clone());
         let c = match snap {
-            Some(s) if !c.has_schedule_events(&s.project) => {
+            Some(s) if !c.has_schedule_events(&s.agents) => {
                 let mut fresh = (*c).clone();
-                fresh.set_schedule_events(&s.project);
+                fresh.set_schedule_events(&s.agents);
                 Arc::new(fresh)
             }
             _ => c,
