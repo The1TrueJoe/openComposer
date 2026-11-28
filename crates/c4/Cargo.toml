@@ -2,6 +2,7 @@
 name = "c4"
 version.workspace = true
 edition.workspace = true
+license-file.workspace = true
 
 [dependencies]
 # The c4soap wire protocol and SDDP discovery come from shared crates, not copies.

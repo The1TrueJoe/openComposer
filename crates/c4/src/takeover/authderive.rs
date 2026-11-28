@@ -55,7 +55,7 @@ pub fn normalize_mac(mac: &str) -> Option<String> {
 }
 
 /// Best-effort MAC for an IPv4 host from the OS ARP cache, so the takeover form can fill it
-/// in for the owner. Pings first to populate the cache, then parses `arp`. Returns a
+/// in for the owner. Pings first to populate the cache, then reads the cache. Returns a
 /// Control4-OUI MAC only (the derived password is meaningless for anything else), or `None`.
 pub fn mac_for_host(host: &str) -> Option<String> {
     use std::process::Command;
@@ -63,27 +63,42 @@ pub fn mac_for_host(host: &str) -> Option<String> {
     if host.parse::<std::net::Ipv4Addr>().is_err() {
         return None;
     }
-    // Populate the cache (one quick ping; ignore the result).
-    let _ = if cfg!(windows) {
-        Command::new("ping").args(["-n", "1", "-w", "500", host]).output()
+    // Populate the cache (one quick ping; ignore the result). The timeout flag differs:
+    // Linux's `-t` is the TTL, not a timeout.
+    let ping: &[&str] = if cfg!(windows) {
+        &["-n", "1", "-w", "500"]
+    } else if cfg!(target_os = "linux") {
+        &["-c", "1", "-W", "1"]
     } else {
-        Command::new("ping").args(["-c", "1", "-t", "1", host]).output()
+        &["-c", "1", "-t", "1"]
     };
-    let out = if cfg!(windows) {
-        Command::new("arp").args(["-a", host]).output().ok()?
+    let _ = Command::new("ping").args(ping).arg(host).output();
+    // Linux has the table in /proc; `arp` (net-tools) isn't installed on most current distros.
+    let text = if cfg!(target_os = "linux") {
+        std::fs::read_to_string("/proc/net/arp").ok()?
     } else {
-        Command::new("arp").args(["-n", host]).output().ok()?
+        let flag = if cfg!(windows) { "-a" } else { "-n" };
+        let out = Command::new("arp").args([flag, host]).output().ok()?;
+        String::from_utf8_lossy(&out.stdout).into_owned()
     };
-    let text = String::from_utf8_lossy(&out.stdout);
-    // The line that mentions the host carries its MAC as the one HH:HH:HH:HH:HH:HH /
-    // HH-HH-...-HH token (macOS drops leading octet zeros, hence normalize_mac).
-    let line = text.lines().find(|l| l.contains(host))?;
+    let mac = mac_in_arp_table(&text, host)?;
+    is_control4_mac(&mac).then_some(mac)
+}
+
+/// The MAC on the line of an ARP table (macOS/BSD `arp -n`, Windows `arp -a`, Linux
+/// `/proc/net/arp`) whose address is exactly `host`, normalised. Pure, for tests.
+pub fn mac_in_arp_table(text: &str, host: &str) -> Option<String> {
+    // macOS writes the address as `(10.0.0.5)`; match the whole token so 10.0.0.5 isn't 10.0.0.50.
+    let line = text
+        .lines()
+        .find(|l| l.split_whitespace().any(|w| w.trim_matches(|c| c == '(' || c == ')') == host))?;
+    // The MAC is the one HH:HH:HH:HH:HH:HH / HH-HH-...-HH token (macOS drops leading
+    // octet zeros, hence normalize_mac).
     let tok = line.split_whitespace().find(|w| {
         let parts: Vec<&str> = w.split(|c| c == ':' || c == '-').collect();
         parts.len() == 6 && parts.iter().all(|p| !p.is_empty() && p.len() <= 2 && p.chars().all(|c| c.is_ascii_hexdigit()))
     })?;
-    let mac = normalize_mac(tok)?;
-    is_control4_mac(&mac).then_some(mac)
+    normalize_mac(tok)
 }
 
 /// Normalise a MAC to the form the derivation hashes: 12 uppercase hex digits, no
@@ -153,6 +168,22 @@ mod tests {
     fn rejects_bad_mac() {
         assert!(derive_root_pw("nope").is_none());
         assert!(derive_root_pw("00:0f:ff").is_none());
+    }
+
+    #[test]
+    fn arp_tables_of_each_os() {
+        let mac = "00:0F:FF:94:EE:02";
+        let macos = "? (10.0.0.50) at 0:f:ff:1:2:3 on en0 ifscope [ethernet]\n\
+                     ? (10.0.0.5) at 0:f:ff:94:ee:2 on en0 ifscope [ethernet]\n";
+        assert_eq!(mac_in_arp_table(macos, "10.0.0.5").as_deref(), Some(mac));
+        let windows = "\r\nInterface: 10.0.0.2 --- 0x7\r\n  Internet Address      Physical Address      Type\r\n\
+                       \x20 10.0.0.5              00-0f-ff-94-ee-02     dynamic\r\n";
+        assert_eq!(mac_in_arp_table(windows, "10.0.0.5").as_deref(), Some(mac));
+        let linux = "IP address       HW type     Flags       HW address            Mask     Device\n\
+                     10.0.0.50        0x1         0x2         00:0f:ff:01:02:03     *        eth0\n\
+                     10.0.0.5         0x1         0x2         00:0f:ff:94:ee:02     *        eth0\n";
+        assert_eq!(mac_in_arp_table(linux, "10.0.0.5").as_deref(), Some(mac));
+        assert_eq!(mac_in_arp_table(linux, "10.0.0.6"), None);
     }
 
     #[test]

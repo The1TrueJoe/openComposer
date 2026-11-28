@@ -573,6 +573,101 @@ pub async fn load_backup(app: &Arc<App>, a: LoadBackupArgs, source: &str) -> App
     Ok(outcome(&r))
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UndoArgs {
+    /// The applied change to undo (`approval_id` from its result).
+    pub approval_id: String,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// Propose the undo of an applied change; approved like any change.
+pub async fn undo_change(app: &Arc<App>, a: UndoArgs, source: &str) -> AppResult<Value> {
+    let r = approvals::undo(app, &a.approval_id, a.reason, source).await?;
+    Ok(outcome(&r))
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct ExportScenesArgs {
+    #[serde(default)]
+    pub director: Option<String>,
+    /// Scene names to export; all when empty.
+    #[serde(default)]
+    pub scenes: Vec<String>,
+    /// Write the file here as well as returning it (the app's Save dialog).
+    #[serde(default)]
+    #[schemars(skip)]
+    pub path: Option<String>,
+}
+
+/// Advanced Lighting scenes as a file another project can import.
+pub async fn export_scenes(app: &Arc<App>, a: ExportScenesArgs) -> AppResult<Value> {
+    let s = app.session(a.director.as_deref()).await?;
+    let snap = s.snapshot(false).await?;
+    let agent = c4::scenes::lighting_agent(&snap.project).ok_or_else(|| AppError::Other("this project has no Advanced Lighting agent".into()))?;
+    let file = c4::scenes::export(&snap.project, &snap.agents, agent, &a.scenes).map_err(AppError::Other)?;
+    if let Some(path) = &a.path {
+        let json = serde_json::to_vec_pretty(&file).map_err(|e| AppError::Other(e.to_string()))?;
+        std::fs::write(path, json).map_err(|e| AppError::Other(format!("couldn't write {path}: {e}")))?;
+    }
+    Ok(json!({ "file": file, "path": a.path, "scenes": file.scenes.len() }))
+}
+
+#[derive(Debug, Default, Deserialize, JsonSchema)]
+pub struct ImportScenesArgs {
+    #[serde(default)]
+    pub director: Option<String>,
+    /// The scenes file, as export_scenes returns it.
+    #[serde(default)]
+    pub file: Option<c4::scenes::SceneFile>,
+    /// Or a scenes file on disk (the app's Open dialog).
+    #[serde(default)]
+    #[schemars(skip)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// Bring scenes from a file into this project, as one approval: new scenes are added, ones
+/// that exist by name get the file's lights. Lights are matched by room and name.
+pub async fn import_scenes(app: &Arc<App>, a: ImportScenesArgs, source: &str) -> AppResult<Value> {
+    let file = match (a.file, &a.path) {
+        (Some(f), _) => f,
+        (None, Some(path)) => {
+            let bytes = std::fs::read(path).map_err(|e| AppError::Other(format!("couldn't read {path}: {e}")))?;
+            serde_json::from_slice(&bytes).map_err(|e| AppError::Other(format!("{path} isn't a scenes file: {e}")))?
+        }
+        (None, None) => return Err(AppError::Other("give the scenes file (or its path)".into())),
+    };
+    let s = app.session(a.director.as_deref()).await?;
+    let snap = s.snapshot(true).await?;
+    let agent = c4::scenes::lighting_agent(&snap.project).ok_or_else(|| AppError::Other("this project has no Advanced Lighting agent".into()))?;
+    let plan = c4::scenes::import(&file, &snap.project, &snap.agents, agent).map_err(AppError::Other)?;
+    if plan.ops.is_empty() {
+        return Err(AppError::Other(match plan.unmatched.is_empty() {
+            true => "the file has no scenes".into(),
+            false => format!("none of the file's lights are in this project: {}", plan.unmatched.join("; ")),
+        }));
+    }
+    let mut why = format!("Import {} from {}", plural(file.scenes.len(), "lighting scene"), if file.project.is_empty() { "a file" } else { &file.project });
+    if !plan.unmatched.is_empty() {
+        why.push_str(&format!(". Not found here: {}", plan.unmatched.join("; ")));
+    }
+    if let Some(r) = a.reason {
+        why = format!("{why}. {r}");
+    }
+    let r = approvals::propose(app, a.director.as_deref(), plan.ops.clone(), Some(why), source).await?;
+    let mut out = outcome(&r);
+    out["added"] = json!(plan.added);
+    out["updated"] = json!(plan.updated);
+    out["unmatched"] = json!(plan.unmatched);
+    Ok(out)
+}
+
+fn plural(n: usize, what: &str) -> String {
+    if n == 1 { format!("1 {what}") } else { format!("{n} {what}s") }
+}
+
 pub async fn controller_drivers(app: &Arc<App>, a: DirectorArg) -> AppResult<Value> {
     let s = app.session(a.director.as_deref()).await?;
     let b = app.broker(&s).await?;

@@ -1,4 +1,4 @@
-import { AlertTriangle, Check, ChevronDown, ChevronRight, CircleSlash, Clock, LifeBuoy, X } from "lucide-react";
+import { AlertTriangle, Check, ChevronDown, ChevronRight, CircleSlash, Clock, LifeBuoy, Undo2, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { api, errText, type Approval, type ApprovalStatus } from "../api";
@@ -14,7 +14,7 @@ const STATUS: Record<ApprovalStatus, string> = {
  *
  *  Pending cards take the decision (with an optional note the AI sees if you decline);
  *  applied cards show whether Director did what was predicted, what else it did on its own,
- *  and where the restore point taken beforehand is. */
+ *  and where the restore point taken beforehand is, with Undo when changes can take it back. */
 export function ApprovalCard({ approval: a, collapsible = false, autoFocus = false }: {
   approval: Approval;
   /** History cards start folded to their head; pending ones never fold. */
@@ -124,6 +124,7 @@ function Footer({ a, note, setNote, busy, decide }: {
           {a.error && <p className="ac-error"><AlertTriangle size={14} strokeWidth={1.8} />{a.error}</p>}
           {a.verification && <VerificationView a={a} />}
           {a.note && <p className="ac-line dim">Your note: “{a.note}”</p>}
+          {a.status === "applied" && <UndoView a={a} />}
           {a.restore_point && (
             <div className="ac-restore">
               <LifeBuoy size={14} strokeWidth={1.8} />
@@ -148,6 +149,44 @@ function Footer({ a, note, setNote, busy, decide }: {
         </div>
       );
   }
+}
+
+/** Undo proposes the reverse changes as a new card; what they can't put back is said first. */
+function UndoView({ a }: { a: Approval }) {
+  const [busy, setBusy] = useState(false);
+  const u = a.undo;
+  if (a.undo_of) return <p className="ac-line dim"><Undo2 size={14} strokeWidth={1.8} />Undoes an earlier change.</p>;
+  if (!u) return null;
+  if (u.undone_by) return <p className="ac-line dim"><Undo2 size={14} strokeWidth={1.8} />Undone.</p>;
+  const undo = async () => {
+    setBusy(true);
+    try {
+      // Resolves once the undo card is decided; the card itself shows in the drawer.
+      const r = await api.undoChange(a.id);
+      if (r.status === "failed") toast.error(r.message);
+    } catch (e) {
+      toast.error(errText(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="ac-undo">
+      {!!u.not_undone.length && (
+        <div className="ac-missing">
+          <span className="label">{u.changes ? "Undo won't put back" : "Can't be undone with changes — use the restore point"}</span>
+          <ul>{u.not_undone.map((m) => <li key={m}>{m}</li>)}</ul>
+        </div>
+      )}
+      {u.changes > 0 && (
+        <div className="ac-actions">
+          <button className="act" disabled={busy} onClick={undo}>
+            {busy ? <Spinner /> : <Undo2 size={14} strokeWidth={1.8} />}{busy ? "Waiting for approval…" : "Undo"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function VerificationView({ a }: { a: Approval }) {

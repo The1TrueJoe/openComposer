@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use c4::diff::{Change, Diff, DiffOptions, diff};
-use c4::director::Applied;
+use c4::director::{Applied, Snapshot};
 use c4::model::{REDACTED, is_sensitive_property};
 use c4::Op;
 use chrono::{DateTime, Utc};
@@ -67,12 +67,36 @@ pub struct Approval {
     pub applied: Vec<Applied>,
     pub restore_point: Option<String>,
     pub verification: Option<Verification>,
+    /// Whether this applied change can be undone, and what an undo would leave as it is.
+    pub undo: Option<UndoInfo>,
+    /// The change this one undid.
+    pub undo_of: Option<String>,
 }
+
+#[derive(Clone, Debug, Serialize)]
+pub struct UndoInfo {
+    /// Changes an undo would propose (0: nothing can be undone with changes; use the restore point).
+    pub changes: usize,
+    pub not_undone: Vec<String>,
+    /// The approval that undid it, once one was applied.
+    pub undone_by: Option<String>,
+}
+
+/// The project before and after an applied change, kept so it can be undone.
+struct Basis {
+    id: String,
+    before: Arc<Snapshot>,
+    after: Arc<Snapshot>,
+}
+
+/// Changes that can still be undone. Snapshots hold the whole project, so keep a few.
+const UNDO_DEPTH: usize = 10;
 
 #[derive(Default)]
 pub struct Approvals {
     all: Mutex<Vec<Approval>>,
     waiters: Mutex<HashMap<String, oneshot::Sender<(bool, Option<String>)>>>,
+    bases: Mutex<Vec<Basis>>,
 }
 
 impl Approvals {
@@ -90,6 +114,21 @@ impl Approvals {
             Some(tx) => tx.send((approve, note)).is_ok(),
             None => false,
         }
+    }
+
+    /// Keep what undoing an applied change needs, and say what an undo would do.
+    fn keep_for_undo(&self, id: &str, ops: &[Op], before: Arc<Snapshot>, after: Arc<Snapshot>) -> UndoInfo {
+        let plan = c4::undo::plan(
+            ops,
+            c4::undo::State { project: &before.project, agents: &before.agents },
+            c4::undo::State { project: &after.project, agents: &after.agents },
+        );
+        let mut bases = self.bases.lock().unwrap();
+        bases.push(Basis { id: id.into(), before, after });
+        if bases.len() > UNDO_DEPTH {
+            bases.remove(0);
+        }
+        UndoInfo { changes: plan.ops.len(), not_undone: plan.not_undone, undone_by: None }
     }
 
     fn update(&self, app: &App, id: &str, f: impl FnOnce(&mut Approval)) -> Option<Approval> {
@@ -120,12 +159,62 @@ pub fn redact(mut d: Diff) -> Diff {
 }
 
 /// Propose ops on a Director, wait for a decision, apply, verify.
-pub async fn propose(
+pub async fn propose(app: &Arc<App>, director: Option<&str>, ops: Vec<Op>, reason: Option<String>, source: &str) -> AppResult<Approval> {
+    propose_with(app, director, ops, reason, source, None).await
+}
+
+/// Propose the undo of an applied change: the ops that take the project back, approved like
+/// any change. What ops can't put back is listed; the restore point covers the rest.
+pub async fn undo(app: &Arc<App>, id: &str, reason: Option<String>, source: &str) -> AppResult<Approval> {
+    let a = app.approvals.get(id).ok_or_else(|| AppError::Other(format!("no change {id} in this session")))?;
+    if a.status != Status::Applied {
+        return Err(AppError::Other("only an applied change can be undone".into()));
+    }
+    if let Some(by) = a.undo.as_ref().and_then(|u| u.undone_by.clone()) {
+        return Err(AppError::Other(format!("this change was already undone (by {by})")));
+    }
+    let basis = {
+        let bases = app.approvals.bases.lock().unwrap();
+        bases.iter().find(|b| b.id == id).map(|b| (b.before.clone(), b.after.clone()))
+    };
+    let restore = a.restore_point.as_deref().map(|r| format!(" Load its restore point instead: {r}")).unwrap_or_default();
+    let Some((before, after)) = basis else {
+        return Err(AppError::Other(format!("only the last {UNDO_DEPTH} changes made in this session can be undone.{restore}")));
+    };
+    let plan = c4::undo::plan(
+        &a.ops,
+        c4::undo::State { project: &before.project, agents: &before.agents },
+        c4::undo::State { project: &after.project, agents: &after.agents },
+    );
+    if plan.ops.is_empty() {
+        return Err(AppError::Other(format!("nothing in this change can be undone with changes ({}).{restore}", plan.not_undone.join("; "))));
+    }
+    let title = a.descriptions.first().cloned().unwrap_or_else(|| "a change".into());
+    let mut why = format!("Undo “{title}”");
+    if !plan.not_undone.is_empty() {
+        why.push_str(&format!(". Not put back: {}", plan.not_undone.join("; ")));
+    }
+    if let Some(r) = reason {
+        why = format!("{why}. {r}");
+    }
+    let r = propose_with(app, Some(&a.director_id), plan.ops, Some(why), source, Some(id.to_string())).await?;
+    if r.status == Status::Applied {
+        app.approvals.update(app, id, |a| {
+            if let Some(u) = a.undo.as_mut() {
+                u.undone_by = Some(r.id.clone());
+            }
+        });
+    }
+    Ok(r)
+}
+
+async fn propose_with(
     app: &Arc<App>,
     director: Option<&str>,
     mut ops: Vec<Op>,
     reason: Option<String>,
     source: &str,
+    undo_of: Option<String>,
 ) -> AppResult<Approval> {
     if ops.is_empty() {
         return Err(AppError::Other("no changes were given".into()));
@@ -152,10 +241,18 @@ pub async fn propose(
     let mut predicted = before.project.clone();
     let mut predicted_agents = before.agents.clone();
     let mut descriptions = Vec::new();
+    // The id each new lighting scene is predicted to get, so later changes to it in the same
+    // batch can be pointed at the id the agent really gives it.
+    let mut new_scenes: Vec<Option<u32>> = Vec::new();
     for (i, op) in ops.iter_mut().enumerate() {
         // Against the project as the earlier changes leave it, as they will be applied.
         op.prepare(&predicted, &predicted_agents);
         descriptions.push(op.describe(&predicted, &predicted_agents));
+        let free = match op {
+            Op::AddLightingScene { agent, .. } => Some(c4::undo::free_scene_id(&predicted_agents, *agent)),
+            _ => None,
+        };
+        new_scenes.push(free);
         op.predict(&mut predicted, &mut predicted_agents).map_err(|e| AppError::Other(format!("change {} of {n} can't be applied: {e}", i + 1)))?;
     }
     let predicted_diff = redact(diff(&before.project, &predicted, &before.agents, &predicted_agents, &names, DiffOptions { runtime: true }));
@@ -179,6 +276,8 @@ pub async fn propose(
         applied: vec![],
         restore_point: None,
         verification: None,
+        undo: None,
+        undo_of,
     };
     app.approvals.all.lock().unwrap().push(approval.clone());
 
@@ -220,14 +319,19 @@ pub async fn propose(
         .map_err(|e| tracing::warn!("restore point not saved: {e}"))
         .ok();
 
-    let (applied, error) = apply_all(app, &session, &ops).await;
+    let (applied, error, ops) = apply_all(app, &session, ops, &new_scenes).await;
     if !applied.is_empty() || error.is_none() {
         session.invalidate().await;
     }
+    let ok = error.is_none();
+    let mut undo = None;
     let verification = match session.snapshot(true).await {
         Ok(after) => {
             let names = session.names().await.unwrap_or(names);
             let actual = redact(diff(&before.project, &after.project, &before.agents, &after.agents, &names, DiffOptions::default()));
+            if ok {
+                undo = Some(app.approvals.keep_for_undo(&id, &ops, before.clone(), after));
+            }
             Some(verify(&predicted_diff, actual))
         }
         Err(e) => {
@@ -235,13 +339,14 @@ pub async fn propose(
             None
         }
     };
-    let ok = error.is_none();
     let a = app.approvals.update(app, &id, |a| {
         a.status = if ok { Status::Applied } else { Status::Failed };
         a.error = error;
         a.applied = applied;
         a.restore_point = restore_point.map(|p| p.display().to_string());
         a.verification = verification;
+        a.undo = undo;
+        a.ops = ops;
     });
     app.emit("project-changed", serde_json::json!({ "director": saved.id }));
     Ok(a.unwrap_or(approval))
@@ -411,7 +516,8 @@ fn check_connections(ops: &[Op], cat: &c4::Catalog, p: &c4::Project) -> AppResul
     Ok(())
 }
 
-async fn apply_all(app: &Arc<App>, session: &Session, ops: &[Op]) -> (Vec<Applied>, Option<String>) {
+/// Apply the ops in order. Returns the ops as sent (a new scene's id corrected to the agent's).
+async fn apply_all(app: &Arc<App>, session: &Session, mut ops: Vec<Op>, new_scenes: &[Option<u32>]) -> (Vec<Applied>, Option<String>, Vec<Op>) {
     let catalog = if ops.iter().any(|o| matches!(o, Op::AddRoom { .. } | Op::AddLocation { .. })) {
         session.catalog(false).await.ok()
     } else {
@@ -419,25 +525,20 @@ async fn apply_all(app: &Arc<App>, session: &Session, ops: &[Op]) -> (Vec<Applie
     };
     let mut applied = Vec::new();
     let mut last_device: Option<u32> = None;
-    for (i, op) in ops.iter().enumerate() {
+    let total = ops.len();
+    // Ops already pointed at a real scene id, so a later new scene's prediction can't catch them.
+    let mut retargeted = vec![false; total];
+    for i in 0..total {
         // Resolve "the device added earlier in this batch" now that Director has its id.
-        let resolved;
-        let op = match op {
-            Op::AddNetworkBinding { device: 0, binding, address_type, address, search_type } => match last_device {
-                Some(d) => {
-                    resolved = Op::AddNetworkBinding {
-                        device: d,
-                        binding: *binding,
-                        address_type: *address_type,
-                        address: address.clone(),
-                        search_type: search_type.clone(),
-                    };
-                    &resolved
+        if let Op::AddNetworkBinding { device, .. } = &mut ops[i] {
+            if *device == 0 {
+                match last_device {
+                    Some(d) => *device = d,
+                    None => return (applied, Some("identify refers to a new device, but none was added before it".into()), ops),
                 }
-                None => return (applied, Some("identify refers to a new device, but none was added before it".into())),
-            },
-            other => other,
-        };
+            }
+        }
+        let op = &ops[i];
         let result = match op {
             Op::InstallDriver { filename, bytes, .. } => match app.broker(session).await {
                 Ok(b) => b
@@ -454,19 +555,64 @@ async fn apply_all(app: &Arc<App>, session: &Session, ops: &[Op]) -> (Vec<Applie
                 if matches!(op, Op::AddDevice { .. }) {
                     last_device = a.created.first().copied();
                 }
+                if let (Op::AddLightingScene { agent, name }, Some(Some(predicted))) = (op, new_scenes.get(i)) {
+                    let (agent, predicted) = (*agent, *predicted);
+                    match real_scene_id(session, agent, name).await {
+                        Some(real) if real != predicted => retarget_scene(&mut ops, &mut retargeted, i + 1, agent, predicted, real),
+                        Some(_) => {}
+                        None if ops[i + 1..].iter().any(|o| scene_of(o, agent) == Some(predicted)) => {
+                            applied.push(a);
+                            let msg = format!("change {} of {total} added a lighting scene, but the agent didn't list it, so the rest were not attempted", i + 1);
+                            return (applied, Some(msg), ops);
+                        }
+                        None => {}
+                    }
+                }
                 applied.push(a)
             }
             Err(e) => {
-                let msg = if ops.len() > 1 {
-                    format!("change {} of {} failed, the rest were not attempted: {e}", i + 1, ops.len())
-                } else {
-                    e.to_string()
-                };
-                return (applied, Some(msg));
+                let msg = if total > 1 { format!("change {} of {total} failed, the rest were not attempted: {e}", i + 1) } else { e };
+                return (applied, Some(msg), ops);
             }
         }
     }
-    (applied, None)
+    (applied, None, ops)
+}
+
+/// The id the Advanced Lighting agent gave the scene named `name`.
+async fn real_scene_id(session: &Session, agent: u32, name: &str) -> Option<u32> {
+    let list = session.director.agent_read(agent, "GET_SCENE_LIST", &[]).await.ok()?;
+    let want = name.trim().to_lowercase();
+    c4::agents::parse_scene_list(&list).into_iter().find(|s| s.name.trim().to_lowercase() == want).map(|s| s.id)
+}
+
+fn scene_of(op: &Op, on: u32) -> Option<u32> {
+    match op {
+        Op::SetSceneLight { agent, scene, .. }
+        | Op::RemoveSceneLight { agent, scene, .. }
+        | Op::RenameLightingScene { agent, scene, .. }
+        | Op::RemoveLightingScene { agent, scene } if *agent == on => Some(*scene),
+        _ => None,
+    }
+}
+
+/// Point the later changes to a new scene at the id the agent gave it.
+fn retarget_scene(ops: &mut [Op], done: &mut [bool], start: usize, on: u32, from: u32, to: u32) {
+    for (op, done) in ops.iter_mut().zip(done.iter_mut()).skip(start) {
+        if *done {
+            continue;
+        }
+        if let Op::SetSceneLight { agent, scene, .. }
+        | Op::RemoveSceneLight { agent, scene, .. }
+        | Op::RenameLightingScene { agent, scene, .. }
+        | Op::RemoveLightingScene { agent, scene } = op
+        {
+            if *agent == on && *scene == from {
+                *scene = to;
+                *done = true;
+            }
+        }
+    }
 }
 
 fn verify(predicted: &Diff, actual: Diff) -> Verification {
@@ -494,4 +640,24 @@ fn verify(predicted: &Diff, actual: Diff) -> Verification {
         }
     }
     Verification { matched: want.len() - missing.len(), missing, side_effects }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn light(scene: u32) -> Op {
+        Op::SetSceneLight { agent: 3, scene, light: 900, steps: vec![], now: Default::default() }
+    }
+
+    #[test]
+    fn new_scene_ids_follow_the_agent() {
+        // Two new scenes predicted as 1 and 2; the agent gives them 2 and 5.
+        let mut ops = vec![light(1), light(2), light(7)];
+        let mut done = vec![false; 3];
+        retarget_scene(&mut ops, &mut done, 0, 3, 1, 2);
+        retarget_scene(&mut ops, &mut done, 0, 3, 2, 5);
+        let scenes: Vec<u32> = ops.iter().filter_map(|o| scene_of(o, 3)).collect();
+        assert_eq!(scenes, [2, 5, 7], "the first scene's lights aren't moved to the second");
+    }
 }

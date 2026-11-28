@@ -15,6 +15,7 @@ pub mod lua_output;
 pub mod model;
 pub mod ops;
 pub mod program;
+pub mod scenes;
 pub mod sddp;
 pub mod sidecar;
 // The c4soap protocol and its XML helpers come from the shared `control4-soap` crate.
@@ -25,6 +26,7 @@ pub use control4_soap::{soap, xml};
 /// Composer.
 pub const USER_AGENT: &str = concat!("openComposer/", env!("CARGO_PKG_VERSION"));
 pub mod takeover;
+pub mod undo;
 pub mod zigbee;
 
 pub use director::{Catalog, Director, DirectorError, DirectorInfo, Snapshot};
