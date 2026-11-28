@@ -150,14 +150,15 @@ pub async fn propose(
     check_drivers(app, &session, &ops).await?;
     let names = catalog.names();
     let mut predicted = before.project.clone();
+    let mut predicted_agents = before.agents.clone();
     let mut descriptions = Vec::new();
     for (i, op) in ops.iter_mut().enumerate() {
         // Against the project as the earlier changes leave it, as they will be applied.
-        op.prepare(&predicted);
-        descriptions.push(op.describe(&predicted));
-        op.predict(&mut predicted).map_err(|e| AppError::Other(format!("change {} of {n} can't be applied: {e}", i + 1)))?;
+        op.prepare(&predicted, &predicted_agents);
+        descriptions.push(op.describe(&predicted, &predicted_agents));
+        op.predict(&mut predicted, &mut predicted_agents).map_err(|e| AppError::Other(format!("change {} of {n} can't be applied: {e}", i + 1)))?;
     }
-    let predicted_diff = redact(diff(&before.project, &predicted, &names, DiffOptions { runtime: true }));
+    let predicted_diff = redact(diff(&before.project, &predicted, &before.agents, &predicted_agents, &names, DiffOptions { runtime: true }));
 
     let id = uuid::Uuid::new_v4().to_string();
     let approval = Approval {
@@ -226,7 +227,7 @@ pub async fn propose(
     let verification = match session.snapshot(true).await {
         Ok(after) => {
             let names = session.names().await.unwrap_or(names);
-            let actual = redact(diff(&before.project, &after.project, &names, DiffOptions::default()));
+            let actual = redact(diff(&before.project, &after.project, &before.agents, &after.agents, &names, DiffOptions::default()));
             Some(verify(&predicted_diff, actual))
         }
         Err(e) => {
@@ -453,12 +454,15 @@ async fn apply_all(app: &Arc<App>, session: &Session, ops: &[Op]) -> (Vec<Applie
                         .update_driver(*agent, filename, *restart)
                         .await
                         .map(|_| Applied { created: vec![], notes: vec![format!("uploaded {filename} and asked the Driver Update agent to apply it")] })
-                        .map_err(|e| e.to_string()),
-                    Err(e) => Err(e.to_string()),
+                        // Half done: say which half, so nobody assumes the devices moved over.
+                        .map_err(|e| {
+                            format!("{filename} was uploaded, but the Driver Update agent didn't take the update ({e}); devices still run the old version")
+                        }),
+                    Err(e) => Err(format!("{filename} couldn't be uploaded, nothing changed: {e}")),
                 },
                 Err(e) => Err(e.to_string()),
             },
-            _ => session.director.apply(op, catalog.as_ref().and_then(|c| c.template_for(op))).await.map_err(|e| e.to_string()),
+            _ => op.apply(&session.director, catalog.as_ref().and_then(|c| c4::ops::template_for(c, op))).await.map_err(|e| e.to_string()),
         };
         match result {
             Ok(a) => {

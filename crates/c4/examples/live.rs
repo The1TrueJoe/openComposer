@@ -34,7 +34,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         snaps.push((host.clone(), s, names));
     }
     if let [(ha, a, _), (hb, b, names)] = snaps.as_slice() {
-        let d = diff(&a.project, &b.project, names, DiffOptions::default());
+        let d = diff(&a.project, &b.project, &a.agents, &b.agents, names, DiffOptions::default());
         println!("\n== diff {ha} → {hb}: +{} -{} ~{}", d.summary.added, d.summary.removed, d.summary.changed);
         for c in d.changes.iter().take(25) {
             println!("   {}", serde_json::to_string(c)?.chars().take(220).collect::<String>());
