@@ -35,7 +35,7 @@ export function LuaTab({ device }: { device: number }) {
   return (
     <div className="lua-tab">
       <div className="lua-head">
-        <span className="dim small">Live log output — the driver's <b>Debug Mode</b> must be On</span>
+        <span className="dim small">Live Lua output — the driver's <b>Debug Mode</b> must be On</span>
         <span className="grow" />
         {!!lines?.length && <button className="act small quiet" onClick={() => setLines([])}>Clear</button>}
       </div>
