@@ -470,6 +470,60 @@ pub async fn install_driver(app: &Arc<App>, a: InstallDriverArgs, source: &str) 
     Ok(outcome(&r))
 }
 
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct UpdateDriverArgs {
+    #[serde(default)]
+    pub director: Option<String>,
+    /// Driver file name already on the controller, e.g. daylight_lighting_scheduler.c4z
+    pub filename: String,
+    /// Where to take the new file from: `path:<absolute path on this computer>`,
+    /// `backup:<file in the library>`, or `director:<another Director>`.
+    pub from: String,
+    /// Update even when the versions are equal or the new one is older. Default false.
+    #[serde(default)]
+    pub force: bool,
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// Replace a driver that devices already run, as Composer's "Update Driver" does: ask the
+/// controller's Driver Update agent first (no change), refuse on its say-so, then upload the
+/// file and tell the agent to apply it, as one approved change with a restore point.
+pub async fn update_driver(app: &Arc<App>, a: UpdateDriverArgs, source: &str) -> AppResult<Value> {
+    let (bytes, from) = driver_bytes(app, &a.filename, &a.from).await?;
+    let new_xml = c4::driver_update::driver_xml(&bytes)
+        .ok_or_else(|| AppError::Other(format!("{} has no driver.xml inside; update_driver needs a .c4z package", a.filename)))?;
+    let s = app.session(a.director.as_deref()).await?;
+    app.ensure_writable(&app.resolve_director(a.director.as_deref())?)?;
+    let agent = c4::driver_update::find_agent(&s.snapshot(false).await?.project);
+    let ev = s.director.evaluate_driver(agent, &a.filename, &new_xml).await?;
+    if !ev.can_update_driver {
+        return Ok(json!({ "status": "refused", "message": format!("The Driver Update agent says {} can't be updated ({}).", a.filename, ev.update_code), "evaluation": ev }));
+    }
+    if ev.prompt_overwrite && !a.force {
+        return Ok(json!({
+            "status": "not_updated",
+            "message": format!("{} Nothing was changed; pass force=true to update anyway.", ev.prompt_overwrite_message),
+            "evaluation": ev,
+        }));
+    }
+    let op = Op::UpdateDriver { filename: a.filename.clone(), source: from, agent, restart: ev.requires_restart, bytes };
+    let r = approvals::propose(app, a.director.as_deref(), vec![op], a.reason, source).await?;
+    let mut out = outcome(&r);
+    out["evaluation"] = json!(ev);
+    if r.status == Status::Applied {
+        // The agent applies it asynchronously; give it a moment, then read what the controller has.
+        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+        let installed = match app.broker(&s).await {
+            Ok(b) => b.driver_info(&a.filename).await.ok().flatten(),
+            Err(_) => None,
+        };
+        out["installed"] = json!(installed);
+        out["note"] = json!("The update runs on the controller after the request; if installed.version hasn't changed yet, call driver_status again in a few seconds.");
+    }
+    Ok(out)
+}
+
 async fn load_source(app: &Arc<App>, src: &str) -> AppResult<(String, Project, c4::Names)> {
     if let Some(file) = src.strip_prefix("backup:") {
         let path = backups::resolve(app, file)?;
@@ -525,6 +579,9 @@ pub fn outcome(a: &Approval) -> Value {
 pub async fn propose(app: &Arc<App>, a: ProposeArgs, source: &str) -> AppResult<Value> {
     if a.ops.iter().any(|o| matches!(o, Op::LoadProject { .. })) {
         return Err(AppError::Other("use load_backup to replace a whole project".into()));
+    }
+    if a.ops.iter().any(|o| matches!(o, Op::UpdateDriver { .. })) {
+        return Err(AppError::Other("use update_driver to replace a driver devices already use".into()));
     }
     if a.ops.iter().any(|o| matches!(o, Op::InstallDriver { .. })) {
         return Err(AppError::Other("use install_driver to put a driver file on a controller".into()));

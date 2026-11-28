@@ -295,6 +295,23 @@ impl Director {
         Ok(Self { conn, dialect, info })
     }
 
+    /// Ask the Driver Update agent whether `filename` may replace the installed driver of that
+    /// name. Sends only a question: nothing changes on the controller.
+    pub async fn evaluate_driver(&self, agent: u32, filename: &str, new_xml: &str) -> Result<crate::driver_update::Evaluation> {
+        let r = self.conn.call(crate::driver_update::evaluate_call(agent, filename, new_xml)).await?;
+        if let Some(why) = crate::agents::reply_failure(r.body()) {
+            return Err(DirectorError::Other(format!("the Driver Update agent refused the question: {why}")));
+        }
+        crate::driver_update::parse_evaluation(r.body())
+            .ok_or_else(|| DirectorError::Other(format!("couldn't read the Driver Update agent's answer: {}", r.body())))
+    }
+
+    /// Replace the installed driver with the file already on the controller. Answered later
+    /// by events, so this only sends.
+    pub async fn update_driver(&self, agent: u32, filename: &str, director_restart: bool) -> Result<()> {
+        Ok(self.conn.send_async(&crate::driver_update::update_call(agent, filename, director_restart)).await?)
+    }
+
     /// The whole project, as a backup would capture it.
     pub async fn snapshot(&self) -> Result<Snapshot> {
         let r = self

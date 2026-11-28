@@ -446,6 +446,18 @@ async fn apply_all(app: &Arc<App>, session: &Session, ops: &[Op]) -> (Vec<Applie
                     .map_err(|e| e.to_string()),
                 Err(e) => Err(e.to_string()),
             },
+            Op::UpdateDriver { filename, bytes, agent, restart, .. } => match app.broker(session).await {
+                Ok(b) => match b.install_driver(filename, bytes.clone()).await {
+                    Ok(()) => session
+                        .director
+                        .update_driver(*agent, filename, *restart)
+                        .await
+                        .map(|_| Applied { created: vec![], notes: vec![format!("uploaded {filename} and asked the Driver Update agent to apply it")] })
+                        .map_err(|e| e.to_string()),
+                    Err(e) => Err(e.to_string()),
+                },
+                Err(e) => Err(e.to_string()),
+            },
             _ => session.director.apply(op, catalog.as_ref().and_then(|c| c.template_for(op))).await.map_err(|e| e.to_string()),
         };
         match result {

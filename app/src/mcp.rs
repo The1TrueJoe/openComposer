@@ -214,6 +214,16 @@ impl OpenComposerMcp {
         self.run("install_driver", s, actions::install_driver(&self.app, a, self.source)).await
     }
 
+    #[tool(description = "Replace a driver that devices already use with a newer file, as Composer's Update Driver does. \
+        The controller's Driver Update agent is asked first; if versions are equal or older nothing happens unless force=true. \
+        The file comes from `path:<absolute path>`, `backup:<library file>` or `director:<another Director>`. Needs approval \
+        (a restore point is made). Returns the agent's evaluation and the installed version a few seconds later.",
+        annotations(read_only_hint = false, destructive_hint = true))]
+    async fn update_driver(&self, Parameters(a): Parameters<UpdateDriverArgs>) -> Result<CallToolResult, McpError> {
+        let s = format!("{} from {}", a.filename, a.from);
+        self.run("update_driver", s, actions::update_driver(&self.app, a, self.source)).await
+    }
+
     #[tool(description = "Driver files installed on the controller (manufacturer, model, version, SDDP search types).",
         annotations(read_only_hint = true))]
     async fn controller_drivers(&self, Parameters(a): Parameters<DirectorArg>) -> Result<CallToolResult, McpError> {
