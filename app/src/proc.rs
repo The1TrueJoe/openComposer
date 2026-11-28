@@ -33,7 +33,8 @@ pub fn spawn(program: &Path, args: &[String], cwd: &Path) -> std::io::Result<Chi
     Ok(child)
 }
 
-/// GUI apps on macOS start with a bare PATH; add the places CLIs are installed.
+/// GUI apps (a macOS .app, a Linux desktop launcher) start with a bare PATH; add the places
+/// CLIs are installed.
 pub fn search_path() -> String {
     let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
     if let Some(home) = directories::BaseDirs::new().map(|b| b.home_dir().to_path_buf()) {
@@ -43,8 +44,19 @@ pub fn search_path() -> String {
     }
     #[cfg(unix)]
     dirs.extend(["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"].map(PathBuf::from));
+    #[cfg(target_os = "linux")]
+    dirs.push(PathBuf::from("/snap/bin"));
     dirs.dedup();
     std::env::join_paths(dirs).map(|p| p.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+/// The path other programs should run to start openComposer (`--mcp-stdio`). An AppImage
+/// runs from a mount that vanishes when it exits, so point at the `.AppImage` file itself.
+pub fn self_exe() -> std::io::Result<PathBuf> {
+    match std::env::var_os("APPIMAGE") {
+        Some(p) if cfg!(target_os = "linux") => Ok(PathBuf::from(p)),
+        _ => std::env::current_exe(),
+    }
 }
 
 /// Find an executable on [`search_path`].
