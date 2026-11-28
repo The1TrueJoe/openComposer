@@ -443,9 +443,12 @@ impl Op {
                 format!("Install driver file {filename} ({} KB) from {source}", bytes.len().div_ceil(1024))
             }
             Op::UpdateDriver { filename, source, bytes, restart, .. } => {
+                let using = p.items.values().filter(|i| i.driver.as_deref().is_some_and(|d| d.eq_ignore_ascii_case(filename))).count();
                 format!(
-                    "Update driver {filename} ({} KB) from {source}{}",
+                    "Update driver {filename} ({} KB) from {source}; {} use{} it{}",
                     bytes.len().div_ceil(1024),
+                    if using == 1 { "1 device".to_string() } else { format!("{using} devices") },
+                    if using == 1 { "s" } else { "" },
                     if *restart { "; Director will restart" } else { "" }
                 )
             }

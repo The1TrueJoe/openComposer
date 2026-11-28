@@ -231,6 +231,7 @@ function describe(op: Op): string {
     case "remove_network_binding": return `Remove network identity of ${n(op.device)}`;
     case "set_property": return `Set ${n(op.device)} property “${op.name}” to “${masked(op.name, op.value)}”`;
     case "install_driver": return `Install driver file ${op.filename} from ${op.source}`;
+    case "update_driver": return `Update driver ${op.filename} from ${op.source}${op.restart ? "; Director will restart" : ""}`;
     case "run_action": return `Run action “${op.command}” on ${n(op.device)}`;
     case "zigbee_control":
       switch (op.action.zigbee) {
@@ -355,6 +356,7 @@ function predict(ops: Op[]): Change[] {
         break;
       }
       case "install_driver":
+      case "update_driver":
       case "run_action":
       case "send_command":
       case "zigbee_control":
@@ -444,6 +446,7 @@ function apply(op: Op): number[] {
       item(op.device).properties[op.name] = op.value;
       return [];
     case "install_driver":
+    case "update_driver":
       installed.add(op.filename);
       return [];
     case "send_command":

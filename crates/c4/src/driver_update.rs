@@ -12,17 +12,12 @@ use crate::model::Project;
 use crate::soap::Call;
 use crate::xml::escape;
 
-/// The Driver Update agent's usual item id; [`find_agent`] looks it up by driver file first.
-pub const FALLBACK_AGENT: u32 = 100124;
-const AGENT_DRIVER: &str = "control4_agent_driverupdate.c4i";
+pub const AGENT_DRIVER: &str = "control4_agent_driverupdate.c4i";
 
-/// The Driver Update agent in this project (matched by its driver file), else the usual id.
-pub fn find_agent(p: &Project) -> u32 {
-    p.items
-        .values()
-        .find(|i| i.driver.as_deref().is_some_and(|d| d.eq_ignore_ascii_case(AGENT_DRIVER)))
-        .map(|i| i.id)
-        .unwrap_or(FALLBACK_AGENT)
+/// The Driver Update agent in this project, matched by its driver file. No guessing an id:
+/// a command sent to the wrong item could do anything.
+pub fn find_agent(p: &Project) -> Option<u32> {
+    p.items.values().find(|i| i.driver.as_deref().is_some_and(|d| d.eq_ignore_ascii_case(AGENT_DRIVER))).map(|i| i.id)
 }
 
 /// `driver.xml` from inside a `.c4z` (a zip). `None` for a `.c4i` or a package without one.
