@@ -29,7 +29,25 @@ you provide.
 
 > Screenshots use built-in fixture data, not a real system.
 
+## Platforms
+
+macOS, Windows and Linux. Builds of the latest `main` (macOS `.dmg`, Windows installer,
+Linux `.deb` / `.rpm` / `.AppImage`) are on the [dev release](https://github.com/The1TrueJoe/openComposer/releases/tag/dev).
+
+On Linux the certificate's key is kept in the desktop's Secret Service keyring (GNOME Keyring
+or KWallet), so one has to be running and unlocked.
+
 ## Building
+
+Needs Rust (stable) and Node 22. On Linux, also the WebKitGTK development packages; on
+Debian/Ubuntu:
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libssl-dev
+```
+
+Windows 10/11 needs the MSVC build tools (Visual Studio "Desktop development with C++") and
+the WebView2 runtime, which current Windows already has.
 
 ```bash
 npm ci --prefix ui
@@ -44,3 +62,15 @@ app         Tauri app: state, approvals, MCP server, stdio bridge, agent runner,
 ui          React front end
 poc         read-only Python probes
 ```
+
+## License
+
+Source-available under the [PolyForm Noncommercial License 1.0.0](LICENSE): you may use,
+modify and share it for any **noncommercial** purpose, but **not** for commercial use. A
+separate commercial license is available only with the copyright holder's written
+permission. See [LICENSE](LICENSE) for the full terms.
+
+Contributions are accepted under the same license, and contributors agree that the copyright
+holder may also offer them under a commercial license.
+
+Copyright © 2024–2026 Joseph Telaak.

@@ -28,8 +28,8 @@ impl StoredIdentity {
 }
 
 fn keychain_key(create: bool) -> anyhow::Result<[u8; 32]> {
-    let entry = keyring::Entry::new(SERVICE, ACCOUNT)?;
-    match entry.get_password() {
+    let entry = keyring::Entry::new(SERVICE, ACCOUNT).map_err(no_store)?;
+    match entry.get_password().map_err(no_store) {
         Ok(hexkey) => {
             let v = hex::decode(hexkey)?;
             v.try_into().map_err(|_| anyhow::anyhow!("keychain entry is not a 32-byte key"))
@@ -37,10 +37,29 @@ fn keychain_key(create: bool) -> anyhow::Result<[u8; 32]> {
         Err(keyring::Error::NoEntry) if create => {
             let mut k = [0u8; 32];
             rand::fill(&mut k);
-            entry.set_password(&hex::encode(k))?;
+            entry.set_password(&hex::encode(k)).map_err(no_store)?;
             Ok(k)
         }
         Err(e) => Err(e.into()),
+    }
+}
+
+/// Linux has no built-in keychain: the key lives in the desktop's Secret Service, which a
+/// bare window manager or a headless box may not run. Say so instead of a D-Bus error.
+fn no_store(e: keyring::Error) -> keyring::Error {
+    match e {
+        keyring::Error::NoDefaultStore | keyring::Error::PlatformFailure(_) | keyring::Error::NoStorageAccess(_)
+            if cfg!(target_os = "linux") =>
+        {
+            keyring::Error::NoStorageAccess(
+                format!(
+                    "no Secret Service keyring is available ({e}). Install and unlock GNOME Keyring \
+                     or KWallet (e.g. `apt install gnome-keyring`), then try again."
+                )
+                .into(),
+            )
+        }
+        e => e,
     }
 }
 

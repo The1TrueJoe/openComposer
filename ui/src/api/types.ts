@@ -653,6 +653,31 @@ export interface Approval {
   applied: { created: number[]; notes: string[] }[];
   restore_point: string | null;
   verification: Verification | null;
+  /** Set once applied: whether it can be undone and what an undo leaves as it is. */
+  undo?: UndoInfo | null;
+  /** The change this one undid. */
+  undo_of?: string | null;
+}
+
+export interface UndoInfo {
+  /** Changes an undo would propose; 0 means only the restore point can take it back. */
+  changes: number;
+  not_undone: string[];
+  undone_by: string | null;
+}
+
+/** An Advanced Lighting scenes file (`export_scenes`). */
+export interface SceneFile {
+  format: "opencomposer.lighting-scenes";
+  version: number;
+  project: string;
+  scenes: { name: string; lights: { name: string; room: string | null; steps: LightStep[] }[] }[];
+}
+
+export interface SceneImportOutcome extends Outcome {
+  added: string[];
+  updated: string[];
+  unmatched: string[];
 }
 
 /** What `propose_changes` / `load_backup` resolve with once a decision is made. */

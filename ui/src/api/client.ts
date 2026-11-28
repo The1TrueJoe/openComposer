@@ -3,7 +3,7 @@ import type {
   DirectorInfo, DriverDoc, Events, ItemDetail, McpStatus, NetworkView, Op, Outcome, Overview,
   ProgrammingEvent, VariableRow, Provider, ProviderStatus, SavedDirector, AccessMode, TreeNode, ZigbeeQuery, BackupResult,
   AddDriverArgs, ControllerDriver, LibraryDriver, UiContext, CommandParam, DeviceState, Effort, AuthRequest, McpGrant, DriverTab, AgentView,
-  TakeoverStatus, TakeoverParams, TakeoverReport, RevertParams, SidecarDetection, FoundCert,
+  TakeoverStatus, TakeoverParams, TakeoverReport, RevertParams, SidecarDetection, FoundCert, SceneFile, SceneImportOutcome,
 } from "./types";
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -114,6 +114,13 @@ export const api = {
   /** Resolves only once the change was approved and applied, declined, or expired. */
   propose: (ops: Op[], reason?: string) => action<Outcome>("propose_changes", { ops, reason }),
   loadBackup: (backup: string, reason?: string) => action<Outcome>("load_backup", { backup, reason }),
+  /** Propose the changes that take an applied change back; resolves like `propose`. */
+  undoChange: (approval_id: string, reason?: string) => action<Outcome>("undo_change", { approval_id, reason }),
+  /** Advanced Lighting scenes as a file (all when `scenes` is empty), written to `path` if given. */
+  exportScenes: (scenes: string[] = [], path?: string) =>
+    action<{ file: SceneFile; path: string | null; scenes: number }>("export_scenes", { scenes, path }),
+  /** Bring scenes from a file into this project, as one approval. */
+  importScenes: (path: string) => action<SceneImportOutcome>("import_scenes", { path }),
   /** Driver files installed on the controller (needs its web API). */
   controllerDrivers: () => action<{ drivers: ControllerDriver[] }>("controller_drivers"),
   /** Driver files in openComposer's library on this computer. */

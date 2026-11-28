@@ -292,7 +292,7 @@ fn well_known_bin_dirs() -> Vec<std::path::PathBuf> {
             }
         }
     } else {
-        for d in ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin", "/usr/bin", "/bin"] {
+        for d in ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin", "/usr/bin", "/bin", "/snap/bin"] {
             dirs.push(d.into());
         }
     }
