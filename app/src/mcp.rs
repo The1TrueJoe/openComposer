@@ -224,6 +224,15 @@ impl OpenComposerMcp {
         self.run("update_driver", s, actions::update_driver(&self.app, a, self.source)).await
     }
 
+    #[tool(description = "What a driver printed (the Lua output Composer shows) for a device id: lines buffered since \
+        openComposer connected (up to 500 per device). Answers at once; pass `seconds` (max 60) to also wait for new \
+        lines, which come back with new=true. Optional `contains` filter (any case). Most drivers only print with \
+        their Debug Mode property on.", annotations(read_only_hint = true))]
+    async fn lua_output(&self, Parameters(a): Parameters<LuaOutputArgs>) -> Result<CallToolResult, McpError> {
+        let s = format!("#{}", a.iddevice);
+        self.run("lua_output", s, actions::lua_output(&self.app, a)).await
+    }
+
     #[tool(description = "Driver files installed on the controller (manufacturer, model, version, SDDP search types).",
         annotations(read_only_hint = true))]
     async fn controller_drivers(&self, Parameters(a): Parameters<DirectorArg>) -> Result<CallToolResult, McpError> {

@@ -286,6 +286,7 @@ pub async fn action(app: S<'_>, name: String, args: Option<Value>) -> R<Value> {
         "driver_status" => actions::driver_status(app, req(a)?).await,
         "install_driver" => actions::install_driver(app, req(a)?, UI_SOURCE).await,
         "update_driver" => actions::update_driver(app, req(a)?, UI_SOURCE).await,
+        "lua_output" => actions::lua_output(app, req(a)?).await,
         "controller_drivers" => actions::controller_drivers(app, self::args(a)?).await,
         "library_drivers" => Ok(actions::library_drivers(app)),
         "import_driver" => actions::import_driver(app, req(a)?),
