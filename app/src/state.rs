@@ -410,9 +410,9 @@ impl Session {
         };
         let snap = self.snapshot.read().await.as_ref().map(|(_, s)| s.clone());
         let c = match snap {
-            Some(s) if !c.has_schedule_events(&s.project) => {
+            Some(s) if !c.has_schedule_events(&s.agents) => {
                 let mut fresh = (*c).clone();
-                fresh.set_schedule_events(&s.project);
+                fresh.set_schedule_events(&s.agents);
                 Arc::new(fresh)
             }
             _ => c,

@@ -495,25 +495,25 @@ pub async fn lua_output(app: &Arc<App>, a: LuaOutputArgs) -> AppResult<Value> {
     Ok(json!({ "iddevice": a.iddevice, "waited_seconds": secs, "new_lines": new, "lines": out }))
 }
 
-async fn load_source(app: &Arc<App>, src: &str) -> AppResult<(String, Project, c4::Names)> {
+async fn load_source(app: &Arc<App>, src: &str) -> AppResult<(String, Project, c4::agents::AgentState, c4::Names)> {
     if let Some(file) = src.strip_prefix("backup:") {
         let path = backups::resolve(app, file)?;
-        let (_, p) = backups::read_project(&path)?;
-        return Ok((format!("backup {file}"), p, c4::Names::default()));
+        let (xml, p) = backups::read_project(&path)?;
+        return Ok((format!("backup {file}"), p, c4::agents::AgentState::parse(&xml), c4::Names::default()));
     }
     let which = src.strip_prefix("live").map(|r| r.trim_start_matches(':')).filter(|r| !r.is_empty());
     let s = app.session(which).await?;
     let snap = s.snapshot(false).await?;
-    Ok((format!("live {}", s.director.info.name), snap.project.clone(), s.names().await?))
+    Ok((format!("live {}", s.director.info.name), snap.project.clone(), snap.agents.clone(), s.names().await?))
 }
 
 pub async fn compare(app: &Arc<App>, a: CompareArgs) -> AppResult<Value> {
-    let (la, pa, na) = load_source(app, &a.from).await?;
-    let (lb, pb, nb) = load_source(app, &a.to).await?;
+    let (la, pa, aga, na) = load_source(app, &a.from).await?;
+    let (lb, pb, agb, nb) = load_source(app, &a.to).await?;
     let mut names = na;
     names.connections.extend(nb.connections);
     names.events.extend(nb.events);
-    let d = approvals::redact(diff(&pa, &pb, &names, DiffOptions { runtime: a.runtime }));
+    let d = approvals::redact(diff(&pa, &pb, &aga, &agb, &names, DiffOptions { runtime: a.runtime }));
     Ok(json!({ "from": la, "to": lb, "diff": d }))
 }
 
@@ -768,7 +768,7 @@ pub async fn send_command(app: &Arc<App>, a: CommandArgs, source: &str) -> AppRe
     let op = Op::SendCommand { device: a.device, command: a.command, params: a.params };
     if source == crate::commands::UI_SOURCE {
         let s = app.session(Some(&saved.id)).await?;
-        let r = s.director.apply(&op, None).await?;
+        let r = op.apply(&s.director, None).await?;
         return Ok(json!({ "status": "sent", "reply": r.notes }));
     }
     let r = approvals::propose(app, Some(&saved.id), vec![op], None, source).await?;
@@ -865,7 +865,7 @@ pub struct TabsArgs {
 pub async fn agent_view(app: &Arc<App>, a: ItemArgs) -> AppResult<Value> {
     let s = app.session(a.director.as_deref()).await?;
     let (snap, cat) = (s.snapshot(false).await?, s.catalog(false).await?);
-    crate::agent_views::view(&s.director, &snap.project, &cat, a.id).await
+    crate::agent_views::view(&s.director, &snap.project, &snap.agents, &cat, a.id).await
 }
 
 /// The web tabs a device's driver declares, as URLs to open in the app (see `webui`).

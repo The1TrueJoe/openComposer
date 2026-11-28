@@ -502,6 +502,34 @@ fn read_quoted(s: &str) -> Option<(String, &str)> {
     None
 }
 
+/// The device command a line sends and its static parameters (what `AddCode` takes), or `None`
+/// for a line that isn't a plain device command. Lives here, not on `CodeItem`, so the model
+/// stays free of `ops` (it returns an [`ops`](crate::ops)-owned [`CodeParam`]).
+pub fn code_command(ci: &CodeItem) -> Option<(String, Vec<CodeParam>)> {
+    let doc = roxmltree::Document::parse(&ci.cmdcond).ok()?;
+    let cmd = doc.descendants().find(|n| n.has_tag_name("devicecommand"))?;
+    let name = crate::xml::child_text(cmd, "command")?.to_string();
+    let params = cmd
+        .descendants()
+        .filter(|n| n.has_tag_name("param"))
+        .map(|n| {
+            let value = crate::xml::child(n, "value");
+            CodeParam {
+                name: crate::xml::child_text(n, "name").unwrap_or_default().to_string(),
+                r#type: value.and_then(|v| v.attribute("type")).unwrap_or("STRING").to_string(),
+                value: value.and_then(|v| crate::xml::child_text(v, "static")).unwrap_or_default().to_string(),
+            }
+        })
+        .collect();
+    Some((name, params))
+}
+
+/// A code line as Composer shows it: NAME replaced by the device it acts on, `#!` templates
+/// expanded. Lives here, not on `CodeItem`, so the model stays free of the render engine.
+pub fn code_text(ci: &CodeItem, p: &Project) -> String {
+    render(&ci.display, ci.device, p)
+}
+
 /// A stored line as people read it: Composer's `#!` templates expanded (variable, device and
 /// room references named) and NAME replaced by the line's device.
 pub fn render(display: &str, device: u32, p: &Project) -> String {
@@ -835,6 +863,21 @@ mod tests {
 
     fn def(name: &str, kind: &str, description: &str) -> ConditionalDef {
         ConditionalDef { name: name.into(), kind: kind.into(), description: description.into(), ..Default::default() }
+    }
+
+    fn line(cmdcond: &str) -> CodeItem {
+        CodeItem { id: 1, kind: 1, device: 20, display: String::new(), enabled: true, cmdcond: cmdcond.into(), children: vec![] }
+    }
+
+    #[test]
+    fn code_command_reads_name_and_params() {
+        let ci = line(r#"<devicecommand><command>SET_LEVEL</command><params><param><name>LEVEL</name><value type="INTEGER"><static>75</static></value></param></params></devicecommand>"#);
+        let (cmd, params) = code_command(&ci).unwrap();
+        assert_eq!(cmd, "SET_LEVEL");
+        assert_eq!(params.len(), 1);
+        assert_eq!((params[0].name.as_str(), params[0].r#type.as_str(), params[0].value.as_str()), ("LEVEL", "INTEGER", "75"));
+        // A line that isn't a plain device command has no command.
+        assert!(code_command(&line("<condition/>")).is_none());
     }
 
     #[test]

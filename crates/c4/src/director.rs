@@ -7,7 +7,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::dialect::Dialect;
 use crate::model::{ModelError, Names, Project, event_key};
-use crate::ops::{Op, OpError};
 use crate::soap::{Call, Connection, Identity, SoapError, TLS_PORT};
 use crate::xml::{child, child_text, child_u32, inner_xml, to_json};
 
@@ -17,8 +16,6 @@ pub enum DirectorError {
     Soap(#[from] SoapError),
     #[error(transparent)]
     Model(#[from] ModelError),
-    #[error(transparent)]
-    Op(#[from] OpError),
     #[error("{0}")]
     Other(String),
 }
@@ -41,6 +38,9 @@ pub struct DirectorInfo {
 #[derive(Clone, Debug)]
 pub struct Snapshot {
     pub project: Project,
+    /// Built-in agents' stored state, parsed from the same `xml`. Kept beside `project` so the
+    /// model carries no agent types; predict/diff/approval take it alongside the project.
+    pub agents: crate::agents::AgentState,
     pub xml: String,
 }
 
@@ -140,46 +140,21 @@ pub struct Catalog {
     pub location_templates: BTreeMap<u32, String>,
 }
 
-/// `template` with its `<itemdata><tag>` replaced by (or given) a new one, in the form
-/// Composer uses: a v4 UUID with underscores, e.g. `18132870_8761_424b_9559_cb6bc5f2b305`.
-fn with_fresh_tag(template: &str) -> String {
-    use rand_core::{OsRng, RngCore};
-    let mut b = [0u8; 16];
-    OsRng.fill_bytes(&mut b);
-    b[6] = (b[6] & 0x0f) | 0x40;
-    b[8] = (b[8] & 0x3f) | 0x80;
-    let h: String = b.iter().map(|x| format!("{x:02x}")).collect();
-    let tag = format!("<tag>{}_{}_{}_{}_{}</tag>", &h[..8], &h[8..12], &h[12..16], &h[16..20], &h[20..]);
-    match (template.find("<tag>"), template.find("</tag>")) {
-        (Some(a), Some(z)) if a < z => format!("{}{tag}{}", &template[..a], &template[z + "</tag>".len()..]),
-        _ => template.replacen("</itemdata>", &format!("{tag}</itemdata>"), 1).replacen("<itemdata />", &format!("<itemdata>{tag}</itemdata>"), 1),
-    }
-}
-
 impl Catalog {
-    /// The definition Director wants in `AddItem` for a new location, copied from one that exists.
-    pub fn template_for(&self, op: &Op) -> Option<&str> {
-        match op {
-            Op::AddRoom { .. } => self.room_template.as_deref(),
-            Op::AddLocation { kind, .. } => self.location_templates.get(&kind.item_kind().code()).map(String::as_str),
-            _ => None,
-        }
-    }
-
     /// Agents declare no events; the Scheduler's are its entries, Advanced Lighting's and
     /// Announcements' come from their scenes and announcements, so programming
     /// can name and check them. They come from a
     /// snapshot, which has them current.
-    pub fn set_schedule_events(&mut self, p: &Project) {
-        for (agent, events) in agent_events(p) {
+    pub fn set_schedule_events(&mut self, agents: &crate::agents::AgentState) {
+        for (agent, events) in agent_events(agents) {
             let info = self.devices.entry(agent).or_insert_with(|| DeviceInfo { id: agent, ..Default::default() });
             info.events = events.into_iter().collect();
         }
     }
 
     /// Whether [`Self::set_schedule_events`] would change nothing.
-    pub fn has_schedule_events(&self, p: &Project) -> bool {
-        agent_events(p).into_iter().all(|(agent, events)| {
+    pub fn has_schedule_events(&self, agents: &crate::agents::AgentState) -> bool {
+        agent_events(agents).into_iter().all(|(agent, events)| {
             self.devices.get(&agent).is_some_and(|d| d.events.len() == events.len() && events.iter().all(|(id, n)| d.events.get(id) == Some(n)))
         })
     }
@@ -222,10 +197,10 @@ fn conditional_def(c: roxmltree::Node<'_, '_>) -> ConditionalDef {
 }
 
 /// Built-in agents' events as the project has them now: (agent, [(event id, name)]).
-fn agent_events(p: &Project) -> Vec<(u32, Vec<(u32, String)>)> {
+fn agent_events(agents: &crate::agents::AgentState) -> Vec<(u32, Vec<(u32, String)>)> {
     let mut out: Vec<(u32, Vec<(u32, String)>)> =
-        p.schedules.iter().map(|(agent, entries)| (*agent, entries.iter().map(|e| (e.id, e.spec.name.clone())).collect())).collect();
-    out.extend(p.agent_data.iter().map(|(agent, d)| (*agent, d.events())).filter(|(_, e)| !e.is_empty()));
+        agents.schedules.iter().map(|(agent, entries)| (*agent, entries.iter().map(|e| (e.id, e.spec.name.clone())).collect())).collect();
+    out.extend(agents.agent_data.iter().map(|(agent, d)| (*agent, d.events())).filter(|(_, e)| !e.is_empty()));
     out
 }
 
@@ -330,7 +305,8 @@ impl Director {
             .call(Call::new("Upload").num("flags", self.dialect.upload_flags).timeout(Duration::from_secs(180)))
             .await?;
         let xml = r.body().to_string();
-        Ok(Snapshot { project: Project::parse(&xml)?, xml })
+        let agents = crate::agents::AgentState::parse(&xml);
+        Ok(Snapshot { project: Project::parse(&xml)?, agents, xml })
     }
 
     /// Driver definitions for every item (connection names, events, property schemas).
@@ -542,24 +518,13 @@ impl Director {
         })
     }
 
-    /// Perform one op. Callers are responsible for approval; this only executes.
-    /// `template` is `Catalog::template_for(op)`: the item definition a new location copies.
-    pub async fn apply(&self, op: &Op, room_template: Option<&str>) -> Result<Applied> {
-        if matches!(op, Op::AddRoom { .. }) && room_template.is_none() {
-            return Err(DirectorError::Other(
-                "adding a room needs an existing room to copy its definition from".into(),
-            ));
-        }
-        if let (Op::AddLocation { kind, .. }, None) = (op, room_template) {
-            return Err(DirectorError::Other(format!(
-                "adding a {} needs an existing one in the project to copy its definition from",
-                kind.item_kind().label()
-            )));
-        }
-        // Every location has its own tag; one copied from the template would be shared.
-        let fresh = room_template.map(with_fresh_tag);
+    /// Send a prepared sequence of calls and collect what Director created. Generic: turning an
+    /// [`Op`](crate::ops::Op) into calls, and any op-specific checks, live with `Op` (see
+    /// `Op::apply`); this is the raw send + reply interpretation. Callers are responsible for
+    /// approval; this only executes.
+    pub async fn send_calls(&self, calls: Vec<Call>) -> Result<Applied> {
         let mut applied = Applied::default();
-        for call in op.calls(fresh.as_deref()) {
+        for call in calls {
             let r = self.conn.call(call).await?;
             // Agents answer a change they refuse with `<failure>why</failure>` rather than an error.
             if r.method == "SendToDevice" {
@@ -593,18 +558,3 @@ impl Director {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::with_fresh_tag;
-
-    #[test]
-    fn fresh_tags() {
-        let room = "<item><itemdata><small_image>x</small_image><tag>old</tag></itemdata></item>";
-        let a = with_fresh_tag(room);
-        assert!(!a.contains("<tag>old</tag>") && a.contains("<small_image>x</small_image><tag>"));
-        assert_ne!(a, with_fresh_tag(room));
-        let b = with_fresh_tag("<item><itemdata><small_image>x</small_image></itemdata></item>");
-        let tag = &b[b.find("<tag>").unwrap() + 5..b.find("</tag>").unwrap()];
-        assert_eq!(tag.split('_').map(str::len).collect::<Vec<_>>(), [8, 4, 4, 4, 12]);
-    }
-}
