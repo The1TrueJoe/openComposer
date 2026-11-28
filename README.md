@@ -54,15 +54,6 @@ npm ci --prefix ui
 npx @tauri-apps/cli@2.12.3 dev --config app/tauri.conf.json
 ```
 
-## Layout
-
-```
-crates/c4   Director client: protocol, model, diff, ops, .c4p, SDDP, driver search
-app         Tauri app: state, approvals, MCP server, stdio bridge, agent runner, commands
-ui          React front end
-poc         read-only Python probes
-```
-
 ## License
 
 openComposer is free for homeowners. Use it on your own system, change it, and share it with other DIYers.
