@@ -191,16 +191,6 @@ pub struct InstallDriverArgs {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct UpdateDriverArgs {
-    #[serde(default)]
-    pub director: Option<String>,
-    /// Driver file already on the controller to reload in place, e.g. total_connect_comfort.c4z
-    pub filename: String,
-    #[serde(default)]
-    pub reason: Option<String>,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
 pub struct IdentifyArgs {
     /// The device's network identity as Director knows it: the `uuid` of a discovered
     /// physical device (network_status) or the SDDP `<Type>-<Host>`.
@@ -495,20 +485,7 @@ async fn driver_bytes(app: &Arc<App>, filename: &str, from: &str) -> AppResult<(
 
 pub async fn install_driver(app: &Arc<App>, a: InstallDriverArgs, source: &str) -> AppResult<Value> {
     let (bytes, from) = driver_bytes(app, &a.filename, &a.from).await?;
-    let install = Op::InstallDriver { filename: a.filename.clone(), source: from, bytes };
-    // Put the file on the controller, then reload it in any device already using it, so
-    // updating a driver keeps those devices' properties instead of needing a remove-and-
-    // re-add. For a brand-new driver no device uses it yet and the reload does nothing.
-    let reload = Op::UpdateDriver { filename: a.filename };
-    let r = approvals::propose(app, a.director.as_deref(), vec![install, reload], a.reason, source).await?;
-    Ok(outcome(&r))
-}
-
-/// Reload a driver that is already on the controller in the devices using it (what
-/// Composer's "Update Driver" does), without reinstalling the file. The devices keep
-/// their properties and signed-in accounts.
-pub async fn update_driver(app: &Arc<App>, a: UpdateDriverArgs, source: &str) -> AppResult<Value> {
-    let op = Op::UpdateDriver { filename: a.filename };
+    let op = Op::InstallDriver { filename: a.filename, source: from, bytes };
     let r = approvals::propose(app, a.director.as_deref(), vec![op], a.reason, source).await?;
     Ok(outcome(&r))
 }

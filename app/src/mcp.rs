@@ -212,23 +212,12 @@ impl OpenComposerMcp {
         self.run("driver_status", s, actions::driver_status(&self.app, a)).await
     }
 
-    #[tool(description = "Put a driver file on the controller so devices can use it, then reload it in any \
-        device already using it (keeping their properties). The file comes from \
+    #[tool(description = "Put a driver file on the controller so devices can use it. The file comes from \
         `path:<absolute path>`, `backup:<library file>` or `director:<another Director>`. Needs approval.",
         annotations(read_only_hint = false, destructive_hint = false))]
     async fn install_driver(&self, Parameters(a): Parameters<InstallDriverArgs>) -> Result<CallToolResult, McpError> {
         let s = format!("{} from {}", a.filename, a.from);
         self.run("install_driver", s, actions::install_driver(&self.app, a, self.source)).await
-    }
-
-    #[tool(description = "Reload a driver that is already on the controller in the devices using it — what \
-        Composer's \"Update Driver\" does. Director re-reads the .c4z and swaps in the new code while each \
-        device keeps its properties and signed-in accounts, so a driver update doesn't need a remove-and-\
-        re-add. Needs approval.",
-        annotations(read_only_hint = false, destructive_hint = false))]
-    async fn update_driver(&self, Parameters(a): Parameters<UpdateDriverArgs>) -> Result<CallToolResult, McpError> {
-        let s = a.filename.clone();
-        self.run("update_driver", s, actions::update_driver(&self.app, a, self.source)).await
     }
 
     #[tool(description = "Driver files installed on the controller (manufacturer, model, version, SDDP search types).",

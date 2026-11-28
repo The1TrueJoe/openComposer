@@ -82,7 +82,6 @@ export function ApprovalCard({ approval: a, collapsible = false, autoFocus = fal
               descriptions: a.descriptions, installs,
             }} empty={
               installs.length ? "No change to the project itself — devices use the file once it's there."
-                : a.ops.some((o) => o.op === "update_driver") ? "No change to the project itself — Director reloads the driver's code in the devices above, which keep their properties."
                 : a.ops.some((o) => o.op === "run_action") ? "No change to the project — the action runs on the device itself."
                 : undefined} />
           </div>
