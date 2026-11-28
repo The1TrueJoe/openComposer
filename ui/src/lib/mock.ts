@@ -231,7 +231,6 @@ function describe(op: Op): string {
     case "remove_network_binding": return `Remove network identity of ${n(op.device)}`;
     case "set_property": return `Set ${n(op.device)} property “${op.name}” to “${masked(op.name, op.value)}”`;
     case "install_driver": return `Install driver file ${op.filename} from ${op.source}`;
-    case "update_driver": return `Reload ${op.filename} in the devices using it`;
     case "run_action": return `Run action “${op.command}” on ${n(op.device)}`;
     case "send_command": {
       const ps = (op.params ?? []).map((p) => `${p.name}=${p.value}`).join(", ");
@@ -347,7 +346,6 @@ function predict(ops: Op[]): Change[] {
         break;
       }
       case "install_driver":
-      case "update_driver":
       case "run_action":
       case "send_command":
         break;
@@ -437,8 +435,6 @@ function apply(op: Op): number[] {
       return [];
     case "install_driver":
       installed.add(op.filename);
-      return [];
-    case "update_driver":
       return [];
     case "send_command":
       command(op.device, op.command, op.params ?? []);
@@ -1280,9 +1276,6 @@ async function act(name: string, a: Args): Promise<unknown> {
       log("You (openComposer)", "install_driver", `${a.filename} from ${from}`);
       return propose([{ op: "install_driver", filename: String(a.filename), source }], (a.reason as string) ?? null, "You (openComposer)");
     }
-    case "update_driver":
-      log("You (openComposer)", "update_driver", String(a.filename));
-      return propose([{ op: "update_driver", filename: String(a.filename) }], (a.reason as string) ?? null, "You (openComposer)");
     case "controller_drivers": {
       const d = config.directors.find((x) => x.id === config.active_director)!;
       if (!d.web_api) throw `the web API is switched off for ${d.name} (Directors → web API); the controller's driver list needs it`;
