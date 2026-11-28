@@ -88,7 +88,6 @@ pub fn run() {
             commands::agent_stop,
             commands::agent_delete,
             commands::takeover_status,
-            commands::probe_controller,
             commands::adopt_gary_ca,
             commands::take_over_controller,
             commands::revert_takeover,

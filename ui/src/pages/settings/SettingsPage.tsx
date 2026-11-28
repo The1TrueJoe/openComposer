@@ -7,7 +7,7 @@ import { CopyButton, Select, Snippet, Spinner, Switch } from "../../components/c
 import { AddDirectorForm, CertificateForm, MODES } from "../../components/setup";
 import type { Shell } from "../../lib/shell";
 import { ago, cx, dateTime, useLoad } from "../../lib/ui";
-import { TakeoverLauncher } from "../../components/TakeoverWizard";
+import { Takeover } from "./Takeover";
 
 export function SettingsPage({ shell }: { shell: Shell }) {
   return (
@@ -18,7 +18,7 @@ export function SettingsPage({ shell }: { shell: Shell }) {
         <CertificateForm identity={shell.status.identity} onChanged={shell.refreshStatus} />
       </section>
       <Directors shell={shell} />
-      <TakeoverLauncher refreshStatus={shell.refreshStatus} />
+      <Takeover shell={shell} />
       <Mcp shell={shell} />
       <Agent shell={shell} />
     </div>

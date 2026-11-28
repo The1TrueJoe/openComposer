@@ -894,15 +894,6 @@ export interface TakeoverStatus {
   ca_label: string | null;
   ca_cn: string | null;
 }
-/** What an unauthenticated SSH probe tells the takeover wizard about a controller's era —
- *  the only era signal available without the certificate (the OS version is withheld on every
- *  unauthenticated channel). "older" = password SSH on (pre-4.2); "modern" = OS 4.2+. */
-export interface EraProbe {
-  reachable: boolean;
-  password_auth: boolean;
-  era: "older" | "modern" | "unknown";
-  banner: string | null;
-}
 export interface TakeoverParams {
   host: string;
   os_version: string;

@@ -3,7 +3,7 @@ import type {
   DirectorInfo, DriverDoc, Events, ItemDetail, McpStatus, NetworkView, Op, Outcome, Overview,
   ProgrammingEvent, VariableRow, Provider, ProviderStatus, SavedDirector, AccessMode, TreeNode, ZigbeeQuery, BackupResult,
   AddDriverArgs, ControllerDriver, LibraryDriver, UiContext, CommandParam, DeviceState, Effort, AuthRequest, McpGrant, DriverTab, AgentView,
-  TakeoverStatus, TakeoverParams, TakeoverReport, RevertParams, SidecarDetection, FoundCert, EraProbe,
+  TakeoverStatus, TakeoverParams, TakeoverReport, RevertParams, SidecarDetection, FoundCert,
 } from "./types";
 
 type Invoke = <T>(cmd: string, args?: Record<string, unknown>) => Promise<T>;
@@ -142,8 +142,6 @@ export const api = {
   // Controller takeover (SSH + cert swap). Not part of the agent/MCP surface — a user action.
   /** Whether openComposer has a takeover CA yet, and where it came from. */
   takeoverStatus: () => call<TakeoverStatus>("takeover_status"),
-  /** Probe a controller's SSH to pick the takeover era without a certificate (read-only). */
-  probeController: (host: string) => call<EraProbe>("probe_controller", { host }),
   /** Adopt an existing "Gary tool" Certs folder's CA (its public.pem + private.key). */
   adoptGaryCa: (folder: string) => call<string>("adopt_gary_ca", { folder }),
   /** Take over a controller. `confirm` is sent true: the UI must confirm before calling. */

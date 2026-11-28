@@ -438,19 +438,6 @@ pub async fn mcp_revoke(app: S<'_>, id: String) -> R<()> {
 // Deliberately not exposed to the agent or MCP: a takeover writes to a controller and
 // reboots it, so it runs only from an explicit, confirmed user action in the app.
 
-/// Probe a controller's SSH to pick the takeover era without a certificate: a controller that
-/// still offers password SSH is pre-4.2 firmware; publickey-only is OS 4.2+. Read-only — it reads
-/// the auth methods sshd advertises and never logs in. The OS version isn't on any unauthenticated
-/// channel (SDDP, the status endpoint, the TLS cert and SOAP all withhold it), so this is how the
-/// takeover wizard fills the era in without asking the owner to know it.
-#[tauri::command]
-pub async fn probe_controller(host: String) -> R<Value> {
-    let probe = tokio::task::spawn_blocking(move || c4::takeover::ssh::probe_era(&host))
-        .await
-        .map_err(err)?;
-    serde_json::to_value(probe).map_err(err)
-}
-
 /// Whether openComposer has a takeover CA yet, and where it came from.
 #[tauri::command]
 pub async fn takeover_status(app: S<'_>) -> R<Value> {
