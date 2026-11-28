@@ -61,7 +61,7 @@ pub async fn app_status(app: S<'_>) -> R<AppStatus> {
         identity,
         mcp: mcp::status(),
         connected: app.connected().await,
-        stdio_command: std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default(),
+        stdio_command: crate::proc::self_exe().map(|p| p.display().to_string()).unwrap_or_default(),
     })
 }
 
